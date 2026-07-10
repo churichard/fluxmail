@@ -1,4 +1,7 @@
 import { randomBytes } from 'node:crypto';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { EmailError } from '@fluxmail/core';
 import { AccountRegistry } from '../src/accounts/registry.js';
@@ -48,12 +51,45 @@ describe('AccountRegistry', () => {
     }
   });
 
+  it('rolls back the account when storing its tokens fails', () => {
+    const db = openDb(':memory:');
+    const sqlite = (db as unknown as { $client: { exec(sql: string): void } }).$client;
+    sqlite.exec(`
+      CREATE TRIGGER reject_oauth_tokens
+      BEFORE INSERT ON oauth_tokens
+      BEGIN
+        SELECT RAISE(ABORT, 'token write failed');
+      END;
+    `);
+    const registry = new AccountRegistry(db, testConfig());
+
+    expect(() => registry.addGmailAccount('me@example.com', tokens)).toThrow(/token write failed/);
+    expect(registry.listAccounts()).toEqual([]);
+  });
+
   it('re-adding the same address re-authenticates instead of erroring', () => {
     const registry = new AccountRegistry(openDb(':memory:'), testConfig());
     const first = registry.addGmailAccount('me@example.com', tokens);
     const second = registry.addGmailAccount('me@example.com', { ...tokens, refresh_token: 'rt_new' });
     expect(second.id).toBe(first.id);
     expect(registry.listAccounts()).toHaveLength(1);
+  });
+
+  it('reloads a cached provider when another process updates its tokens', () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), 'fluxmail-registry-'));
+    const config = {
+      ...testConfig(),
+      dataDir,
+      dbPath: path.join(dataDir, 'fluxmail.db'),
+    };
+    const firstRegistry = new AccountRegistry(openDb(config.dbPath), config);
+    const account = firstRegistry.addGmailAccount('me@example.com', tokens);
+    const cachedProvider = firstRegistry.getProvider(account.id);
+
+    const secondRegistry = new AccountRegistry(openDb(config.dbPath), config);
+    secondRegistry.addGmailAccount('me@example.com', { ...tokens, refresh_token: 'rt_new' });
+
+    expect(firstRegistry.getProvider(account.id)).not.toBe(cachedProvider);
   });
 
   it('resolveAccountId defaults to the sole account and errors when ambiguous or empty', () => {

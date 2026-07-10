@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Message } from '@fluxmail/core';
+import { EmailError, type Message } from '@fluxmail/core';
 import { buildForwardBody, EmailService } from '../src/service/emailService.js';
 
 const original: Message = {
@@ -65,7 +65,7 @@ describe('EmailService.forward', () => {
     const provider = {
       getMessage: vi.fn().mockResolvedValue(message),
       getAttachment: vi.fn().mockResolvedValue({
-        meta: message.attachments[0],
+        meta: message.attachments![0],
         content: Buffer.from('image data'),
       }),
       send,
@@ -100,5 +100,92 @@ describe('EmailService.forward', () => {
         ],
       })
     );
+  });
+});
+
+describe('EmailService account state', () => {
+  it('does not call a provider for a disabled account', async () => {
+    const getProvider = vi.fn();
+    const registry = {
+      resolveAccountId: () => 'acct_1',
+      getAccount: () => ({
+        id: 'acct_1',
+        provider: 'gmail',
+        email: 'me@example.com',
+        status: 'disabled',
+        capabilities: {},
+      }),
+      getProvider,
+    };
+    const service = new EmailService(registry as never);
+
+    await expect(service.listFolders()).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(getProvider).not.toHaveBeenCalled();
+  });
+});
+
+describe('EmailService.status', () => {
+  function statusService(
+    initialStatus: 'active' | 'auth_error',
+    testConnection: () => Promise<void>
+  ) {
+    const account = {
+      id: 'acct_1',
+      provider: 'gmail' as const,
+      email: 'me@example.com',
+      status: initialStatus,
+      capabilities: {
+        labels: true,
+        serverThreads: true,
+        serverSearch: 'rich' as const,
+        snippets: true,
+      },
+    };
+    const markStatus = vi.fn((_id: string, status: 'active' | 'auth_error' | 'disabled') => {
+      account.status = status as typeof initialStatus;
+    });
+    const registry = {
+      listAccounts: () => [account],
+      getProvider: () => ({ testConnection }),
+      markStatus,
+    };
+    return { service: new EmailService(registry as never), markStatus };
+  }
+
+  it('marks an account when a live connection check finds expired authorization', async () => {
+    const { service, markStatus } = statusService('active', async () => {
+      throw new EmailError('auth_expired', 'expired');
+    });
+
+    await expect(service.status()).resolves.toMatchObject({
+      accounts: [{ id: 'acct_1', status: 'auth_error' }],
+    });
+    expect(markStatus).toHaveBeenCalledWith('acct_1', 'auth_error');
+  });
+
+  it('restores an account after a successful live connection check', async () => {
+    const { service, markStatus } = statusService('auth_error', async () => {});
+
+    await expect(service.status()).resolves.toMatchObject({
+      accounts: [{ id: 'acct_1', status: 'active' }],
+    });
+    expect(markStatus).toHaveBeenCalledWith('acct_1', 'active');
+  });
+
+  it('keeps the stored state when a provider check fails for another reason', async () => {
+    const { service, markStatus } = statusService('active', async () => {
+      throw new EmailError('provider_unavailable', 'temporary failure');
+    });
+
+    await expect(service.status()).resolves.toMatchObject({
+      accounts: [
+        {
+          id: 'acct_1',
+          status: 'active',
+          error: { code: 'provider_unavailable', message: 'temporary failure' },
+        },
+      ],
+    });
+    expect(markStatus).not.toHaveBeenCalled();
   });
 });

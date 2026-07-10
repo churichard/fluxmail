@@ -10,7 +10,10 @@ import { assertWithinLimit, getEntitlements } from '../licensing/entitlements.js
 import { requireGoogleConfig } from './googleAuth.js';
 
 export class AccountRegistry {
-  private readonly providers = new Map<string, EmailProvider>();
+  private readonly providers = new Map<
+    string,
+    { provider: EmailProvider; encryptedTokens: string }
+  >();
 
   constructor(
     private readonly db: FluxmailDb,
@@ -60,27 +63,40 @@ export class AccountRegistry {
   }
 
   getProvider(accountId: string): EmailProvider {
-    const cached = this.providers.get(accountId);
-    if (cached) return cached;
-
     const account = this.getAccount(accountId);
     if (account.provider !== 'gmail') {
       throw new EmailError('unsupported_capability', `Provider "${account.provider}" is not supported yet`);
     }
-    const provider = this.buildGmailProvider(accountId, account.email, account.displayName);
-    this.providers.set(accountId, provider);
+    const tokenRow = this.loadTokenRow(accountId);
+    const cached = this.providers.get(accountId);
+    if (cached?.encryptedTokens === tokenRow.encryptedTokens) return cached.provider;
+
+    const stored = JSON.parse(
+      decryptString(this.config.encryptionKey, tokenRow.encryptedTokens)
+    ) as Credentials;
+    const provider = this.buildGmailProvider(accountId, account.email, stored, account.displayName);
+    this.providers.set(accountId, { provider, encryptedTokens: tokenRow.encryptedTokens });
     return provider;
   }
 
-  private loadTokens(accountId: string): Credentials {
+  private loadTokenRow(accountId: string): { encryptedTokens: string } {
     const row = this.db.select().from(oauthTokens).where(eq(oauthTokens.accountId, accountId)).get();
     if (!row) throw new EmailError('auth_expired', `No stored credentials for account ${accountId}`);
+    return row;
+  }
+
+  private loadTokens(accountId: string): Credentials {
+    const row = this.loadTokenRow(accountId);
     return JSON.parse(decryptString(this.config.encryptionKey, row.encryptedTokens)) as Credentials;
   }
 
-  private saveTokens(accountId: string, tokens: Credentials): void {
+  private writeTokens(
+    db: Pick<FluxmailDb, 'insert'>,
+    accountId: string,
+    tokens: Credentials
+  ): string {
     const encrypted = encryptString(this.config.encryptionKey, JSON.stringify(tokens));
-    this.db
+    db
       .insert(oauthTokens)
       .values({ accountId, encryptedTokens: encrypted, updatedAt: Date.now() })
       .onConflictDoUpdate({
@@ -88,19 +104,36 @@ export class AccountRegistry {
         set: { encryptedTokens: encrypted, updatedAt: Date.now() },
       })
       .run();
+    return encrypted;
   }
 
-  private buildGmailProvider(accountId: string, email: string, displayName?: string): EmailProvider {
+  private saveTokens(accountId: string, tokens: Credentials): string {
+    return this.writeTokens(this.db, accountId, tokens);
+  }
+
+  private buildGmailProvider(
+    accountId: string,
+    email: string,
+    stored: Credentials,
+    displayName?: string
+  ): EmailProvider {
     const { clientId, clientSecret } = requireGoogleConfig(this.config);
     const auth = new OAuth2Client({ clientId, clientSecret });
-    const stored = this.loadTokens(accountId);
     auth.setCredentials(stored);
+    const provider = new GmailProvider({
+      accountId,
+      email,
+      ...(displayName ? { displayName } : {}),
+      auth,
+    });
     // google-auth-library refreshes access tokens transparently; persist them so
     // restarts don't need a refresh round-trip (and rotated refresh tokens survive).
     auth.on('tokens', (fresh) => {
-      this.saveTokens(accountId, { ...this.loadTokens(accountId), ...fresh });
+      const encryptedTokens = this.saveTokens(accountId, { ...this.loadTokens(accountId), ...fresh });
+      const cached = this.providers.get(accountId);
+      if (cached?.provider === provider) cached.encryptedTokens = encryptedTokens;
     });
-    return new GmailProvider({ accountId, email, ...(displayName ? { displayName } : {}), auth });
+    return provider;
   }
 
   addGmailAccount(email: string, tokens: Credentials, displayName?: string): Account {
@@ -108,30 +141,33 @@ export class AccountRegistry {
     const duplicate = existing.find((a) => a.provider === 'gmail' && a.email === email);
     if (duplicate) {
       // Re-authenticating an existing account: refresh tokens, clear error state.
-      this.saveTokens(duplicate.id, tokens);
-      this.db
-        .update(accounts)
-        .set({ status: 'active', ...(displayName ? { displayName } : {}) })
-        .where(eq(accounts.id, duplicate.id))
-        .run();
+      this.db.transaction((tx) => {
+        this.writeTokens(tx, duplicate.id, tokens);
+        tx.update(accounts)
+          .set({ status: 'active', ...(displayName ? { displayName } : {}) })
+          .where(eq(accounts.id, duplicate.id))
+          .run();
+      });
       this.providers.delete(duplicate.id);
       return this.getAccount(duplicate.id);
     }
 
-    assertWithinLimit('accounts', existing.length, getEntitlements().maxAccounts);
     const id = `acct_${randomBytes(6).toString('hex')}`;
-    this.db
-      .insert(accounts)
-      .values({
-        id,
-        provider: 'gmail',
-        email,
-        displayName: displayName ?? null,
-        status: 'active',
-        createdAt: Date.now(),
-      })
-      .run();
-    this.saveTokens(id, tokens);
+    this.db.transaction((tx) => {
+      const accountCount = tx.select().from(accounts).all().length;
+      assertWithinLimit('accounts', accountCount, getEntitlements().maxAccounts);
+      tx.insert(accounts)
+        .values({
+          id,
+          provider: 'gmail',
+          email,
+          displayName: displayName ?? null,
+          status: 'active',
+          createdAt: Date.now(),
+        })
+        .run();
+      this.writeTokens(tx, id, tokens);
+    });
     return this.getAccount(id);
   }
 

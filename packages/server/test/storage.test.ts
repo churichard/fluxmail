@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { EmailError } from '@fluxmail/core';
 import { decryptString, encryptString } from '../src/storage/crypto.js';
-import { openDb } from '../src/storage/db.js';
+import { accounts, openDb } from '../src/storage/db.js';
 import { createApiKey, listApiKeys, revokeApiKey, verifyApiKey } from '../src/storage/apiKeys.js';
 import { assertWithinLimit, FREE_TIER } from '../src/licensing/entitlements.js';
 
@@ -44,6 +44,33 @@ describe('api keys', () => {
     const db = openDb(':memory:');
     createApiKey(db, 'first');
     expect(() => createApiKey(db, 'second')).toThrow(EmailError);
+  });
+});
+
+describe('account storage', () => {
+  it('prevents duplicate provider and email pairs', () => {
+    const db = openDb(':memory:');
+    db.insert(accounts)
+      .values({
+        id: 'acct_1',
+        provider: 'gmail',
+        email: 'me@example.com',
+        status: 'active',
+        createdAt: Date.now(),
+      })
+      .run();
+
+    expect(() =>
+      db.insert(accounts)
+        .values({
+          id: 'acct_2',
+          provider: 'gmail',
+          email: 'me@example.com',
+          status: 'active',
+          createdAt: Date.now(),
+        })
+        .run()
+    ).toThrow();
   });
 });
 

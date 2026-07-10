@@ -32,4 +32,11 @@ describe('parseSingleAddress', () => {
   it('rejects garbage', () => {
     expect(parseSingleAddress('not an address')).toBeNull();
   });
+  it('rejects malformed angle addresses', () => {
+    expect(parseSingleAddress('Ann <not-an-email>')).toBeNull();
+    expect(parseSingleAddress('Ann <a@b@example.com>')).toBeNull();
+  });
+  it('does not salvage a suffix from a malformed bare address', () => {
+    expect(parseSingleAddress('a@b@example.com')).toBeNull();
+  });
 });

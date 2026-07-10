@@ -8,6 +8,7 @@ export {
   loadDotEnv,
   resolveDataDir,
   configFilePath,
+  maskStoredConfigValue,
   readStoredConfig,
   setStoredConfig,
   unsetStoredConfig,

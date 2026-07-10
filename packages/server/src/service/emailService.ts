@@ -1,5 +1,6 @@
 import {
   computeReplyRecipients,
+  EmailError,
   formatAddressList,
   forwardSubject,
   isEmailError,
@@ -35,7 +36,11 @@ export interface ForwardInput {
 }
 
 export interface ServiceStatus {
-  accounts: Array<Pick<Account, 'id' | 'provider' | 'email' | 'status'>>;
+  accounts: Array<
+    Pick<Account, 'id' | 'provider' | 'email' | 'status'> & {
+      error?: { code: string; message: string };
+    }
+  >;
   entitlements: Entitlements;
   providersAvailable: string[];
 }
@@ -55,6 +60,9 @@ export class EmailService {
   ): Promise<T> {
     const resolvedId = this.registry.resolveAccountId(accountId);
     const account = this.registry.getAccount(resolvedId);
+    if (account.status === 'disabled') {
+      throw new EmailError('invalid_request', `Account ${resolvedId} is disabled`);
+    }
     try {
       const result = await fn(this.registry.getProvider(resolvedId), resolvedId, account);
       if (account.status === 'auth_error') this.registry.markStatus(resolvedId, 'active');
@@ -71,11 +79,40 @@ export class EmailService {
     return this.registry.listAccounts();
   }
 
-  status(): ServiceStatus {
+  async status(): Promise<ServiceStatus> {
+    const accounts = this.registry.listAccounts();
+    const errors = new Map<string, { code: string; message: string }>();
+    await Promise.all(
+      accounts
+        .filter((account) => account.status !== 'disabled')
+        .map(async (account) => {
+          try {
+            await this.registry.getProvider(account.id).testConnection();
+            if (account.status === 'auth_error') this.registry.markStatus(account.id, 'active');
+          } catch (err) {
+            if (isEmailError(err) && err.code === 'auth_expired') {
+              this.registry.markStatus(account.id, 'auth_error');
+            }
+            errors.set(
+              account.id,
+              isEmailError(err)
+                ? { code: err.code, message: err.message }
+                : { code: 'internal', message: err instanceof Error ? err.message : String(err) }
+            );
+          }
+        })
+    );
+
     return {
       accounts: this.registry
         .listAccounts()
-        .map(({ id, provider, email, status }) => ({ id, provider, email, status })),
+        .map(({ id, provider, email, status }) => ({
+          id,
+          provider,
+          email,
+          status,
+          ...(errors.has(id) ? { error: errors.get(id)! } : {}),
+        })),
       entitlements: getEntitlements(),
       providersAvailable: ['gmail'],
     };
@@ -146,7 +183,7 @@ export class EmailService {
 
       const attachments: AttachmentInput[] = [];
       if (includeAttachments) {
-        for (const meta of original.attachments) {
+        for (const meta of original.attachments ?? []) {
           const { content } = await p.getAttachment(original.id, meta.id);
           attachments.push({
             filename: meta.filename,

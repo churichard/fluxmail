@@ -36,17 +36,21 @@ export function buildAuthUrl(client: OAuth2Client, state: string): string {
   });
 }
 
-/** Extract the authenticated identity from the OAuth id_token (openid+email+profile scopes). */
-export function identityFromIdToken(tokens: Credentials): { email: string; displayName?: string } {
+/** Verify the OAuth id_token and extract the authenticated Google identity. */
+export async function identityFromIdToken(
+  client: OAuth2Client,
+  tokens: Credentials
+): Promise<{ email: string; displayName?: string }> {
   const idToken = tokens.id_token;
   if (!idToken) throw new EmailError('provider_unavailable', 'Google did not return an id_token');
-  const payload = idToken.split('.')[1];
-  if (!payload) throw new EmailError('provider_unavailable', 'Malformed id_token from Google');
-  const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
-    email?: string;
-    name?: string;
-  };
+  if (!client._clientId) throw new EmailError('provider_unavailable', 'Google OAuth client has no client id');
+  const ticket = await client.verifyIdToken({ idToken, audience: client._clientId });
+  const claims = ticket.getPayload();
+  if (!claims) throw new EmailError('provider_unavailable', 'Google id_token has no claims');
   if (!claims.email) throw new EmailError('provider_unavailable', 'Google id_token has no email claim');
+  if (!claims.email_verified) {
+    throw new EmailError('provider_unavailable', 'Google did not verify the account email address');
+  }
   return { email: claims.email, ...(claims.name ? { displayName: claims.name } : {}) };
 }
 
@@ -65,7 +69,7 @@ export async function exchangeCode(client: OAuth2Client, code: string): Promise<
         '(myaccount.google.com/permissions) and try again.'
     );
   }
-  return { ...identityFromIdToken(tokens), tokens };
+  return { ...(await identityFromIdToken(client, tokens)), tokens };
 }
 
 /**

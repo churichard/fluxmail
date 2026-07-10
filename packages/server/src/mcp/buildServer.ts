@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
+  EmailError,
   isEmailError,
   parseSingleAddress,
   type EmailAddress,
@@ -19,15 +20,18 @@ const MAX_INLINE_ATTACHMENT_BYTES = 2 * 1024 * 1024;
 
 const accountIdParam = z
   .string()
+  .min(1)
   .optional()
   .describe('Account to operate on. Optional when exactly one account is connected.');
 
+const idParam = z.string().min(1);
+
 const addressList = z
-  .array(z.string())
+  .array(z.string().min(1))
   .describe('Recipients, each "Name <a@x.com>" or "a@x.com"');
 
 const queryShape = {
-  folder: z.string().optional().describe('Folder role (inbox, sent, drafts, trash, spam, starred, archive, all) or a label/folder name'),
+  folder: z.string().min(1).optional().describe('Folder role (inbox, sent, drafts, trash, spam, starred, archive, all) or a label/folder name'),
   text: z.string().optional().describe('Full-text search terms'),
   from: z.string().optional(),
   to: z.string().optional(),
@@ -35,11 +39,11 @@ const queryShape = {
   unreadOnly: z.boolean().optional(),
   starredOnly: z.boolean().optional(),
   hasAttachment: z.boolean().optional(),
-  after: z.string().optional().describe('ISO date, inclusive'),
-  before: z.string().optional().describe('ISO date, exclusive'),
+  after: z.string().min(1).optional().describe('ISO date, inclusive'),
+  before: z.string().min(1).optional().describe('ISO date, exclusive'),
   rawProviderQuery: z.string().optional().describe('Escape hatch passed verbatim to the provider (e.g. Gmail q= syntax)'),
   pageSize: z.number().int().min(1).max(100).optional().describe('Defaults to 25'),
-  pageToken: z.string().optional().describe('nextPageToken from a previous call'),
+  pageToken: z.string().min(1).optional().describe('nextPageToken from a previous call'),
 };
 
 const draftShape = {
@@ -50,10 +54,16 @@ const draftShape = {
   subject: z.string().optional().describe('Defaults to "Re: ..." when replying'),
   bodyText: z.string().optional().describe('Plain-text body'),
   bodyHtml: z.string().optional().describe('HTML body'),
-  replyToMessageId: z.string().optional().describe('Message being replied to; threads correctly and computes recipients if "to" is omitted'),
+  replyToMessageId: idParam.optional().describe('Message being replied to; threads correctly and computes recipients if "to" is omitted'),
   replyAll: z.boolean().optional().describe('With replyToMessageId: reply to all original recipients'),
   attachments: z
-    .array(z.object({ filename: z.string(), mimeType: z.string(), content: z.string().describe('base64') }))
+    .array(
+      z.object({
+        filename: z.string().min(1),
+        mimeType: z.string().min(1),
+        content: z.string().describe('base64'),
+      })
+    )
     .optional(),
 };
 
@@ -61,7 +71,7 @@ function parseAddresses(raw: string[] | undefined): EmailAddress[] | undefined {
   if (!raw) return undefined;
   const parsed = raw.map((r) => {
     const addr = parseSingleAddress(r);
-    if (!addr) throw new Error(`Could not parse email address: "${r}"`);
+    if (!addr) throw new EmailError('invalid_request', `Could not parse email address: "${r}"`);
     return addr;
   });
   return parsed;
@@ -81,6 +91,9 @@ type DraftArgs = {
 };
 
 function toSendInput(args: DraftArgs): SendInput {
+  if (args.replyAll && !args.replyToMessageId) {
+    throw new EmailError('invalid_request', 'replyAll requires replyToMessageId');
+  }
   const input: SendInput = {
     body: {
       ...(args.bodyText !== undefined ? { text: args.bodyText } : {}),
@@ -98,6 +111,30 @@ function toSendInput(args: DraftArgs): SendInput {
   if (args.replyAll !== undefined) input.replyAll = args.replyAll;
   if (args.attachments?.length) input.attachments = args.attachments;
   return input;
+}
+
+export function toSendRequest(args: DraftArgs & { draftId?: string }): SendInput | { draftId: string } {
+  if (args.draftId !== undefined) {
+    const contentKeys = [
+      'to',
+      'cc',
+      'bcc',
+      'subject',
+      'bodyText',
+      'bodyHtml',
+      'replyToMessageId',
+      'replyAll',
+      'attachments',
+    ] as const;
+    if (contentKeys.some((key) => args[key] !== undefined)) {
+      throw new EmailError(
+        'invalid_request',
+        'draftId cannot be combined with message content; update the draft before sending it'
+      );
+    }
+    return { draftId: args.draftId };
+  }
+  return toSendInput(args);
 }
 
 function truncateBody(message: Message): Message {
@@ -154,6 +191,20 @@ export function resolveAttachmentSavePath(savePath: string, filename: string): s
   const target = path.resolve(directory, safeFilename);
   if (path.dirname(target) !== directory) {
     throw new Error('Attachment filename escapes the destination directory');
+  }
+  return target;
+}
+
+export function saveAttachment(savePath: string, filename: string, content: Buffer): string {
+  if (!path.isAbsolute(savePath)) throw new EmailError('invalid_request', 'savePath must be absolute');
+  const target = resolveAttachmentSavePath(savePath, filename);
+  try {
+    writeFileSync(target, content, { flag: 'wx' });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new EmailError('invalid_request', `Refusing to overwrite an existing attachment file: ${target}`);
+    }
+    throw err;
   }
   return target;
 }
@@ -254,7 +305,7 @@ export function buildMcpServer(service: EmailService): McpServer {
     'get_email',
     {
       description: 'Fetch one email in full: body (text and/or HTML), recipients, attachment metadata.',
-      inputSchema: { accountId: accountIdParam, messageId: z.string() },
+      inputSchema: { accountId: accountIdParam, messageId: idParam },
       annotations: { readOnlyHint: true },
     },
     handle(async (args: { accountId?: string; messageId: string }) =>
@@ -266,7 +317,7 @@ export function buildMcpServer(service: EmailService): McpServer {
     'get_thread',
     {
       description: 'Fetch a full conversation thread with all message bodies.',
-      inputSchema: { accountId: accountIdParam, threadId: z.string() },
+      inputSchema: { accountId: accountIdParam, threadId: idParam },
       annotations: { readOnlyHint: true },
     },
     handle(async (args: { accountId?: string; threadId: string }) => {
@@ -289,7 +340,7 @@ export function buildMcpServer(service: EmailService): McpServer {
     'update_draft',
     {
       description: 'Replace the content of an existing draft (full replacement, not a patch).',
-      inputSchema: { draftId: z.string(), ...draftShape },
+      inputSchema: { draftId: idParam, ...draftShape },
     },
     handle(async (args: DraftArgs & { draftId: string }) =>
       service.updateDraft(args.accountId, args.draftId, toSendInput(args))
@@ -300,7 +351,7 @@ export function buildMcpServer(service: EmailService): McpServer {
     'delete_draft',
     {
       description: 'Delete a draft.',
-      inputSchema: { accountId: accountIdParam, draftId: z.string() },
+      inputSchema: { accountId: accountIdParam, draftId: idParam },
       annotations: { destructiveHint: true },
     },
     handle(async (args: { accountId?: string; draftId: string }) => {
@@ -318,11 +369,11 @@ export function buildMcpServer(service: EmailService): McpServer {
         '+ body), sending an existing draft (draftId), or replying (replyToMessageId, optionally replyAll) ' +
         'where recipients, subject, and threading are derived from the original. Confirm with the user when ' +
         'intent is ambiguous.',
-      inputSchema: { draftId: z.string().optional().describe('Send this existing draft'), ...draftShape },
+      inputSchema: { draftId: idParam.optional().describe('Send this existing draft'), ...draftShape },
       annotations: { destructiveHint: true },
     },
     handle(async (args: DraftArgs & { draftId?: string }) =>
-      service.send(args.accountId, args.draftId ? { draftId: args.draftId } : toSendInput(args))
+      service.send(args.accountId, toSendRequest(args))
     )
   );
 
@@ -334,8 +385,8 @@ export function buildMcpServer(service: EmailService): McpServer {
         'unless includeAttachments=false. Optional comment appears above the forwarded content.',
       inputSchema: {
         accountId: accountIdParam,
-        messageId: z.string(),
-        to: addressList,
+        messageId: idParam,
+        to: addressList.min(1),
         cc: addressList.optional(),
         comment: z.string().optional(),
         includeAttachments: z.boolean().optional().describe('Default true'),
@@ -370,13 +421,17 @@ export function buildMcpServer(service: EmailService): McpServer {
         'move (requires folder), addLabels/removeLabels (requires labels; Gmail only).',
       inputSchema: {
         accountId: accountIdParam,
-        messageIds: z.array(z.string()).min(1),
+        messageIds: z.array(idParam).min(1),
         action: z.enum([
           'markRead', 'markUnread', 'star', 'unstar', 'archive',
           'trash', 'untrash', 'delete', 'move', 'addLabels', 'removeLabels',
         ]),
-        folder: z.string().optional().describe('Target folder for action=move'),
-        labels: z.array(z.string()).optional().describe('Labels for addLabels/removeLabels'),
+        folder: z.string().min(1).optional().describe('Target folder for action=move'),
+        labels: z
+          .array(z.string().min(1))
+          .max(100)
+          .optional()
+          .describe('Labels for addLabels/removeLabels'),
       },
       annotations: { destructiveHint: true },
     },
@@ -389,10 +444,12 @@ export function buildMcpServer(service: EmailService): McpServer {
     }) => {
       let action: ModifyAction;
       if (args.action === 'move') {
-        if (!args.folder) throw new Error('action=move requires "folder"');
+        if (!args.folder) throw new EmailError('invalid_request', 'action=move requires "folder"');
         action = { move: args.folder };
       } else if (args.action === 'addLabels' || args.action === 'removeLabels') {
-        if (!args.labels?.length) throw new Error(`action=${args.action} requires "labels"`);
+        if (!args.labels?.length) {
+          throw new EmailError('invalid_request', `action=${args.action} requires "labels"`);
+        }
         action = args.action === 'addLabels' ? { addLabels: args.labels } : { removeLabels: args.labels };
       } else {
         action = args.action as Exclude<ModifyAction, object>;
@@ -410,21 +467,21 @@ export function buildMcpServer(service: EmailService): McpServer {
         'otherwise returns base64 content (up to 2 MB).',
       inputSchema: {
         accountId: accountIdParam,
-        messageId: z.string(),
-        attachmentId: z.string(),
-        savePath: z.string().optional().describe('Absolute file path or directory to write the attachment to'),
+        messageId: idParam,
+        attachmentId: idParam,
+        savePath: z.string().min(1).optional().describe('Absolute file path or directory to write the attachment to'),
       },
       annotations: { readOnlyHint: false, destructiveHint: true },
     },
     handle(async (args: { accountId?: string; messageId: string; attachmentId: string; savePath?: string }) => {
       const { meta, content } = await service.getAttachment(args.accountId, args.messageId, args.attachmentId);
       if (args.savePath) {
-        const target = resolveAttachmentSavePath(args.savePath, meta.filename);
-        writeFileSync(target, content);
+        const target = saveAttachment(args.savePath, meta.filename, content);
         return { saved: target, ...meta };
       }
       if (content.length > MAX_INLINE_ATTACHMENT_BYTES) {
-        throw new Error(
+        throw new EmailError(
+          'invalid_request',
           `Attachment is ${content.length} bytes (limit ${MAX_INLINE_ATTACHMENT_BYTES} inline). Pass savePath to write it to disk.`
         );
       }

@@ -1,4 +1,4 @@
-import { mkdtempSync, statSync } from 'node:fs';
+import { chmodSync, mkdtempSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -6,6 +6,7 @@ import {
   configFilePath,
   expandHome,
   loadConfig,
+  maskStoredConfigValue,
   readStoredConfig,
   setStoredConfig,
   unsetStoredConfig,
@@ -13,6 +14,10 @@ import {
 
 const ENV_KEYS = [
   'FLUXMAIL_DATA_DIR',
+  'FLUXMAIL_ENCRYPTION_KEY',
+  'FLUXMAIL_BASE_URL',
+  'FLUXMAIL_PORT',
+  'FLUXMAIL_OAUTH_PORT',
   'FLUXMAIL_OAUTH_HOST',
   'GOOGLE_CLIENT_ID',
   'GOOGLE_CLIENT_SECRET',
@@ -60,6 +65,17 @@ describe('stored config', () => {
     expect(mode).toBe(0o600);
   });
 
+  it('repairs permissions when reading an existing stored-config file', () => {
+    const dir = tempDataDir();
+    const file = configFilePath(dir);
+    writeFileSync(file, 'GOOGLE_CLIENT_SECRET="old"\n', { mode: 0o644 });
+    chmodSync(file, 0o644);
+
+    expect(readStoredConfig(dir)).toEqual({ GOOGLE_CLIENT_SECRET: 'old' });
+
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+  });
+
   it('rejects invalid keys and FLUXMAIL_DATA_DIR', () => {
     const dir = tempDataDir();
     expect(() => setStoredConfig(dir, 'lower-case', 'x')).toThrow(/UPPER_SNAKE_CASE/);
@@ -89,6 +105,64 @@ describe('stored config', () => {
     process.env.FLUXMAIL_DATA_DIR = tempDataDir();
     process.env.FLUXMAIL_OAUTH_HOST = '0.0.0.0';
     expect(loadConfig().oauthHost).toBe('0.0.0.0');
+  });
+
+  it('rejects encryption keys with trailing non-hex characters', () => {
+    process.env.FLUXMAIL_DATA_DIR = tempDataDir();
+    process.env.FLUXMAIL_ENCRYPTION_KEY = `${'aa'.repeat(32)}zz`;
+
+    expect(() => loadConfig()).toThrow(/exactly 64 hex characters/);
+  });
+
+  it('repairs permissions on an existing encryption-key file', () => {
+    const dir = tempDataDir();
+    const keyPath = path.join(dir, 'encryption.key');
+    writeFileSync(keyPath, `${'aa'.repeat(32)}\n`, { mode: 0o644 });
+    chmodSync(keyPath, 0o644);
+    process.env.FLUXMAIL_DATA_DIR = dir;
+
+    loadConfig();
+
+    expect(statSync(keyPath).mode & 0o777).toBe(0o600);
+  });
+
+  it.each([
+    ['FLUXMAIL_PORT', 'not-a-number'],
+    ['FLUXMAIL_PORT', '0'],
+    ['FLUXMAIL_OAUTH_PORT', '65536'],
+  ] as const)('rejects invalid %s values', (key, value) => {
+    process.env.FLUXMAIL_DATA_DIR = tempDataDir();
+    process.env[key] = value;
+
+    expect(() => loadConfig()).toThrow(/integer between 1 and 65535/);
+  });
+
+  it('removes trailing slashes from the public base URL', () => {
+    process.env.FLUXMAIL_DATA_DIR = tempDataDir();
+    process.env.FLUXMAIL_BASE_URL = 'https://mail.example.com/';
+
+    expect(loadConfig().baseUrl).toBe('https://mail.example.com');
+  });
+
+  it.each([
+    'not a url',
+    'ftp://mail.example.com',
+    'https://mail.example.com?tenant=one',
+    'https://user:password@mail.example.com',
+  ])(
+    'rejects an invalid public base URL: %s',
+    (baseUrl) => {
+      process.env.FLUXMAIL_DATA_DIR = tempDataDir();
+      process.env.FLUXMAIL_BASE_URL = baseUrl;
+
+      expect(() => loadConfig()).toThrow(/FLUXMAIL_BASE_URL/);
+    }
+  );
+
+  it('masks short and long secret settings', () => {
+    expect(maskStoredConfigValue('GOOGLE_CLIENT_SECRET', 'short')).toBe('********');
+    expect(maskStoredConfigValue('FLUXMAIL_ENCRYPTION_KEY', '1234567890abcdef')).toBe('1234…cdef');
+    expect(maskStoredConfigValue('GOOGLE_CLIENT_ID', 'public-id')).toBe('public-id');
   });
 
   it('expands a leading ~ in paths', () => {

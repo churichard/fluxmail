@@ -16,10 +16,17 @@ describe('toGmailQuery', () => {
     });
   });
 
-  it('expresses archive as exclusion since Gmail has no archive label', () => {
+  it('uses Gmail\'s archive search operator', () => {
     const q = toGmailQuery({ folder: 'archive' }, noLabels);
-    expect(q.q).toContain('-in:inbox');
+    expect(q.q).toBe('in:archive');
     expect(q.labelIds).toBeUndefined();
+  });
+
+  it('includes spam and trash when targeting all mail', () => {
+    expect(toGmailQuery({ folder: 'all' }, noLabels)).toEqual({
+      q: 'in:anywhere',
+      includeSpamTrash: true,
+    });
   });
 
   it('resolves user labels through the resolver', () => {
@@ -52,5 +59,9 @@ describe('toGmailQuery', () => {
   it('passes rawProviderQuery through verbatim', () => {
     const q = toGmailQuery({ rawProviderQuery: 'in:anywhere label:foo' }, noLabels);
     expect(q.q).toBe('in:anywhere label:foo');
+  });
+
+  it('rejects invalid date filters before calling Gmail', () => {
+    expect(() => toGmailQuery({ after: 'not-a-date' }, noLabels)).toThrow(/valid ISO date/);
   });
 });

@@ -85,7 +85,8 @@ export interface Message {
   snippet?: string;
   /** Populated on getMessage/getThread, not on list. */
   body?: MessageBody;
-  attachments: AttachmentMeta[];
+  /** Populated on getMessage/getThread; omitted when a list response has no MIME metadata. */
+  attachments?: AttachmentMeta[];
   flags: MessageFlags;
   /** Selected RFC 5322 headers (Message-ID, References, In-Reply-To, ...) when requested. */
   headers?: Record<string, string>;

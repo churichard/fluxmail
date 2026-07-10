@@ -1,6 +1,13 @@
 import type { gmail_v1 } from 'googleapis';
 import iconv from 'iconv-lite';
-import { parseAddressList, type AttachmentMeta, type Message, type MessageBody } from '@fluxmail/core';
+import {
+  parseAddressList,
+  type AttachmentMeta,
+  type Folder,
+  type FolderRole,
+  type Message,
+  type MessageBody,
+} from '@fluxmail/core';
 
 export function decodeBase64Url(data: string): Buffer {
   return Buffer.from(data.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
@@ -14,17 +21,27 @@ function headerValue(payload: gmail_v1.Schema$MessagePart | undefined, name: str
   return payload?.headers?.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? undefined;
 }
 
-function decodeTextPart(part: gmail_v1.Schema$MessagePart): string {
-  const data = decodeBase64Url(part.body?.data ?? '');
+export function decodeTextPart(part: gmail_v1.Schema$MessagePart, encoded = part.body?.data ?? ''): string {
+  const data = decodeBase64Url(encoded);
   const contentType = headerValue(part, 'Content-Type') ?? '';
   const charset = contentType.match(/charset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^;\s]+))/i);
   const encoding = charset?.[1] ?? charset?.[2] ?? charset?.[3] ?? 'utf-8';
   return iconv.decode(data, iconv.encodingExists(encoding) ? encoding : 'utf-8');
 }
 
+type BodyField = 'text' | 'html';
+
+export interface ExternalBodyPart {
+  attachmentId: string;
+  part: gmail_v1.Schema$MessagePart;
+}
+
+export type ExternalBodyParts = Partial<Record<BodyField, ExternalBodyPart>>;
+
 interface WalkedParts {
   body: MessageBody;
   attachments: AttachmentMeta[];
+  externalBodyParts: ExternalBodyParts;
 }
 
 interface ParsedAttachment {
@@ -33,12 +50,18 @@ interface ParsedAttachment {
 }
 
 function parseAttachment(part: gmail_v1.Schema$MessagePart, path: number[]): ParsedAttachment | undefined {
-  if (!part.filename) return undefined;
-
   const body = part.body;
   const rawContentId = headerValue(part, 'Content-ID')?.trim();
   const contentId = rawContentId?.replace(/^<|>$/g, '');
   const rawDisposition = headerValue(part, 'Content-Disposition')?.split(';', 1)[0]?.trim().toLowerCase();
+  const isMessageBody = part.mimeType === 'text/plain' || part.mimeType === 'text/html';
+  const hasContent = body?.attachmentId != null || body?.data != null;
+  const isAttachment =
+    !!part.filename ||
+    rawDisposition === 'attachment' ||
+    (!isMessageBody && !part.mimeType?.startsWith('multipart/') && (hasContent || !!contentId || rawDisposition === 'inline'));
+  if (!isAttachment) return undefined;
+
   const disposition: AttachmentMeta['disposition'] =
     rawDisposition === 'inline' || rawDisposition === 'attachment'
       ? rawDisposition
@@ -49,23 +72,25 @@ function parseAttachment(part: gmail_v1.Schema$MessagePart, path: number[]): Par
     ...(contentId ? { contentId } : {}),
     ...(disposition ? { disposition } : {}),
   };
+  const fallbackId = part.partId ?? path.join('.');
+  const filename = part.filename || `${disposition === 'inline' ? 'inline' : 'attachment'}-${fallbackId}`;
   if (body?.attachmentId) {
     return {
       meta: {
         id: body.attachmentId,
-        filename: part.filename,
+        filename,
         mimeType: part.mimeType ?? '',
         sizeBytes: body.size ?? 0,
         ...metadata,
       },
     };
   }
-  if (body?.data) {
+  if (body?.data != null) {
     const content = decodeBase64Url(body.data);
     return {
       meta: {
         id: `inline:${part.partId ?? path.join('.')}`,
-        filename: part.filename,
+        filename,
         mimeType: part.mimeType ?? '',
         sizeBytes: body.size ?? content.length,
         ...metadata,
@@ -78,7 +103,7 @@ function parseAttachment(part: gmail_v1.Schema$MessagePart, path: number[]): Par
 
 /** Walk the MIME tree collecting the preferred text/html bodies and attachment metadata. */
 export function walkParts(payload: gmail_v1.Schema$MessagePart | undefined): WalkedParts {
-  const result: WalkedParts = { body: {}, attachments: [] };
+  const result: WalkedParts = { body: {}, attachments: [], externalBodyParts: {} };
   if (!payload) return result;
 
   const visit = (part: gmail_v1.Schema$MessagePart, partPath: number[]) => {
@@ -88,13 +113,17 @@ export function walkParts(payload: gmail_v1.Schema$MessagePart | undefined): Wal
       result.attachments.push(attachment.meta);
       return;
     }
-    if (mimeType === 'text/plain' && part.body?.data && result.body.text === undefined) {
-      result.body.text = decodeTextPart(part);
-      return;
-    }
-    if (mimeType === 'text/html' && part.body?.data && result.body.html === undefined) {
-      result.body.html = decodeTextPart(part);
-      return;
+    const bodyField: BodyField | undefined =
+      mimeType === 'text/plain' ? 'text' : mimeType === 'text/html' ? 'html' : undefined;
+    if (bodyField && result.body[bodyField] === undefined && result.externalBodyParts[bodyField] === undefined) {
+      if (part.body?.data != null) {
+        result.body[bodyField] = decodeTextPart(part);
+        return;
+      }
+      if (part.body?.attachmentId) {
+        result.externalBodyParts[bodyField] = { attachmentId: part.body.attachmentId, part };
+        return;
+      }
     }
     for (const [index, child] of (part.parts ?? []).entries()) visit(child, [...partPath, index]);
   };
@@ -120,6 +149,25 @@ export function findAttachment(
   return visit(payload, [0]);
 }
 
+/** System labels that pin a message's canonical location, most specific first. */
+const LOCATION_LABEL_ROLES: Array<[string, FolderRole]> = [
+  ['TRASH', 'trash'],
+  ['SPAM', 'spam'],
+  ['DRAFT', 'drafts'],
+  ['INBOX', 'inbox'],
+  ['SENT', 'sent'],
+];
+
+/** Gmail has no archive label: archived mail is whatever carries no location label. */
+function deriveFolder(labelIds: string[], labelNames: Map<string, string>): Folder {
+  for (const [labelId, role] of LOCATION_LABEL_ROLES) {
+    if (labelIds.includes(labelId)) {
+      return { id: labelId, name: labelNames.get(labelId) ?? labelId, role };
+    }
+  }
+  return { id: 'archive', name: 'Archive', role: 'archive' };
+}
+
 const INTERESTING_HEADERS = ['message-id', 'in-reply-to', 'references', 'list-unsubscribe'];
 
 export interface ParseContext {
@@ -127,10 +175,19 @@ export interface ParseContext {
   /** Gmail label id -> display name, for translating labelIds. */
   labelNames: Map<string, string>;
   includeBody: boolean;
+  /** Set only when the Gmail response includes the MIME payload. */
+  includeAttachments?: boolean;
   includeHeaders?: boolean;
 }
 
 export function parseGmailMessage(msg: gmail_v1.Schema$Message, ctx: ParseContext): Message {
+  return parseGmailMessageWithParts(msg, ctx).message;
+}
+
+export function parseGmailMessageWithParts(
+  msg: gmail_v1.Schema$Message,
+  ctx: ParseContext
+): { message: Message; externalBodyParts: ExternalBodyParts } {
   const payload = msg.payload;
   const labelIds = msg.labelIds ?? [];
   const from = parseAddressList(headerValue(payload, 'From'))[0];
@@ -141,13 +198,13 @@ export function parseGmailMessage(msg: gmail_v1.Schema$Message, ctx: ParseContex
     id: msg.id ?? '',
     threadId: msg.threadId ?? msg.id ?? '',
     accountId: ctx.accountId,
+    folder: deriveFolder(labelIds, ctx.labelNames),
     labels: labelIds
       .filter((id) => !id.startsWith('CATEGORY_'))
       .map((id) => ctx.labelNames.get(id) ?? id),
     to: parseAddressList(headerValue(payload, 'To')),
     subject: headerValue(payload, 'Subject') ?? '',
     date: new Date(dateMs).toISOString(),
-    attachments: [],
     flags: {
       read: !labelIds.includes('UNREAD'),
       starred: labelIds.includes('STARRED'),
@@ -164,9 +221,13 @@ export function parseGmailMessage(msg: gmail_v1.Schema$Message, ctx: ParseContex
   if (replyTo.length) message.replyTo = replyTo;
   if (msg.snippet) message.snippet = msg.snippet;
 
-  const walked = walkParts(payload);
-  message.attachments = walked.attachments;
-  if (ctx.includeBody) message.body = walked.body;
+  let externalBodyParts: ExternalBodyParts = {};
+  if (ctx.includeBody || ctx.includeAttachments) {
+    const walked = walkParts(payload);
+    if (ctx.includeAttachments) message.attachments = walked.attachments;
+    if (ctx.includeBody) message.body = walked.body;
+    externalBodyParts = walked.externalBodyParts;
+  }
 
   if (ctx.includeHeaders) {
     const headers: Record<string, string> = {};
@@ -178,5 +239,5 @@ export function parseGmailMessage(msg: gmail_v1.Schema$Message, ctx: ParseContex
     message.headers = headers;
   }
 
-  return message;
+  return { message, externalBodyParts };
 }

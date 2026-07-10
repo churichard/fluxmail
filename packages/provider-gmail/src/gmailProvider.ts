@@ -2,6 +2,7 @@ import { google, type gmail_v1 } from 'googleapis';
 import type { OAuth2Client } from 'googleapis-common';
 import {
   EmailError,
+  isEmailError,
   replySubject,
   type AttachmentMeta,
   type Capabilities,
@@ -19,9 +20,16 @@ import {
   type Thread,
 } from '@fluxmail/core';
 import { toGmailQuery, ROLE_TO_LABEL } from './query.js';
-import { encodeBase64Url, decodeBase64Url, findAttachment, parseGmailMessage } from './parse.js';
+import {
+  decodeBase64Url,
+  decodeTextPart,
+  encodeBase64Url,
+  findAttachment,
+  parseGmailMessage,
+  parseGmailMessageWithParts,
+} from './parse.js';
 import { buildRawMessage, type ThreadingHeaders } from './mime.js';
-import { withRetry } from './errors.js';
+import { isRetryableForNonIdempotentRequest, withRetry } from './errors.js';
 
 const LABEL_TO_ROLE: Record<string, FolderRole> = {
   INBOX: 'inbox',
@@ -32,12 +40,15 @@ const LABEL_TO_ROLE: Record<string, FolderRole> = {
   STARRED: 'starred',
 };
 
-const METADATA_HEADERS = ['From', 'To', 'Cc', 'Reply-To', 'Subject', 'Date', 'Message-ID', 'References', 'In-Reply-To'];
+const METADATA_HEADERS = ['From', 'To', 'Cc', 'Bcc', 'Reply-To', 'Subject', 'Date', 'Message-ID', 'References', 'In-Reply-To'];
 const LABEL_CACHE_TTL_MS = 60_000;
 const HYDRATE_CONCURRENCY = 10;
 const DEFAULT_PAGE_SIZE = 25;
 const MAX_PAGE_SIZE = 100;
+const NON_IDEMPOTENT_MAX_RETRIES = 3;
+const BATCH_MODIFY_MAX_IDS = 1_000;
 const GOOGLE_USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo';
+const IMMUTABLE_SYSTEM_LABELS = new Set(['sent', 'draft', 'drafts']);
 
 export interface GmailProviderOptions {
   accountId: string;
@@ -81,6 +92,7 @@ export class GmailProvider implements EmailProvider {
    */
   private async resolveSenderName(): Promise<string | null> {
     if (this.senderName !== undefined) return this.senderName;
+    let lookupFailed = false;
     let sendAsName: string | undefined;
     try {
       const res = await withRetry(() => this.gmail.users.settings.sendAs.list({ userId: 'me' }));
@@ -90,6 +102,7 @@ export class GmailProvider implements EmailProvider {
       sendAsName = primary?.displayName?.trim() || undefined;
     } catch {
       // Fall through to the profile and stored account name.
+      lookupFailed = true;
     }
     if (sendAsName) {
       this.senderName = sendAsName;
@@ -107,9 +120,13 @@ export class GmailProvider implements EmailProvider {
       }
     } catch {
       // Profile lookup is optional; sending should still work without it.
+      lookupFailed = true;
     }
-    this.senderName = this.displayName?.trim() || null;
-    return this.senderName;
+    const fallback = this.displayName?.trim() || null;
+    // Cache "no name configured", but not a transient lookup failure: the next
+    // send should try Gmail again rather than pin the offline fallback.
+    if (!lookupFailed) this.senderName = fallback;
+    return fallback;
   }
 
   async testConnection(): Promise<void> {
@@ -160,6 +177,9 @@ export class GmailProvider implements EmailProvider {
 
   private async resolveLabelId(folder: string, createIfMissing = false): Promise<string> {
     const role = folder.toLowerCase();
+    if (IMMUTABLE_SYSTEM_LABELS.has(role)) {
+      throw new EmailError('invalid_request', `Gmail does not allow changing the "${role}" system label`);
+    }
     if (ROLE_TO_LABEL[role]) return ROLE_TO_LABEL[role];
     const labels = await this.labels();
     const match = labels.find((l) => l.id === folder || l.name?.toLowerCase() === folder.toLowerCase());
@@ -198,7 +218,7 @@ export class GmailProvider implements EmailProvider {
     const items: Message[] = [];
     for (let i = 0; i < ids.length; i += HYDRATE_CONCURRENCY) {
       const chunk = ids.slice(i, i + HYDRATE_CONCURRENCY);
-      const fetched = await Promise.all(
+      const fetched = await Promise.allSettled(
         chunk.map((id) =>
           withRetry(() =>
             this.gmail.users.messages.get({
@@ -210,8 +230,18 @@ export class GmailProvider implements EmailProvider {
           )
         )
       );
-      for (const f of fetched) {
-        items.push(parseGmailMessage(f.data, { accountId: this.accountId, labelNames, includeBody: false }));
+      for (const result of fetched) {
+        if (result.status === 'rejected') {
+          if (isEmailError(result.reason) && result.reason.code === 'not_found') continue;
+          throw result.reason;
+        }
+        items.push(
+          parseGmailMessage(result.value.data, {
+            accountId: this.accountId,
+            labelNames,
+            includeBody: false,
+          })
+        );
       }
     }
     await this.attachDraftIds(items);
@@ -223,12 +253,7 @@ export class GmailProvider implements EmailProvider {
   async getMessage(id: string, opts?: GetMessageOpts): Promise<Message> {
     const res = await withRetry(() => this.gmail.users.messages.get({ userId: 'me', id, format: 'full' }));
     const labelNames = await this.labelNameMap();
-    const message = parseGmailMessage(res.data, {
-      accountId: this.accountId,
-      labelNames,
-      includeBody: true,
-      includeHeaders: opts?.includeHeaders ?? false,
-    });
+    const message = await this.parseFullMessage(res.data, labelNames, opts?.includeHeaders ?? false);
     await this.attachDraftIds([message]);
     return message;
   }
@@ -238,8 +263,8 @@ export class GmailProvider implements EmailProvider {
       this.gmail.users.threads.get({ userId: 'me', id: threadId, format: 'full' })
     );
     const labelNames = await this.labelNameMap();
-    const messages = (res.data.messages ?? []).map((m) =>
-      parseGmailMessage(m, { accountId: this.accountId, labelNames, includeBody: true })
+    const messages = await Promise.all(
+      (res.data.messages ?? []).map((message) => this.parseFullMessage(message, labelNames))
     );
     await this.attachDraftIds(messages);
     return {
@@ -247,6 +272,37 @@ export class GmailProvider implements EmailProvider {
       subject: messages[0]?.subject ?? '',
       messages,
     };
+  }
+
+  private async parseFullMessage(
+    raw: gmail_v1.Schema$Message,
+    labelNames: Map<string, string>,
+    includeHeaders = false
+  ): Promise<Message> {
+    const { message, externalBodyParts } = parseGmailMessageWithParts(raw, {
+      accountId: this.accountId,
+      labelNames,
+      includeBody: true,
+      includeAttachments: true,
+      includeHeaders,
+    });
+    for (const field of ['text', 'html'] as const) {
+      const external = externalBodyParts[field];
+      if (!external) continue;
+      const res = await withRetry(() =>
+        this.gmail.users.messages.attachments.get({
+          userId: 'me',
+          messageId: raw.id ?? message.id,
+          id: external.attachmentId,
+        })
+      );
+      if (res.data.data == null) {
+        throw new EmailError('provider_unavailable', `Gmail returned no ${field} body data`);
+      }
+      message.body ??= {};
+      message.body[field] = decodeTextPart(external.part, res.data.data);
+    }
+    return message;
   }
 
   async listFolders(): Promise<Folder[]> {
@@ -290,8 +346,29 @@ export class GmailProvider implements EmailProvider {
     return out;
   }
 
+  /** Threading already present on an existing draft, so content updates keep a reply on its thread. */
+  private async resolveExistingDraftThreading(
+    draftId: string
+  ): Promise<(ThreadingHeaders & { threadId?: string }) | undefined> {
+    const res = await withRetry(() =>
+      this.gmail.users.drafts.get({ userId: 'me', id: draftId, format: 'metadata' })
+    );
+    const message = res.data.message;
+    if (!message) return undefined;
+    const headers = message.payload?.headers ?? [];
+    const get = (name: string) => headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? '';
+    const out: ThreadingHeaders & { threadId?: string } = {};
+    if (message.threadId) out.threadId = message.threadId;
+    const inReplyTo = get('In-Reply-To');
+    if (inReplyTo) out.inReplyTo = inReplyTo;
+    const references = get('References');
+    if (references) out.references = references;
+    return out;
+  }
+
   private async composeRaw(
-    d: DraftInput
+    d: DraftInput,
+    existingThreading?: ThreadingHeaders & { threadId?: string }
   ): Promise<{ raw: string; threadId?: string }> {
     let threading: ThreadingHeaders | undefined;
     let threadId: string | undefined;
@@ -301,6 +378,9 @@ export class GmailProvider implements EmailProvider {
       threading = reply;
       threadId = reply.threadId || undefined;
       if (!draft.subject) draft.subject = replySubject(reply.subject);
+    } else if (existingThreading) {
+      threading = existingThreading;
+      threadId = existingThreading.threadId;
     }
     const senderName = await this.resolveSenderName();
     const from = senderName ? { name: senderName, email: this.email } : { email: this.email };
@@ -320,17 +400,23 @@ export class GmailProvider implements EmailProvider {
 
   async createDraft(d: DraftInput): Promise<Message> {
     const { raw, threadId } = await this.composeRaw(d);
-    const res = await withRetry(() =>
-      this.gmail.users.drafts.create({
-        userId: 'me',
-        requestBody: { message: { raw, ...(threadId ? { threadId } : {}) } },
-      })
+    const res = await withRetry(
+      () =>
+        this.gmail.users.drafts.create({
+          userId: 'me',
+          requestBody: { message: { raw, ...(threadId ? { threadId } : {}) } },
+        }),
+      NON_IDEMPOTENT_MAX_RETRIES,
+      isRetryableForNonIdempotentRequest
     );
     return this.draftToMessage(res.data);
   }
 
   async updateDraft(draftId: string, d: DraftInput): Promise<Message> {
-    const { raw, threadId } = await this.composeRaw(d);
+    // Replacing a reply draft's content must not detach it from its thread:
+    // carry the draft's threading over unless the caller re-derives it.
+    const existing = d.replyToMessageId ? undefined : await this.resolveExistingDraftThreading(draftId);
+    const { raw, threadId } = await this.composeRaw(d, existing);
     const res = await withRetry(() =>
       this.gmail.users.drafts.update({
         userId: 'me',
@@ -347,20 +433,25 @@ export class GmailProvider implements EmailProvider {
 
   async send(input: DraftInput | { draftId: string }): Promise<SendResult> {
     if ('draftId' in input) {
-      const res = await withRetry(() =>
-        this.gmail.users.drafts.send({ userId: 'me', requestBody: { id: input.draftId } })
+      const res = await withRetry(
+        () => this.gmail.users.drafts.send({ userId: 'me', requestBody: { id: input.draftId } }),
+        NON_IDEMPOTENT_MAX_RETRIES,
+        isRetryableForNonIdempotentRequest
       );
       return { id: res.data.id ?? '', threadId: res.data.threadId ?? res.data.id ?? '' };
     }
-    if (!input.to?.length) {
-      throw new EmailError('invalid_request', 'Cannot send a message with no "to" recipients');
+    if (!input.to?.length && !input.cc?.length && !input.bcc?.length) {
+      throw new EmailError('invalid_request', 'Cannot send a message with no recipients');
     }
     const { raw, threadId } = await this.composeRaw(input);
-    const res = await withRetry(() =>
-      this.gmail.users.messages.send({
-        userId: 'me',
-        requestBody: { raw, ...(threadId ? { threadId } : {}) },
-      })
+    const res = await withRetry(
+      () =>
+        this.gmail.users.messages.send({
+          userId: 'me',
+          requestBody: { raw, ...(threadId ? { threadId } : {}) },
+        }),
+      NON_IDEMPOTENT_MAX_RETRIES,
+      isRetryableForNonIdempotentRequest
     );
     return { id: res.data.id ?? '', threadId: res.data.threadId ?? res.data.id ?? '' };
   }
@@ -385,24 +476,48 @@ export class GmailProvider implements EmailProvider {
     else if (action === 'unstar') removeLabelIds = ['STARRED'];
     else if (action === 'archive') removeLabelIds = ['INBOX'];
     else if ('move' in action) {
-      addLabelIds = [await this.resolveLabelId(action.move, true)];
-      removeLabelIds = ['INBOX'];
+      const role = action.move.toLowerCase();
+      if (role === 'all' || role === 'starred') {
+        throw new EmailError(
+          'invalid_request',
+          `Cannot move messages to "${role}"; it is a view, not a destination`
+        );
+      }
+      if (role === 'archive') {
+        // Gmail has no archive label: archiving is just leaving the inbox.
+        removeLabelIds = ['INBOX'];
+      } else {
+        const target = await this.resolveLabelId(action.move, true);
+        addLabelIds = [target];
+        if (target !== 'INBOX') removeLabelIds = ['INBOX'];
+      }
     } else if ('addLabels' in action) {
-      addLabelIds = await Promise.all(action.addLabels.map((l) => this.resolveLabelId(l, true)));
+      const labels = [...new Set(action.addLabels)];
+      if (labels.length > 100) {
+        throw new EmailError('invalid_request', 'Gmail allows at most 100 labels in one modification');
+      }
+      addLabelIds = await Promise.all(labels.map((label) => this.resolveLabelId(label, true)));
     } else if ('removeLabels' in action) {
-      removeLabelIds = await Promise.all(action.removeLabels.map((l) => this.resolveLabelId(l)));
+      const labels = [...new Set(action.removeLabels)];
+      if (labels.length > 100) {
+        throw new EmailError('invalid_request', 'Gmail allows at most 100 labels in one modification');
+      }
+      removeLabelIds = await Promise.all(labels.map((label) => this.resolveLabelId(label)));
     }
 
-    await withRetry(() =>
-      this.gmail.users.messages.batchModify({
-        userId: 'me',
-        requestBody: {
-          ids,
-          ...(addLabelIds.length ? { addLabelIds } : {}),
-          ...(removeLabelIds.length ? { removeLabelIds } : {}),
-        },
-      })
-    );
+    for (let offset = 0; offset < ids.length; offset += BATCH_MODIFY_MAX_IDS) {
+      const chunk = ids.slice(offset, offset + BATCH_MODIFY_MAX_IDS);
+      await withRetry(() =>
+        this.gmail.users.messages.batchModify({
+          userId: 'me',
+          requestBody: {
+            ids: chunk,
+            ...(addLabelIds.length ? { addLabelIds } : {}),
+            ...(removeLabelIds.length ? { removeLabelIds } : {}),
+          },
+        })
+      );
+    }
   }
 
   async getAttachment(messageId: string, attachmentId: string): Promise<{ meta: AttachmentMeta; content: Buffer }> {
@@ -417,7 +532,7 @@ export class GmailProvider implements EmailProvider {
     const res = await withRetry(() =>
       this.gmail.users.messages.attachments.get({ userId: 'me', messageId, id: attachmentId })
     );
-    if (!res.data.data) throw new EmailError('provider_unavailable', 'Gmail returned no attachment data');
+    if (res.data.data == null) throw new EmailError('provider_unavailable', 'Gmail returned no attachment data');
     return { meta: attachment.meta, content: decodeBase64Url(res.data.data) };
   }
 }

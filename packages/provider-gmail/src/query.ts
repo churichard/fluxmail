@@ -1,4 +1,4 @@
-import type { EmailQuery } from '@fluxmail/core';
+import { EmailError, type EmailQuery } from '@fluxmail/core';
 
 export const ROLE_TO_LABEL: Record<string, string> = {
   inbox: 'INBOX',
@@ -19,8 +19,12 @@ function quote(value: string): string {
   return /[\s"]/.test(value) ? `"${value.replace(/"/g, '\\"')}"` : value;
 }
 
-function epochSeconds(iso: string): number {
-  return Math.floor(new Date(iso).getTime() / 1000);
+function epochSeconds(iso: string, field: 'after' | 'before'): number {
+  const millis = new Date(iso).getTime();
+  if (!Number.isFinite(millis)) {
+    throw new EmailError('invalid_request', `${field} must be a valid ISO date, got "${iso}"`);
+  }
+  return Math.floor(millis / 1000);
 }
 
 /**
@@ -37,10 +41,10 @@ export function toGmailQuery(
   if (q.folder) {
     const role = q.folder.toLowerCase();
     if (role === 'archive') {
-      // Gmail has no archive label: archived mail is everything outside inbox/trash/spam.
-      parts.push('-in:inbox', '-in:trash', '-in:spam', '-in:draft');
+      parts.push('in:archive');
     } else if (role === 'all') {
       parts.push('in:anywhere');
+      out.includeSpamTrash = true;
     } else if (ROLE_TO_LABEL[role]) {
       out.labelIds = [ROLE_TO_LABEL[role]];
       if (role === 'trash' || role === 'spam') out.includeSpamTrash = true;
@@ -58,8 +62,8 @@ export function toGmailQuery(
   if (q.unreadOnly) parts.push('is:unread');
   if (q.starredOnly) parts.push('is:starred');
   if (q.hasAttachment) parts.push('has:attachment');
-  if (q.after) parts.push(`after:${epochSeconds(q.after)}`);
-  if (q.before) parts.push(`before:${epochSeconds(q.before)}`);
+  if (q.after) parts.push(`after:${epochSeconds(q.after, 'after')}`);
+  if (q.before) parts.push(`before:${epochSeconds(q.before, 'before')}`);
   if (q.rawProviderQuery) parts.push(q.rawProviderQuery);
 
   if (parts.length) out.q = parts.join(' ');

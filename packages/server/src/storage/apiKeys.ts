@@ -16,13 +16,14 @@ function hashKey(key: string): string {
 
 /** Returns the plaintext key exactly once; only its hash is stored. */
 export function createApiKey(db: FluxmailDb, name: string): { key: string; info: ApiKeyInfo } {
-  const existing = db.select().from(apiKeys).all();
-  assertWithinLimit('api keys', existing.length, getEntitlements().maxApiKeys);
-
   const id = `key_${randomBytes(8).toString('hex')}`;
   const key = `fmk_${randomBytes(24).toString('hex')}`;
   const createdAt = Date.now();
-  db.insert(apiKeys).values({ id, name, keyHash: hashKey(key), createdAt }).run();
+  db.transaction((tx) => {
+    const keyCount = tx.select().from(apiKeys).all().length;
+    assertWithinLimit('api keys', keyCount, getEntitlements().maxApiKeys);
+    tx.insert(apiKeys).values({ id, name, keyHash: hashKey(key), createdAt }).run();
+  });
   return { key, info: { id, name, createdAt, lastUsedAt: null } };
 }
 

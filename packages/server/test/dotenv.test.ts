@@ -43,6 +43,20 @@ describe('loadDotEnv', () => {
     expect(process.env.FM_TEST_A).toBe('from-shell');
   });
 
+  it('strips inline comments from unquoted values but keeps # inside quotes', () => {
+    const dir = tempEnvDir({
+      '.env': [
+        'FM_TEST_A=127.0.0.1 # set to 0.0.0.0 in Docker',
+        'FM_TEST_B="value # not a comment"',
+        "FM_TEST_C='quoted' # trailing comment",
+      ].join('\n'),
+    });
+    loadDotEnv(dir);
+    expect(process.env.FM_TEST_A).toBe('127.0.0.1');
+    expect(process.env.FM_TEST_B).toBe('value # not a comment');
+    expect(process.env.FM_TEST_C).toBe('quoted');
+  });
+
   it('handles export prefixes and single quotes', () => {
     const dir = tempEnvDir({ '.env': "export FM_TEST_EXPORT=yes\nFM_TEST_QUOTED='single'\n" });
     loadDotEnv(dir);

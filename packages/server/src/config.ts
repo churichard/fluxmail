@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
@@ -23,6 +23,31 @@ export interface FluxmailConfig {
   };
 }
 
+function unquoteEnvValue(value: string): string {
+  if (value.startsWith('"') && value.endsWith('"')) {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return typeof parsed === 'string' ? parsed : value.slice(1, -1);
+    } catch {
+      return value.slice(1, -1);
+    }
+  }
+  if (value.startsWith("'") && value.endsWith("'")) return value.slice(1, -1);
+  return value;
+}
+
+function parseEnvValue(raw: string): string {
+  // A fully quoted value may contain "#" verbatim.
+  if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+    return unquoteEnvValue(raw);
+  }
+  // Otherwise strip an inline comment (whitespace + #), like dotenv and docker compose do.
+  const quoted = raw.match(/^("(?:[^"\\]|\\.)*"|'[^']*')\s+#/);
+  if (quoted?.[1]) return unquoteEnvValue(quoted[1]);
+  const comment = raw.search(/\s#/);
+  return comment === -1 ? raw : raw.slice(0, comment).trimEnd();
+}
+
 function parseEnvContent(content: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const line of content.split('\n')) {
@@ -31,18 +56,7 @@ function parseEnvContent(content: string): Record<string, string> {
     const eq = trimmed.indexOf('=');
     if (eq === -1) continue;
     const key = trimmed.slice(0, eq).trim().replace(/^export\s+/, '');
-    let value = trimmed.slice(eq + 1).trim();
-    if (value.startsWith('"') && value.endsWith('"')) {
-      try {
-        const parsed = JSON.parse(value) as unknown;
-        value = typeof parsed === 'string' ? parsed : value.slice(1, -1);
-      } catch {
-        value = value.slice(1, -1);
-      }
-    } else if (value.startsWith("'") && value.endsWith("'")) {
-      value = value.slice(1, -1);
-    }
-    if (key) out[key] = value;
+    if (key) out[key] = parseEnvValue(trimmed.slice(eq + 1).trim());
   }
   return out;
 }
@@ -83,10 +97,20 @@ export function configFilePath(dataDir: string): string {
   return path.join(dataDir, 'config.env');
 }
 
+/** Best-effort permission tightening: chmod fails on files owned by another user, but the read may still work. */
+function tryRestrictPermissions(file: string): void {
+  try {
+    chmodSync(file, 0o600);
+  } catch {
+    // Reading (or a later write) will surface a real permission problem.
+  }
+}
+
 /** Settings persisted by `fluxmail config set`, e.g. GOOGLE_CLIENT_ID. */
 export function readStoredConfig(dataDir: string): Record<string, string> {
   const file = configFilePath(dataDir);
   if (!existsSync(file)) return {};
+  tryRestrictPermissions(file);
   return parseEnvContent(readFileSync(file, 'utf8'));
 }
 
@@ -112,25 +136,69 @@ export function unsetStoredConfig(dataDir: string, key: string): boolean {
   return true;
 }
 
+export function maskStoredConfigValue(key: string, value: string): string {
+  if (!/SECRET|KEY|TOKEN|PASSWORD/i.test(key)) return value;
+  return value.length > 8 ? `${value.slice(0, 4)}…${value.slice(-4)}` : '********';
+}
+
 function writeStoredConfig(dataDir: string, values: Record<string, string>): void {
+  const file = configFilePath(dataDir);
   const lines = Object.entries(values).map(([k, v]) => `${k}=${JSON.stringify(v)}`);
-  writeFileSync(configFilePath(dataDir), lines.join('\n') + (lines.length ? '\n' : ''), { mode: 0o600 });
+  writeFileSync(file, lines.join('\n') + (lines.length ? '\n' : ''), { mode: 0o600 });
+  tryRestrictPermissions(file);
+}
+
+function decodeEncryptionKey(value: string, errorMessage: string): Buffer {
+  if (!/^[0-9a-fA-F]{64}$/.test(value)) throw new Error(errorMessage);
+  return Buffer.from(value, 'hex');
+}
+
+function readPort(name: 'FLUXMAIL_PORT' | 'FLUXMAIL_OAUTH_PORT', fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > 65_535) {
+    throw new Error(`${name} must be an integer between 1 and 65535, got "${raw}"`);
+  }
+  return value;
+}
+
+function readBaseUrl(port: number): string {
+  const value = (process.env.FLUXMAIL_BASE_URL ?? `http://localhost:${port}`).replace(/\/+$/, '');
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`FLUXMAIL_BASE_URL must be a valid HTTP or HTTPS URL, got "${value}"`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`FLUXMAIL_BASE_URL must use HTTP or HTTPS, got "${parsed.protocol}"`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error('FLUXMAIL_BASE_URL cannot contain embedded credentials');
+  }
+  if (parsed.search || parsed.hash) {
+    throw new Error('FLUXMAIL_BASE_URL cannot contain a query string or fragment');
+  }
+  return value;
 }
 
 function loadEncryptionKey(dataDir: string): Buffer {
   const fromEnv = process.env.FLUXMAIL_ENCRYPTION_KEY;
   if (fromEnv) {
-    const key = Buffer.from(fromEnv, 'hex');
-    if (key.length !== 32) {
-      throw new Error('FLUXMAIL_ENCRYPTION_KEY must be 64 hex characters (32 bytes)');
-    }
-    return key;
+    return decodeEncryptionKey(
+      fromEnv,
+      'FLUXMAIL_ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes)'
+    );
   }
   // Auto-generate on first run so getting started requires zero key management.
   const keyPath = path.join(dataDir, 'encryption.key');
   if (existsSync(keyPath)) {
-    const key = Buffer.from(readFileSync(keyPath, 'utf8').trim(), 'hex');
-    if (key.length !== 32) throw new Error(`Corrupt encryption key at ${keyPath}`);
+    tryRestrictPermissions(keyPath);
+    const key = decodeEncryptionKey(
+      readFileSync(keyPath, 'utf8').trim(),
+      `Corrupt encryption key at ${keyPath}`
+    );
     return key;
   }
   const key = randomBytes(32);
@@ -143,7 +211,9 @@ export function loadConfig(): FluxmailConfig {
   const dataDir = resolveDataDir();
   applyDotEnvFile(configFilePath(dataDir));
 
-  const port = Number(process.env.FLUXMAIL_PORT ?? 8977);
+  const port = readPort('FLUXMAIL_PORT', 8977);
+  const oauthPort = readPort('FLUXMAIL_OAUTH_PORT', 8976);
+  const baseUrl = readBaseUrl(port);
   const authModeEnv = process.env.FLUXMAIL_AUTH ?? 'apikey';
   if (authModeEnv !== 'apikey' && authModeEnv !== 'none') {
     throw new Error(`FLUXMAIL_AUTH must be "apikey" or "none", got "${authModeEnv}"`);
@@ -156,8 +226,8 @@ export function loadConfig(): FluxmailConfig {
       : path.join(dataDir, 'fluxmail.db'),
     encryptionKey: loadEncryptionKey(dataDir),
     port,
-    baseUrl: process.env.FLUXMAIL_BASE_URL ?? `http://localhost:${port}`,
-    oauthPort: Number(process.env.FLUXMAIL_OAUTH_PORT ?? 8976),
+    baseUrl,
+    oauthPort,
     oauthHost: process.env.FLUXMAIL_OAUTH_HOST ?? '127.0.0.1',
     authMode: authModeEnv,
   };

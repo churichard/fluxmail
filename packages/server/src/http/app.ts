@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { Hono } from 'hono';
+import { isEmailError } from '@fluxmail/core';
 import type { HttpBindings } from '@hono/node-server';
 import { RESPONSE_ALREADY_SENT } from '@hono/node-server/utils/response';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -25,10 +26,13 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
   const app = new Hono<{ Bindings: HttpBindings }>();
   const oauthStates = new Map<string, number>();
 
-  const authorized = (c: { req: { header(name: string): string | undefined; query(name: string): string | undefined } }): boolean => {
+  const authorized = (
+    c: { req: { header(name: string): string | undefined; query(name: string): string | undefined } },
+    allowQueryKey = false
+  ): boolean => {
     if (config.authMode === 'none') return true;
     const bearer = c.req.header('authorization')?.replace(/^Bearer\s+/i, '');
-    const key = bearer ?? c.req.query('key');
+    const key = bearer ?? (allowQueryKey ? c.req.query('key') : undefined);
     return !!key && verifyApiKey(db, key);
   };
 
@@ -42,6 +46,12 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
         401
       );
     }
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ jsonrpc: '2.0', error: { code: -32700, message: 'Parse error' }, id: null }, 400);
+    }
     const server = buildMcpServer(service);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
@@ -52,7 +62,6 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
       void server.close();
     });
     await server.connect(transport);
-    const body = await c.req.json();
     await transport.handleRequest(c.env.incoming, c.env.outgoing, body);
     return RESPONSE_ALREADY_SENT;
   });
@@ -67,11 +76,15 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
 
   // Server-hosted OAuth flow (for remote deployments; the CLI uses a loopback flow instead).
   app.get('/auth/google', (c) => {
-    if (!authorized(c)) {
+    if (!authorized(c, true)) {
       return c.text('Unauthorized: append ?key=<your API key>', 401);
     }
+    const now = Date.now();
+    for (const [state, expiry] of oauthStates) {
+      if (expiry < now) oauthStates.delete(state);
+    }
     const state = randomBytes(16).toString('hex');
-    oauthStates.set(state, Date.now() + OAUTH_STATE_TTL_MS);
+    oauthStates.set(state, now + OAUTH_STATE_TTL_MS);
     const client = createOAuthClient(config, `${config.baseUrl}/auth/google/callback`);
     return c.redirect(buildAuthUrl(client, state));
   });
@@ -89,12 +102,19 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
     if (!code) return c.text('Missing code parameter.', 400);
 
     const client = createOAuthClient(config, `${config.baseUrl}/auth/google/callback`);
-    const { email, displayName, tokens } = await exchangeCode(client, code);
-    const account = registry.addGmailAccount(email, tokens, displayName);
-    return c.html(
-      `<html><body style="font-family: sans-serif"><h2>${email} is connected to Fluxmail</h2>` +
-        `<p>Account id: <code>${account.id}</code>. You can close this tab.</p></body></html>`
-    );
+    try {
+      const { email, displayName, tokens } = await exchangeCode(client, code);
+      const account = registry.addGmailAccount(email, tokens, displayName);
+      return c.html(
+        `<html><body style="font-family: sans-serif"><h2>${email} is connected to Fluxmail</h2>` +
+          `<p>Account id: <code>${account.id}</code>. You can close this tab.</p></body></html>`
+      );
+    } catch (err) {
+      // Surface why connecting failed (expired code, missing refresh token,
+      // account limit) instead of a blank 500 the user cannot act on.
+      if (isEmailError(err)) return c.text(`Could not connect the account: ${err.message}`, 400);
+      return c.text('Could not connect the account; check the server logs.', 500);
+    }
   });
 
   return app;

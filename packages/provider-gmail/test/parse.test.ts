@@ -87,6 +87,117 @@ describe('walkParts', () => {
 
     expect(walked.body.text).toBe('café');
   });
+
+  it('records text bodies that Gmail stores as external attachment data', () => {
+    const part: gmail_v1.Schema$MessagePart = {
+      mimeType: 'text/plain',
+      headers: [{ name: 'Content-Type', value: 'text/plain; charset=utf-8' }],
+      body: { attachmentId: 'body-attachment-1', size: 50_000 },
+    };
+    const walked = walkParts(part);
+
+    expect(walked.body.text).toBeUndefined();
+    expect(walked.externalBodyParts.text).toEqual({
+      attachmentId: 'body-attachment-1',
+      part,
+    });
+  });
+
+  it('keeps filename-less inline images as attachments', () => {
+    const walked = walkParts({
+      mimeType: 'image/png',
+      partId: '2',
+      headers: [
+        { name: 'Content-ID', value: '<chart@example.com>' },
+        { name: 'Content-Disposition', value: 'inline' },
+      ],
+      body: { data: b64url('image data'), size: 10 },
+    });
+
+    expect(walked.attachments).toEqual([
+      {
+        id: 'inline:2',
+        filename: 'inline-2',
+        mimeType: 'image/png',
+        sizeBytes: 10,
+        contentId: 'chart@example.com',
+        disposition: 'inline',
+      },
+    ]);
+  });
+
+  it('keeps an HTML root with a content id as the message body', () => {
+    const walked = walkParts({
+      mimeType: 'text/html',
+      partId: '1',
+      headers: [{ name: 'Content-ID', value: '<root@example.com>' }],
+      body: { data: b64url('<p>Hello</p>'), size: 12 },
+    });
+
+    expect(walked.body.html).toBe('<p>Hello</p>');
+    expect(walked.attachments).toEqual([]);
+  });
+
+  it('keeps zero-byte attachments', () => {
+    const payload: gmail_v1.Schema$MessagePart = {
+      mimeType: 'application/octet-stream',
+      partId: '4',
+      filename: 'empty.bin',
+      headers: [{ name: 'Content-Disposition', value: 'attachment; filename="empty.bin"' }],
+      body: { data: '', size: 0 },
+    };
+    const walked = walkParts(payload);
+
+    expect(walked.attachments).toEqual([
+      {
+        id: 'inline:4',
+        filename: 'empty.bin',
+        mimeType: 'application/octet-stream',
+        sizeBytes: 0,
+        disposition: 'attachment',
+      },
+    ]);
+    expect(findAttachment(payload, 'inline:4')?.content).toEqual(Buffer.alloc(0));
+  });
+
+  it('keeps filename-less parts with attachment disposition', () => {
+    const walked = walkParts({
+      mimeType: 'application/octet-stream',
+      partId: '3',
+      headers: [{ name: 'Content-Disposition', value: 'attachment' }],
+      body: { attachmentId: 'att-no-name', size: 42 },
+    });
+
+    expect(walked.attachments).toEqual([
+      {
+        id: 'att-no-name',
+        filename: 'attachment-3',
+        mimeType: 'application/octet-stream',
+        sizeBytes: 42,
+        disposition: 'attachment',
+      },
+    ]);
+  });
+
+  it.each([
+    [{ attachmentId: 'unnamed-file', size: 42 }, 'unnamed-file'],
+    [{ data: b64url('binary data'), size: 11 }, 'inline:5'],
+  ])('keeps filename-less non-text payloads without a disposition', (body, id) => {
+    const walked = walkParts({
+      mimeType: 'application/octet-stream',
+      partId: '5',
+      body,
+    });
+
+    expect(walked.attachments).toEqual([
+      {
+        id,
+        filename: 'attachment-5',
+        mimeType: 'application/octet-stream',
+        sizeBytes: body.size,
+      },
+    ]);
+  });
 });
 
 describe('parseGmailMessage', () => {
@@ -94,6 +205,7 @@ describe('parseGmailMessage', () => {
     accountId: 'acct_1',
     labelNames: new Map([['Label_7', 'Projects']]),
     includeBody: true,
+    includeAttachments: true,
     includeHeaders: true,
   };
 
@@ -125,5 +237,28 @@ describe('parseGmailMessage', () => {
     const m = parseGmailMessage(multipartMessage, { ...ctx, includeBody: false });
     expect(m.body).toBeUndefined();
     expect(m.attachments).toHaveLength(2);
+  });
+
+  it('derives the canonical folder from location labels', () => {
+    const m = parseGmailMessage(multipartMessage, ctx);
+    expect(m.folder).toEqual({ id: 'INBOX', name: 'INBOX', role: 'inbox' });
+  });
+
+  it('prefers trash over other location labels when deriving the folder', () => {
+    const trashed = { ...multipartMessage, labelIds: ['TRASH', 'INBOX', 'SENT'] };
+    expect(parseGmailMessage(trashed, ctx).folder).toEqual({ id: 'TRASH', name: 'TRASH', role: 'trash' });
+  });
+
+  it('treats mail without a location label as archived', () => {
+    const archived = { ...multipartMessage, labelIds: ['Label_7'] };
+    expect(parseGmailMessage(archived, ctx).folder).toEqual({ id: 'archive', name: 'Archive', role: 'archive' });
+  });
+
+  it('omits attachment state when metadata responses have no MIME payload', () => {
+    const m = parseGmailMessage(
+      { ...multipartMessage, payload: { headers: multipartMessage.payload?.headers } },
+      { ...ctx, includeBody: false, includeAttachments: false }
+    );
+    expect(m.attachments).toBeUndefined();
   });
 });

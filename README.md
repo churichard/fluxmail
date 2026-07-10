@@ -302,7 +302,7 @@ MCP OAuth support, which would remove this limitation, is on the roadmap.
 <details>
 <summary>Other MCP clients</summary>
 
-Point the client at the `/mcp` URL. If it can send custom headers, use `Authorization: Bearer fmk_...`. If it cannot, you can pass the key as a query parameter instead: `http://localhost:8977/mcp?key=fmk_...`. Query parameters tend to end up in request logs, so prefer the header where possible and treat a key passed this way as easier to leak.
+Point the client at the `/mcp` URL and send `Authorization: Bearer fmk_...`. Clients that cannot set an authorization header are not compatible with API-key mode; use a trusted network with `FLUXMAIL_AUTH=none` instead.
 
 </details>
 

@@ -28,9 +28,12 @@ export function parseSingleAddress(raw: string): EmailAddress | null {
   const angled = raw.match(/^\s*(?:"?([^"]*)"?\s+)?<([^>]+)>\s*$/);
   if (angled?.[2]) {
     const name = angled[1]?.trim();
-    return { email: angled[2].trim(), ...(name ? { name } : {}) };
+    const email = angled[2].trim();
+    if (!/^[^\s<>,;@]+@[^\s<>,;@]+$/.test(email)) return null;
+    return { email, ...(name ? { name } : {}) };
   }
-  const bare = raw.match(/[^\s<>,;]+@[^\s<>,;]+/);
+  if ((raw.match(/@/g) ?? []).length !== 1) return null;
+  const bare = raw.match(/[^\s<>,;@]+@[^\s<>,;@]+/);
   if (bare) return { email: bare[0] };
   return null;
 }

@@ -3,7 +3,14 @@ import { Command } from 'commander';
 import { serve } from '@hono/node-server';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createContext } from './context.js';
-import { configFilePath, readStoredConfig, resolveDataDir, setStoredConfig, unsetStoredConfig } from './config.js';
+import {
+  configFilePath,
+  maskStoredConfigValue,
+  readStoredConfig,
+  resolveDataDir,
+  setStoredConfig,
+  unsetStoredConfig,
+} from './config.js';
 import { createApp } from './http/app.js';
 import { buildMcpServer } from './mcp/buildServer.js';
 import { runLoopbackFlow } from './accounts/googleAuth.js';
@@ -181,19 +188,19 @@ configCmd
     }
     for (const key of keys) {
       const value = stored[key] ?? '';
-      const masked = /SECRET|KEY|TOKEN|PASSWORD/i.test(key) && value.length > 8
-        ? `${value.slice(0, 4)}…${value.slice(-4)}`
-        : value;
-      console.log(`${key}=${masked}`);
+      console.log(`${key}=${maskStoredConfigValue(key, value)}`);
     }
   });
 
 program
   .command('status')
   .description('Show accounts, entitlements, and provider availability')
-  .action(() => {
+  .action(async () => {
     const ctx = createContext();
-    console.log(JSON.stringify(ctx.service.status(), null, 2));
+    console.log(JSON.stringify(await ctx.service.status(), null, 2));
   });
 
-program.parseAsync(process.argv);
+program.parseAsync(process.argv).catch((err: unknown) => {
+  console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+  process.exitCode = 1;
+});
