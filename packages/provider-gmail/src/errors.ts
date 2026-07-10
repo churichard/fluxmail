@@ -1,0 +1,99 @@
+import { EmailError } from '@fluxmail/core';
+
+interface GoogleApiErrorLike {
+  code?: number | string;
+  message?: string;
+  response?: {
+    status?: number;
+    data?: { error?: { errors?: Array<{ reason?: string }>; message?: string } };
+  };
+  errors?: Array<{ reason?: string }>;
+}
+
+function statusOf(err: GoogleApiErrorLike): number | undefined {
+  if (typeof err.code === 'number') return err.code;
+  if (typeof err.code === 'string' && /^\d+$/.test(err.code)) return Number(err.code);
+  return err.response?.status;
+}
+
+function reasonsOf(err: GoogleApiErrorLike): string[] {
+  return [...(err.errors ?? []), ...(err.response?.data?.error?.errors ?? [])]
+    .map((item) => item.reason)
+    .filter((reason): reason is string => !!reason);
+}
+
+function isRateLimitReason(reason: string): boolean {
+  return /^(?:user)?rateLimitExceeded$/i.test(reason);
+}
+
+export function isRetryable(err: unknown): boolean {
+  const e = err as GoogleApiErrorLike;
+  const status = statusOf(e);
+  return (
+    status === 429 ||
+    status === 500 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
+    (status === 403 && reasonsOf(e).some(isRateLimitReason))
+  );
+}
+
+/**
+ * A non-idempotent request can be committed before a 5xx reaches the client,
+ * so retrying can duplicate its effect. Retry only responses that reject the
+ * request before processing it.
+ */
+export function isRetryableForNonIdempotentRequest(err: unknown): boolean {
+  const e = err as GoogleApiErrorLike;
+  const status = statusOf(e);
+  return status === 429 || (status === 403 && reasonsOf(e).some(isRateLimitReason));
+}
+
+/** Map googleapis errors onto the normalized EmailError codes. */
+export function toEmailError(err: unknown): EmailError {
+  if (err instanceof EmailError) return err;
+  const e = err as GoogleApiErrorLike & Error;
+  const status = statusOf(e);
+  const message = e.message ?? e.response?.data?.error?.message ?? 'Gmail API error';
+  const reasons = reasonsOf(e);
+
+  // invalid_grant = revoked/expired refresh token; comes back as a 400.
+  if (status === 401 || /invalid_grant/i.test(message)) {
+    return new EmailError('auth_expired', `Gmail authorization expired or revoked: ${message}`);
+  }
+  if (
+    status === 429 ||
+    reasons.some((reason) => isRateLimitReason(reason) || /^(?:dailyLimit|quota)Exceeded$/i.test(reason))
+  ) {
+    return new EmailError('rate_limited', `Gmail rate limit hit: ${message}`);
+  }
+  if (status === 403) {
+    return new EmailError('provider_unavailable', `Gmail permission denied: ${message}`);
+  }
+  if (status === 404) {
+    return new EmailError('not_found', `Not found in Gmail: ${message}`);
+  }
+  if (status === 400) {
+    return new EmailError('invalid_request', message);
+  }
+  return new EmailError('provider_unavailable', `Gmail API failure: ${message}`);
+}
+
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  maxRetries = 3,
+  retryable: (err: unknown) => boolean = isRetryable
+): Promise<T> {
+  let attempt = 0;
+  for (;;) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt >= maxRetries || !retryable(err)) throw toEmailError(err);
+      const delayMs = 500 * 2 ** attempt + Math.floor(Math.random() * 250);
+      await new Promise((r) => setTimeout(r, delayMs));
+      attempt++;
+    }
+  }
+}

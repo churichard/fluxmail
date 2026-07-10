@@ -1,0 +1,36 @@
+{
+  "name": "@fluxmail/provider-gmail",
+  "version": "0.1.0",
+  "description": "Gmail adapter for the Fluxmail unified email API",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fluxmail/core": "workspace:*",
+    "googleapis": "^173.0.0",
+    "googleapis-common": "8.0.2",
+    "iconv-lite": "^0.7.3",
+    "nodemailer": "^9.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/nodemailer": "^8.0.1"
+  }
+}

@@ -1,0 +1,14 @@
+.git
+.context
+node_modules
+**/node_modules
+dist
+**/dist
+.env
+.env.*
+!.env.example
+data
+*.db
+*.db-*
+encryption.key
+*.log

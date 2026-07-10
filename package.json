@@ -1,0 +1,21 @@
+{
+  "name": "fluxmail-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted, source-available MCP server for Gmail, Outlook, and IMAP with a unified email API",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@11.5.2",
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "dev": "pnpm --filter fluxmail dev"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}
