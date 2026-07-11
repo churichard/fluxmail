@@ -19,8 +19,9 @@ import {
   type Thread,
 } from '@fluxmail/core';
 import type { AccountRegistry } from '../accounts/registry.js';
-import { getEntitlements, type Entitlements } from '../licensing/entitlements.js';
+import { assertWithinQuota, checkLicenseState, type Entitlements } from '../licensing/entitlements.js';
 import type { FluxmailDb } from '../storage/db.js';
+import { listMembers } from '../storage/members.js';
 import {
   cancelScheduledSend,
   countPending,
@@ -49,11 +50,14 @@ export interface ForwardInput {
 
 export interface ServiceStatus {
   accounts: Array<
-    Pick<Account, 'id' | 'provider' | 'email' | 'status'> & {
+    Pick<Account, 'id' | 'provider' | 'email' | 'status' | 'memberId'> & {
       error?: { code: string; message: string };
     }
   >;
+  members: { count: number };
   entitlements: Entitlements;
+  /** Renewal warning while the license is in grace or has lapsed. */
+  licenseWarning?: string;
   providersAvailable: string[];
   scheduled: { pending: number; nextSendAt?: string };
 }
@@ -172,20 +176,33 @@ export class EmailService {
         })
     );
 
+    const license = checkLicenseState(this.db);
     return {
       accounts: this.registry
         .listAccounts()
-        .map(({ id, provider, email, status }) => ({
+        .map(({ id, provider, email, status, memberId }) => ({
           id,
           provider,
           email,
           status,
+          ...(memberId ? { memberId } : {}),
           ...(errors.has(id) ? { error: errors.get(id)! } : {}),
         })),
-      entitlements: getEntitlements(this.db),
+      members: { count: listMembers(this.db).length },
+      entitlements: license.entitlements,
+      ...(license.warning ? { licenseWarning: license.warning } : {}),
       providersAvailable: ['gmail'],
       scheduled: this.scheduledStatus(),
     };
+  }
+
+  /**
+   * Gate for MCP tool calls: throws once a lapsed license leaves the instance
+   * over the entitled caps; returns a renewal warning to attach to results
+   * while the license is in its grace period or has lapsed.
+   */
+  enforceQuota(): string | undefined {
+    return assertWithinQuota(this.db).warning;
   }
 
   private scheduledStatus(): ServiceStatus['scheduled'] {

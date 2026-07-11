@@ -149,8 +149,13 @@ function truncateBody(message: Message): Message {
   return { ...message, body };
 }
 
-function ok(data: unknown): CallToolResult {
-  return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+function ok(data: unknown, warning?: string): CallToolResult {
+  return {
+    content: [
+      { type: 'text', text: JSON.stringify(data, null, 2) },
+      ...(warning ? [{ type: 'text' as const, text: `Note: ${warning}` }] : []),
+    ],
+  };
 }
 
 function toolError(err: unknown): CallToolResult {
@@ -160,10 +165,16 @@ function toolError(err: unknown): CallToolResult {
   return { isError: true, content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }] };
 }
 
-function handle<A extends unknown[]>(fn: (...args: A) => Promise<unknown>): (...args: A) => Promise<CallToolResult> {
+function handle<A extends unknown[]>(
+  fn: (...args: A) => Promise<unknown>,
+  gate?: () => string | undefined
+): (...args: A) => Promise<CallToolResult> {
   return async (...args: A) => {
     try {
-      return ok(await fn(...args));
+      // The gate throws when a lapsed license leaves the instance over quota,
+      // and yields a renewal warning to attach while the license is in grace.
+      const warning = gate?.();
+      return ok(await fn(...args), warning);
     } catch (err) {
       return toolError(err);
     }
@@ -220,6 +231,9 @@ function emailQuery(args: Record<string, unknown>): EmailQuery {
 }
 
 export function buildMcpServer(service: EmailService): McpServer {
+  // Every tool except get_status (the diagnostic way out) enforces the plan quota.
+  const gated = <A extends unknown[]>(fn: (...args: A) => Promise<unknown>) =>
+    handle(fn, () => service.enforceQuota());
   const server = new McpServer(
     { name: 'fluxmail', title: 'Fluxmail Email', version: '0.1.0' },
     {
@@ -243,7 +257,7 @@ export function buildMcpServer(service: EmailService): McpServer {
       inputSchema: {},
       annotations: { readOnlyHint: true },
     },
-    handle(async () => service.listAccounts())
+    gated(async () => service.listAccounts())
   );
 
   server.registerTool(
@@ -265,7 +279,7 @@ export function buildMcpServer(service: EmailService): McpServer {
       inputSchema: { accountId: accountIdParam },
       annotations: { readOnlyHint: true },
     },
-    handle(async (args: { accountId?: string }) => service.listFolders(args.accountId))
+    gated(async (args: { accountId?: string }) => service.listFolders(args.accountId))
   );
 
   server.registerTool(
@@ -278,7 +292,7 @@ export function buildMcpServer(service: EmailService): McpServer {
       inputSchema: { accountId: accountIdParam, ...queryShape },
       annotations: { readOnlyHint: true },
     },
-    handle(async (args: { accountId?: string; pageSize?: number; pageToken?: string } & Record<string, unknown>) =>
+    gated(async (args: { accountId?: string; pageSize?: number; pageToken?: string } & Record<string, unknown>) =>
       service.listMessages(args.accountId, emailQuery(args), pageOpts(args))
     )
   );
@@ -296,7 +310,7 @@ export function buildMcpServer(service: EmailService): McpServer {
       },
       annotations: { readOnlyHint: true },
     },
-    handle(async (args: { accountId?: string; query: string; pageSize?: number; pageToken?: string } & Record<string, unknown>) =>
+    gated(async (args: { accountId?: string; query: string; pageSize?: number; pageToken?: string } & Record<string, unknown>) =>
       service.listMessages(args.accountId, { ...emailQuery(args), text: args.query }, pageOpts(args))
     )
   );
@@ -308,7 +322,7 @@ export function buildMcpServer(service: EmailService): McpServer {
       inputSchema: { accountId: accountIdParam, messageId: idParam },
       annotations: { readOnlyHint: true },
     },
-    handle(async (args: { accountId?: string; messageId: string }) =>
+    gated(async (args: { accountId?: string; messageId: string }) =>
       truncateBody(await service.getMessage(args.accountId, args.messageId))
     )
   );
@@ -320,7 +334,7 @@ export function buildMcpServer(service: EmailService): McpServer {
       inputSchema: { accountId: accountIdParam, threadId: idParam },
       annotations: { readOnlyHint: true },
     },
-    handle(async (args: { accountId?: string; threadId: string }) => {
+    gated(async (args: { accountId?: string; threadId: string }) => {
       const thread = await service.getThread(args.accountId, args.threadId);
       return { ...thread, messages: thread.messages.map(truncateBody) };
     })
@@ -333,7 +347,7 @@ export function buildMcpServer(service: EmailService): McpServer {
         'Create a draft. For a reply draft, pass replyToMessageId (recipients/subject are derived; replyAll for reply-all).',
       inputSchema: draftShape,
     },
-    handle(async (args: DraftArgs) => service.createDraft(args.accountId, toSendInput(args)))
+    gated(async (args: DraftArgs) => service.createDraft(args.accountId, toSendInput(args)))
   );
 
   server.registerTool(
@@ -342,7 +356,7 @@ export function buildMcpServer(service: EmailService): McpServer {
       description: 'Replace the content of an existing draft (full replacement, not a patch).',
       inputSchema: { draftId: idParam, ...draftShape },
     },
-    handle(async (args: DraftArgs & { draftId: string }) =>
+    gated(async (args: DraftArgs & { draftId: string }) =>
       service.updateDraft(args.accountId, args.draftId, toSendInput(args))
     )
   );
@@ -354,7 +368,7 @@ export function buildMcpServer(service: EmailService): McpServer {
       inputSchema: { accountId: accountIdParam, draftId: idParam },
       annotations: { destructiveHint: true },
     },
-    handle(async (args: { accountId?: string; draftId: string }) => {
+    gated(async (args: { accountId?: string; draftId: string }) => {
       await service.deleteDraft(args.accountId, args.draftId);
       return { deleted: args.draftId };
     })
@@ -385,7 +399,7 @@ export function buildMcpServer(service: EmailService): McpServer {
       },
       annotations: { destructiveHint: true },
     },
-    handle(async (args: DraftArgs & { draftId?: string; sendAt?: string }) => {
+    gated(async (args: DraftArgs & { draftId?: string; sendAt?: string }) => {
       const { sendAt, ...sendArgs } = args;
       return sendAt !== undefined
         ? service.scheduleSend(args.accountId, toSendRequest(sendArgs), sendAt)
@@ -403,7 +417,7 @@ export function buildMcpServer(service: EmailService): McpServer {
       inputSchema: { accountId: accountIdParam },
       annotations: { readOnlyHint: true },
     },
-    handle(async (args: { accountId?: string }) => service.listScheduled(args.accountId))
+    gated(async (args: { accountId?: string }) => service.listScheduled(args.accountId))
   );
 
   server.registerTool(
@@ -414,7 +428,7 @@ export function buildMcpServer(service: EmailService): McpServer {
         'The draft stays in the Drafts folder, so the content is not lost.',
       inputSchema: { scheduleId: idParam },
     },
-    handle(async (args: { scheduleId: string }) => service.cancelScheduled(args.scheduleId))
+    gated(async (args: { scheduleId: string }) => service.cancelScheduled(args.scheduleId))
   );
 
   server.registerTool(
@@ -433,7 +447,7 @@ export function buildMcpServer(service: EmailService): McpServer {
       },
       annotations: { destructiveHint: true },
     },
-    handle(async (args: {
+    gated(async (args: {
       accountId?: string;
       messageId: string;
       to: string[];
@@ -475,7 +489,7 @@ export function buildMcpServer(service: EmailService): McpServer {
       },
       annotations: { destructiveHint: true },
     },
-    handle(async (args: {
+    gated(async (args: {
       accountId?: string;
       messageIds: string[];
       action: string;
@@ -513,7 +527,7 @@ export function buildMcpServer(service: EmailService): McpServer {
       },
       annotations: { readOnlyHint: false, destructiveHint: true },
     },
-    handle(async (args: { accountId?: string; messageId: string; attachmentId: string; savePath?: string }) => {
+    gated(async (args: { accountId?: string; messageId: string; attachmentId: string; savePath?: string }) => {
       const { meta, content } = await service.getAttachment(args.accountId, args.messageId, args.attachmentId);
       if (args.savePath) {
         const target = saveAttachment(args.savePath, meta.filename, content);
