@@ -16,11 +16,13 @@ import { createApp } from './http/app.js';
 import { buildMcpServer } from './mcp/buildServer.js';
 import { runLoopbackFlow } from './accounts/googleAuth.js';
 import { createApiKey, listApiKeys, revokeApiKey } from './storage/apiKeys.js';
+import { activateLicense } from './licensing/activation.js';
 import { LICENSE_KEY_PATTERN } from './licensing/client.js';
 import { licensePublicKeys, verifyLease } from './licensing/lease.js';
 import { clearLease, getEntitlements, readLeaseRow } from './licensing/entitlements.js';
 import { refreshLicense, startLicenseRefresher } from './licensing/refresher.js';
 import { VERSION } from './version.js';
+import { countPending } from './storage/scheduledSends.js';
 
 const program = new Command();
 program.name('fluxmail').description('Fluxmail, a self-hosted MCP server for your email').version(VERSION);
@@ -31,6 +33,7 @@ program
   .action(() => {
     const ctx = createContext();
     const app = createApp(ctx);
+    ctx.scheduler.start();
     serve({ fetch: app.fetch, port: ctx.config.port }, () => {
       console.log(`Fluxmail listening on ${ctx.config.baseUrl}`);
       console.log(`  MCP endpoint:   ${ctx.config.baseUrl}/mcp`);
@@ -62,10 +65,13 @@ program
   .action(async () => {
     const ctx = createContext();
     const server = buildMcpServer(ctx.service);
+    ctx.scheduler.start();
     await server.connect(new StdioServerTransport());
     // stdout belongs to the MCP protocol; log to stderr only.
     startLicenseRefresher({ db: ctx.db, config: ctx.config, log: console.error });
     console.error('Fluxmail MCP server running on stdio');
+    const { pending } = countPending(ctx.db);
+    if (pending > 0) console.error(`Scheduled sends pending: ${pending}`);
   });
 
 const accounts = program.command('accounts').description('Manage connected email accounts');
@@ -207,12 +213,11 @@ license
       process.exitCode = 1;
       return;
     }
-    setStoredConfig(dataDir, 'FLUXMAIL_LICENSE_KEY', key);
     const ctx = createContext();
-    const result = await refreshLicense(ctx.db, {
+    const result = await activateLicense(ctx.db, {
       licenseKey: key,
       serverUrl: ctx.config.licenseServerUrl,
-      dataDir: ctx.config.dataDir,
+      dataDir,
     });
     if (result.outcome === 'refreshed') {
       console.log(`License activated: up to ${result.lease.maxAccounts} accounts.`);
