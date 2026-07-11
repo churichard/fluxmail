@@ -99,7 +99,7 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
     }
     const state = randomBytes(16).toString('hex');
     oauthStates.set(state, now + OAUTH_STATE_TTL_MS);
-    const client = createOAuthClient(config, `${config.baseUrl}/auth/google/callback`);
+    const client = createOAuthClient(config, `${config.publicUrl}/auth/google/callback`);
     return c.redirect(buildAuthUrl(client, state));
   });
 
@@ -115,7 +115,7 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
     const code = c.req.query('code');
     if (!code) return c.text('Missing code parameter.', 400);
 
-    const client = createOAuthClient(config, `${config.baseUrl}/auth/google/callback`);
+    const client = createOAuthClient(config, `${config.publicUrl}/auth/google/callback`);
     try {
       const { email, displayName, tokens } = await exchangeCode(client, code);
       const account = registry.addGmailAccount(email, tokens, displayName);

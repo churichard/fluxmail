@@ -2,6 +2,15 @@
   "name": "fluxmail",
   "version": "0.1.0",
   "description": "Fluxmail MCP server: unified email tools over Gmail (Outlook and IMAP planned)",
+  "homepage": "https://github.com/churichard/fluxmail-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/churichard/fluxmail-mcp.git",
+    "directory": "packages/server"
+  },
+  "bugs": {
+    "url": "https://github.com/churichard/fluxmail-mcp/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

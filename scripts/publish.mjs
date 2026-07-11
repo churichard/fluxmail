@@ -43,6 +43,9 @@ console.log(`Docker image: ${dockerImage}`);
 console.log(`Docker platforms: ${dockerPlatforms}`);
 
 await ensureCleanWorkingTree();
+if (!options.dryRun) {
+  await ensureNpmAuthentication();
+}
 await run('pnpm', ['build']);
 await run('pnpm', ['typecheck']);
 await run('pnpm', ['test']);
@@ -70,8 +73,6 @@ if (options.dryRun) {
   console.log('\nDry run complete. Nothing was pushed or published.');
   process.exit(0);
 }
-
-await run('npm', ['whoami'], { output: 'ignore' });
 
 for (const manifest of manifests) {
   if (await isPublished(manifest)) {
@@ -141,6 +142,19 @@ async function ensureDockerVersionIsUnpublished() {
 
   if (!/manifest unknown|no such manifest|not found/i.test(result.stderr)) {
     fail(`Could not verify whether Docker image ${image} is already published.`);
+  }
+}
+
+async function ensureNpmAuthentication() {
+  const result = await run('npm', ['whoami'], {
+    output: 'capture',
+    allowFailure: true,
+  });
+
+  if (result.code !== 0) {
+    fail(
+      'npm authentication failed. Run `npm login`, then confirm it with `npm whoami` before publishing.',
+    );
   }
 }
 

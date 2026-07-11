@@ -11,7 +11,7 @@ export interface FluxmailConfig {
   encryptionKey: Buffer;
   port: number;
   /** Public base URL of the HTTP server, used to build OAuth redirect URIs. */
-  baseUrl: string;
+  publicUrl: string;
   /** Port for the ephemeral loopback OAuth listener used by `fluxmail accounts add`. */
   oauthPort: number;
   /** Bind address for the OAuth listener. Docker uses 0.0.0.0 so its published port can reach it. */
@@ -168,22 +168,22 @@ function readPort(name: 'FLUXMAIL_PORT' | 'FLUXMAIL_OAUTH_PORT', fallback: numbe
   return value;
 }
 
-function readBaseUrl(port: number): string {
-  const value = (process.env.FLUXMAIL_BASE_URL ?? `http://localhost:${port}`).replace(/\/+$/, '');
+function readPublicUrl(port: number): string {
+  const value = (process.env.FLUXMAIL_PUBLIC_URL ?? `http://localhost:${port}`).replace(/\/+$/, '');
   let parsed: URL;
   try {
     parsed = new URL(value);
   } catch {
-    throw new Error(`FLUXMAIL_BASE_URL must be a valid HTTP or HTTPS URL, got "${value}"`);
+    throw new Error(`FLUXMAIL_PUBLIC_URL must be a valid HTTP or HTTPS URL, got "${value}"`);
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error(`FLUXMAIL_BASE_URL must use HTTP or HTTPS, got "${parsed.protocol}"`);
+    throw new Error(`FLUXMAIL_PUBLIC_URL must use HTTP or HTTPS, got "${parsed.protocol}"`);
   }
   if (parsed.username || parsed.password) {
-    throw new Error('FLUXMAIL_BASE_URL cannot contain embedded credentials');
+    throw new Error('FLUXMAIL_PUBLIC_URL cannot contain embedded credentials');
   }
   if (parsed.search || parsed.hash) {
-    throw new Error('FLUXMAIL_BASE_URL cannot contain a query string or fragment');
+    throw new Error('FLUXMAIL_PUBLIC_URL cannot contain a query string or fragment');
   }
   return value;
 }
@@ -218,7 +218,7 @@ export function loadConfig(): FluxmailConfig {
 
   const port = readPort('FLUXMAIL_PORT', 8977);
   const oauthPort = readPort('FLUXMAIL_OAUTH_PORT', 8976);
-  const baseUrl = readBaseUrl(port);
+  const publicUrl = readPublicUrl(port);
   const authModeEnv = process.env.FLUXMAIL_AUTH ?? 'apikey';
   if (authModeEnv !== 'apikey' && authModeEnv !== 'none') {
     throw new Error(`FLUXMAIL_AUTH must be "apikey" or "none", got "${authModeEnv}"`);
@@ -231,7 +231,7 @@ export function loadConfig(): FluxmailConfig {
       : path.join(dataDir, 'fluxmail.db'),
     encryptionKey: loadEncryptionKey(dataDir),
     port,
-    baseUrl,
+    publicUrl,
     oauthPort,
     oauthHost: process.env.FLUXMAIL_OAUTH_HOST ?? '127.0.0.1',
     authMode: authModeEnv,
