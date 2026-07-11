@@ -1,0 +1,8 @@
+# Auto-loaded by Docker Compose when running from a clone of this repo:
+# builds the image from source instead of pulling it from ghcr.io.
+services:
+  fluxmail:
+    build: .
+    environment:
+      # Dev only: point licensing at a local license server instead of fluxmail.ai.
+      FLUXMAIL_LICENSE_SERVER_URL: ${FLUXMAIL_LICENSE_SERVER_URL:-https://fluxmail.ai}

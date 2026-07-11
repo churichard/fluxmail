@@ -15,7 +15,7 @@ import {
 const ENV_KEYS = [
   'FLUXMAIL_DATA_DIR',
   'FLUXMAIL_ENCRYPTION_KEY',
-  'FLUXMAIL_BASE_URL',
+  'FLUXMAIL_PUBLIC_URL',
   'FLUXMAIL_PORT',
   'FLUXMAIL_OAUTH_PORT',
   'FLUXMAIL_OAUTH_HOST',
@@ -139,9 +139,9 @@ describe('stored config', () => {
 
   it('removes trailing slashes from the public base URL', () => {
     process.env.FLUXMAIL_DATA_DIR = tempDataDir();
-    process.env.FLUXMAIL_BASE_URL = 'https://mail.example.com/';
+    process.env.FLUXMAIL_PUBLIC_URL = 'https://mail.example.com/';
 
-    expect(loadConfig().baseUrl).toBe('https://mail.example.com');
+    expect(loadConfig().publicUrl).toBe('https://mail.example.com');
   });
 
   it.each([
@@ -151,11 +151,11 @@ describe('stored config', () => {
     'https://user:password@mail.example.com',
   ])(
     'rejects an invalid public base URL: %s',
-    (baseUrl) => {
+    (publicUrl) => {
       process.env.FLUXMAIL_DATA_DIR = tempDataDir();
-      process.env.FLUXMAIL_BASE_URL = baseUrl;
+      process.env.FLUXMAIL_PUBLIC_URL = publicUrl;
 
-      expect(() => loadConfig()).toThrow(/FLUXMAIL_BASE_URL/);
+      expect(() => loadConfig()).toThrow(/FLUXMAIL_PUBLIC_URL/);
     }
   );
 

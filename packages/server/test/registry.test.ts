@@ -16,7 +16,7 @@ function testConfig(): FluxmailConfig {
     dbPath: ':memory:',
     encryptionKey: randomBytes(32),
     port: 8977,
-    baseUrl: 'http://localhost:8977',
+    publicUrl: 'http://localhost:8977',
     oauthPort: 8976,
     oauthHost: '127.0.0.1',
     authMode: 'apikey',

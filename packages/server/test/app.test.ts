@@ -20,7 +20,7 @@ function appDeps(authMode: FluxmailConfig['authMode']): AppDeps {
       dbPath: ':memory:',
       encryptionKey: Buffer.alloc(32),
       port: 8977,
-      baseUrl: 'http://localhost:8977',
+      publicUrl: 'http://localhost:8977',
       oauthPort: 8976,
       oauthHost: '127.0.0.1',
       authMode,

@@ -54,8 +54,8 @@ program
     const app = createApp(ctx);
     ctx.scheduler.start();
     serve({ fetch: app.fetch, port: ctx.config.port }, () => {
-      console.log(`Fluxmail listening on ${ctx.config.baseUrl}`);
-      console.log(`  MCP endpoint:   ${ctx.config.baseUrl}/mcp`);
+      console.log(`Fluxmail listening on ${ctx.config.publicUrl}`);
+      console.log(`  MCP endpoint:   ${ctx.config.publicUrl}/mcp`);
       console.log(`  Auth mode:      ${ctx.config.authMode}`);
       if (ctx.config.authMode === 'apikey' && listApiKeys(ctx.db).length === 0) {
         console.log('  Note: no API keys exist yet. Run "fluxmail apikey create --name <name>" to create one.');
