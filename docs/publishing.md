@@ -7,6 +7,9 @@ The release command publishes all three workspace packages to npm and the Docker
 npm login
 docker login ghcr.io
 
+# Confirm that the npm login works
+npm whoami
+
 # Check the packages and build the image without publishing anything
 pnpm publish:all --dry-run
 
@@ -14,10 +17,19 @@ pnpm publish:all --dry-run
 pnpm publish:all
 ```
 
+The publish command checks npm authentication before it builds anything. If `npm whoami` fails, run `npm login` again. For CI, configure an npm access token as `NODE_AUTH_TOKEN` instead of using an interactive login.
+
 The Docker image defaults to `ghcr.io/churichard/fluxmail-mcp`. Override it for another registry or repository:
 
 ```bash
 pnpm publish:all --docker-image docker.io/your-name/fluxmail
+```
+
+GHCR marks a package private the first time it is pushed, and the README tells users to pull it without logging in. After the first publish, make the image public once: open [the package page](https://github.com/churichard/fluxmail-mcp/pkgs/container/fluxmail-mcp) → Package settings → Danger Zone → Change visibility → Public. GitHub has no API for this, so it has to happen in the UI, but the setting sticks for every later push. Confirm it worked with an anonymous pull:
+
+```bash
+docker logout ghcr.io
+docker pull ghcr.io/churichard/fluxmail-mcp:latest
 ```
 
 The image is built for both `linux/amd64` and `linux/arm64`, so servers on either architecture can pull it. This needs a Docker setup that can build multi-platform images: Docker Desktop handles it out of the box; on plain Docker Engine, create a builder first with `docker buildx create --use`. Set `DOCKER_PLATFORMS` to change the target platforms.
