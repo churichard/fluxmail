@@ -28,6 +28,7 @@ import {
   type Entitlements,
 } from './licensing/entitlements.js';
 import { loadInstanceId, refreshLicense, startLicenseRefresher } from './licensing/refresher.js';
+import { VERSION } from './version.js';
 import { countPending } from './storage/scheduledSends.js';
 import type { FluxmailDb } from './storage/db.js';
 
@@ -43,7 +44,7 @@ function warnLicense(db: FluxmailDb, log: (line: string) => void = console.error
 }
 
 const program = new Command();
-program.name('fluxmail').description('Fluxmail, a self-hosted MCP server for your email').version('0.1.0');
+program.name('fluxmail').description('Fluxmail, a self-hosted MCP server for your email').version(VERSION);
 
 program
   .command('serve')
