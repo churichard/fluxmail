@@ -262,14 +262,14 @@ membersCmd
 membersCmd
   .command('remove')
   .argument('<memberId>')
-  .description('Remove a member; their mailboxes become shared and their API keys unscoped')
+  .description('Remove a member; their mailboxes become shared and their API keys are revoked')
   .action((memberId: string) => {
     const ctx = createContext();
     warnLicense(ctx.db);
     try {
-      const { name, freedAccounts, freedApiKeys } = removeMember(ctx.db, memberId);
+      const { name, freedAccounts, revokedApiKeys } = removeMember(ctx.db, memberId);
       console.log(
-        `Removed ${name}. ${freedAccounts} mailbox(es) are now shared and ${freedApiKeys} API key(s) unscoped.`
+        `Removed ${name}. ${freedAccounts} mailbox(es) are now shared and ${revokedApiKeys} API key(s) revoked.`
       );
     } catch (err) {
       console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);

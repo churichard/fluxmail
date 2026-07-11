@@ -61,15 +61,16 @@ describe('api keys', () => {
     expect(listApiKeys(db)).toHaveLength(2);
   });
 
-  it('issues a key to a member and unscopes it when the member is removed', () => {
+  it('issues a key to a member and revokes it when the member is removed', () => {
     const db = openDb(':memory:');
     const member = addMember(db, { name: 'Alice' });
-    const { info } = createApiKey(db, 'alice-key', member.id);
+    const { key, info } = createApiKey(db, 'alice-key', member.id);
     expect(info.memberId).toBe(member.id);
     expect(listApiKeys(db)[0]?.memberId).toBe(member.id);
 
     removeMember(db, member.id);
-    expect(listApiKeys(db)[0]?.memberId).toBeNull();
+    expect(listApiKeys(db)).toHaveLength(0);
+    expect(verifyApiKey(db, key)).toBe(false);
   });
 
   it('rejects an unknown member', () => {

@@ -265,7 +265,7 @@ export function buildMcpServer(service: EmailService): McpServer {
     'get_status',
     {
       description:
-        'Server status: connected accounts and their auth state, plan entitlements, and available providers. ' +
+        'Account connection and scheduled-send status. Administrators also see plan details. ' +
         'Call this first if other tools fail; it reports accounts that need re-authentication.',
       inputSchema: {},
       annotations: { readOnlyHint: true },

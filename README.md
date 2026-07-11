@@ -413,8 +413,6 @@ MCP tools are thin wrappers over `EmailService`, which owns account routing, rep
 
 ## Plans
 
-Pricing tracks two things: **members** (people in your company using the instance) and **connected mailboxes**. API keys and MCP clients are unlimited on every plan.
-
 Self-hosting is free on the **Personal** plan: 3 connected mailboxes and 1 member. Paid plans (Pro, Team, Enterprise) raise those limits for teams that share one instance — each person connects their own mailboxes, and a mailbox can also be shared. See [fluxmail.ai](https://fluxmail.ai) for current pricing.
 
-A paid plan is unlocked with `fluxmail license activate <key>`. One license activates one instance. The instance checks in with the license service about once a day and keeps a signed lease locally, so enforcement works offline and an outage never interrupts a running server. If the license stops renewing, paid limits continue for a 21-day grace period; after that the instance drops back to Personal limits, and email tools pause if usage still exceeds them — until you renew or remove mailboxes/members to fit. Deactivating, downgrading, or lapsing never deletes accounts or data.
+A paid plan is unlocked with `fluxmail license activate <key>`. One license activates one instance, and enforcement keeps working offline. If the license lapses, the instance drops back to Personal limits. Deactivating, downgrading, or lapsing never deletes accounts or data.

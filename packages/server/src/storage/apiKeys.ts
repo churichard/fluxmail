@@ -26,11 +26,24 @@ export function createApiKey(db: FluxmailDb, name: string, memberId?: string): {
   return { key, info: { id, name, createdAt, lastUsedAt: null, memberId: memberId ?? null } };
 }
 
-export function verifyApiKey(db: FluxmailDb, key: string): boolean {
+export interface ApiKeyAuth {
+  /** Member the key was issued to; null for an unscoped admin key. */
+  memberId: string | null;
+}
+
+/**
+ * Verify a key, record its use, and return the scope it authorizes. Callers must
+ * honour `memberId`: a member-scoped key may only reach shared or owned mailboxes.
+ */
+export function authenticateApiKey(db: FluxmailDb, key: string): ApiKeyAuth | null {
   const row = db.select().from(apiKeys).where(eq(apiKeys.keyHash, hashKey(key))).get();
-  if (!row) return false;
+  if (!row) return null;
   db.update(apiKeys).set({ lastUsedAt: Date.now() }).where(eq(apiKeys.id, row.id)).run();
-  return true;
+  return { memberId: row.memberId };
+}
+
+export function verifyApiKey(db: FluxmailDb, key: string): boolean {
+  return authenticateApiKey(db, key) !== null;
 }
 
 export function listApiKeys(db: FluxmailDb): ApiKeyInfo[] {

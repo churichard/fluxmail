@@ -96,7 +96,7 @@ describe('members', () => {
     expect(() => addMember(db, { name: 'Dave' })).toThrow(/team plan allows 3 members/);
   });
 
-  it('removing a member detaches their mailboxes and API keys without deleting them', () => {
+  it('removing a member shares their mailboxes and revokes their API keys', () => {
     const db = openDb(':memory:');
     const member = addMember(db, { name: 'Alice' });
     db.insert(accounts)
@@ -110,12 +110,14 @@ describe('members', () => {
       })
       .run();
     createApiKey(db, 'alice-key', member.id);
+    const { info: adminKey } = createApiKey(db, 'admin-key');
 
     const result = removeMember(db, member.id);
-    expect(result).toEqual({ name: 'Alice', freedAccounts: 1, freedApiKeys: 1 });
+    expect(result).toEqual({ name: 'Alice', freedAccounts: 1, revokedApiKeys: 1 });
     expect(listMembers(db)).toHaveLength(0);
     expect(db.select().from(accounts).all()[0]?.memberId).toBeNull();
-    expect(listApiKeys(db)[0]?.memberId).toBeNull();
+    // The member's key is gone, not promoted to an unscoped admin key.
+    expect(listApiKeys(db).map((k) => k.id)).toEqual([adminKey.id]);
   });
 });
 

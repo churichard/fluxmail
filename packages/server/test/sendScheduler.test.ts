@@ -136,7 +136,7 @@ describe('SendScheduler', () => {
     let release!: (result: { id: string; threadId: string }) => void;
     send.mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
     createScheduledSend(db, { accountId: 'acct_1', draftId: 'draft_1', sendAt: Date.now() - 1_000 });
-    const competingScheduler = new SendScheduler(db, { send });
+    const competingScheduler = new SendScheduler(db, { send, enforceQuota });
 
     scheduler.start();
     competingScheduler.start();

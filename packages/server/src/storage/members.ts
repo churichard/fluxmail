@@ -69,14 +69,18 @@ export function listMembers(db: FluxmailDb): MemberInfo[] {
 }
 
 /**
- * Delete a member. Their mailboxes become shared and their API keys unscoped
- * (member_id is set to NULL by the foreign key); nothing else is deleted.
+ * Delete a member. Their mailboxes become shared (member_id is set to NULL by
+ * the foreign key), and their API keys are revoked: a key must never outlive
+ * the member scoping it, or it would fall back to unscoped admin access.
  */
 export function removeMember(
   db: FluxmailDb,
   id: string
-): { name: string; freedAccounts: number; freedApiKeys: number } {
+): { name: string; freedAccounts: number; revokedApiKeys: number } {
   const info = getMember(db, id);
-  db.delete(members).where(eq(members.id, id)).run();
-  return { name: info.name, freedAccounts: info.accountCount, freedApiKeys: info.apiKeyCount };
+  db.transaction((tx) => {
+    tx.delete(apiKeys).where(eq(apiKeys.memberId, id)).run();
+    tx.delete(members).where(eq(members.id, id)).run();
+  });
+  return { name: info.name, freedAccounts: info.accountCount, revokedApiKeys: info.apiKeyCount };
 }
