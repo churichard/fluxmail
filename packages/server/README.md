@@ -1,10 +1,10 @@
 # Fluxmail
 
-Fluxmail is a self-hosted MCP server that connects AI agents to Gmail and IMAP/SMTP mailboxes. It gives MCP clients a consistent set of tools to read, search, draft, send, and organize email.
+[Fluxmail](https://github.com/churichard/fluxmail-mcp) is a self-hosted MCP server that connects AI agents to Gmail and IMAP/SMTP mailboxes. It gives MCP clients a consistent set of tools to read, search, draft, send, and organize email.
 
 ## Install
 
-Fluxmail requires Node.js 20 or later.
+Fluxmail requires Node.js 20.19 or later.
 
 ```bash
 npm install -g fluxmail
