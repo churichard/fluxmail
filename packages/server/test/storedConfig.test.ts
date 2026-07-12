@@ -93,6 +93,7 @@ describe('stored config', () => {
     const config = loadConfig();
     expect(config.google).toEqual({ clientId: 'stored-id', clientSecret: 'stored-secret' });
     expect(config.oauthHost).toBe('127.0.0.1');
+    expect(config.publicUrlConfigured).toBe(false);
 
     // Shell environment beats the stored value.
     delete process.env.GOOGLE_CLIENT_ID;
@@ -141,7 +142,19 @@ describe('stored config', () => {
     process.env.FLUXMAIL_DATA_DIR = tempDataDir();
     process.env.FLUXMAIL_PUBLIC_URL = 'https://mail.example.com/';
 
-    expect(loadConfig().publicUrl).toBe('https://mail.example.com');
+    const config = loadConfig();
+    expect(config.publicUrl).toBe('https://mail.example.com');
+    expect(config.publicUrlConfigured).toBe(true);
+  });
+
+  it('treats a stored public URL as explicitly configured', () => {
+    const dir = tempDataDir();
+    process.env.FLUXMAIL_DATA_DIR = dir;
+    setStoredConfig(dir, 'FLUXMAIL_PUBLIC_URL', 'https://mail.example.com/');
+
+    const config = loadConfig();
+    expect(config.publicUrl).toBe('https://mail.example.com');
+    expect(config.publicUrlConfigured).toBe(true);
   });
 
   it.each([

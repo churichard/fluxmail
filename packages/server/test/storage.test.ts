@@ -2,8 +2,14 @@ import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { EmailError } from '@fluxmail/core';
 import { decryptString, encryptString } from '../src/storage/crypto.js';
-import { accounts, openDb } from '../src/storage/db.js';
+import { accounts, gmailConnectionGrants, openDb } from '../src/storage/db.js';
 import { createApiKey, listApiKeys, revokeApiKey, verifyApiKey } from '../src/storage/apiKeys.js';
+import {
+  claimGmailConnectionGrant,
+  createGmailConnectionGrant,
+  gmailConnectionTokenHash,
+  GMAIL_CONNECTION_GRANT_TTL_MS,
+} from '../src/storage/gmailConnectionGrants.js';
 import { addMember, removeMember } from '../src/storage/members.js';
 import {
   assertAccountLimit,
@@ -76,6 +82,56 @@ describe('api keys', () => {
   it('rejects an unknown member', () => {
     const db = openDb(':memory:');
     expect(() => createApiKey(db, 'key', 'member_nope')).toThrow(/No member with id/);
+  });
+});
+
+describe('Gmail connection grants', () => {
+  it('stores a digest of a 256-bit token and preserves its intent', () => {
+    const db = openDb(':memory:');
+    const created = createGmailConnectionGrant(db, {
+      memberId: 'member_1',
+      reauthorizeAccountId: 'acct_1',
+    });
+
+    expect(Buffer.from(created.token, 'base64url')).toHaveLength(32);
+    const row = db.select().from(gmailConnectionGrants).get();
+    expect(row?.tokenHash).toBe(gmailConnectionTokenHash(created.token));
+    expect(JSON.stringify(row)).not.toContain(created.token);
+
+    expect(claimGmailConnectionGrant(db, created.token)).toEqual({
+      status: 'claimed',
+      grant: {
+        expiresAt: created.expiresAt,
+        memberId: 'member_1',
+        reauthorizeAccountId: 'acct_1',
+      },
+    });
+  });
+
+  it('rejects invalid, expired, and already-used grants', () => {
+    const db = openDb(':memory:');
+    expect(claimGmailConnectionGrant(db, 'missing')).toEqual({ status: 'invalid' });
+
+    const expired = createGmailConnectionGrant(db, {}, 100);
+    expect(claimGmailConnectionGrant(db, expired.token, 100 + GMAIL_CONNECTION_GRANT_TTL_MS)).toEqual({
+      status: 'expired',
+    });
+
+    const used = createGmailConnectionGrant(db);
+    expect(claimGmailConnectionGrant(db, used.token).status).toBe('claimed');
+    expect(claimGmailConnectionGrant(db, used.token)).toEqual({ status: 'used' });
+  });
+
+  it('allows only one claim when requests race', async () => {
+    const db = openDb(':memory:');
+    const { token } = createGmailConnectionGrant(db);
+    const claims = await Promise.all([
+      Promise.resolve().then(() => claimGmailConnectionGrant(db, token)),
+      Promise.resolve().then(() => claimGmailConnectionGrant(db, token)),
+    ]);
+
+    expect(claims.filter((claim) => claim.status === 'claimed')).toHaveLength(1);
+    expect(claims.filter((claim) => claim.status === 'used')).toHaveLength(1);
   });
 });
 

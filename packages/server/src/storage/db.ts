@@ -84,6 +84,17 @@ export const apiKeys = sqliteTable('api_keys', {
   memberId: text('member_id').references(() => members.id, { onDelete: 'set null' }),
 });
 
+export const gmailConnectionGrants = sqliteTable('gmail_connection_grants', {
+  /** SHA-256 hex digest. The raw token is printed once and never stored. */
+  tokenHash: text('token_hash').primaryKey(),
+  scope: text('scope').notNull(),
+  memberId: text('member_id'),
+  reauthorizeAccountId: text('reauthorize_account_id'),
+  createdAt: integer('created_at').notNull(),
+  expiresAt: integer('expires_at').notNull(),
+  consumedAt: integer('consumed_at'),
+});
+
 export const licenseLease = sqliteTable('license_lease', {
   /** Single-row table; the row id is always 'current'. */
   id: text('id').primaryKey(),
@@ -179,6 +190,17 @@ CREATE TABLE IF NOT EXISTS api_keys (
   last_used_at INTEGER,
   member_id TEXT REFERENCES members(id) ON DELETE SET NULL
 );
+CREATE TABLE IF NOT EXISTS gmail_connection_grants (
+  token_hash TEXT PRIMARY KEY,
+  scope TEXT NOT NULL,
+  member_id TEXT,
+  reauthorize_account_id TEXT,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  consumed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS gmail_connection_grants_expires_at
+  ON gmail_connection_grants(expires_at);
 CREATE TABLE IF NOT EXISTS license_lease (
   id TEXT PRIMARY KEY,
   token TEXT NOT NULL,

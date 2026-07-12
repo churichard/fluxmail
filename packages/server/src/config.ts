@@ -12,6 +12,8 @@ export interface FluxmailConfig {
   port: number;
   /** Public base URL of the HTTP server, used to build OAuth redirect URIs. */
   publicUrl: string;
+  /** Whether FLUXMAIL_PUBLIC_URL was explicitly set instead of using the localhost default. */
+  publicUrlConfigured?: boolean;
   /** Port for the ephemeral loopback OAuth listener used by `fluxmail accounts add`. */
   oauthPort: number;
   /** Bind address for the OAuth listener. Docker uses 0.0.0.0 so its published port can reach it. */
@@ -215,6 +217,7 @@ export function loadConfig(): FluxmailConfig {
 
   const port = readPort('FLUXMAIL_PORT', 8977);
   const oauthPort = readPort('FLUXMAIL_OAUTH_PORT', 8976);
+  const publicUrlConfigured = process.env.FLUXMAIL_PUBLIC_URL !== undefined;
   const publicUrl = readPublicUrl(port);
   const authModeEnv = process.env.FLUXMAIL_AUTH ?? 'apikey';
   if (authModeEnv !== 'apikey' && authModeEnv !== 'none') {
@@ -227,6 +230,7 @@ export function loadConfig(): FluxmailConfig {
     encryptionKey: loadEncryptionKey(dataDir),
     port,
     publicUrl,
+    publicUrlConfigured,
     oauthPort,
     oauthHost: process.env.FLUXMAIL_OAUTH_HOST ?? '127.0.0.1',
     authMode: authModeEnv,
