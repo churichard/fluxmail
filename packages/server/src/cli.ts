@@ -16,6 +16,11 @@ import {
 import { createApp } from './http/app.js';
 import { buildMcpServer } from './mcp/buildServer.js';
 import { runLoopbackFlow } from './accounts/googleAuth.js';
+import {
+  prepareHostedGmailConnection,
+  selectGmailConnectionMode,
+  validateAccountConnectionFlags,
+} from './accounts/gmailConnection.js';
 import { createApiKey, listApiKeys, revokeApiKey } from './storage/apiKeys.js';
 import { addMember, findMember, listMembers, removeMember } from './storage/members.js';
 import { activateLicense } from './licensing/activation.js';
@@ -37,6 +42,8 @@ import type { ImapCredentials, ImapSecurity } from '@fluxmail/provider-imap';
 interface AddAccountOptions {
   reauthorize?: string;
   member?: string;
+  local?: boolean;
+  hosted?: boolean;
   email?: string;
   displayName?: string;
   imapHost?: string;
@@ -129,7 +136,10 @@ function warnLicense(db: FluxmailDb, log: (line: string) => void = console.error
 }
 
 const program = new Command();
-program.name('fluxmail').description('Fluxmail, a self-hosted MCP server for your email').version(VERSION);
+program
+  .name('fluxmail')
+  .description('Fluxmail, a self-hosted MCP server for your email')
+  .version(VERSION, '-v, --version');
 
 program
   .command('serve')
@@ -190,6 +200,8 @@ accounts
   .argument('<provider>', 'Email provider: gmail or imap')
   .option('--reauthorize <account-id>', 'Reconnect an existing account')
   .option('--member <member>', 'Member (id or email) who owns the new mailbox; omit for a shared mailbox')
+  .option('--local', 'Use the local browser callback for Gmail')
+  .option('--hosted', 'Use FLUXMAIL_PUBLIC_URL for the Gmail callback')
   .option('--email <address>', 'Mailbox address (required for IMAP)')
   .option('--display-name <name>', 'Sender name for IMAP messages')
   .option('--imap-host <host>', 'IMAP server hostname')
@@ -218,6 +230,7 @@ accounts
     const ctx = createContext();
     warnLicense(ctx.db);
     try {
+      validateAccountConnectionFlags(provider, opts);
       if (opts.reauthorize && opts.member) {
         throw new EmailError(
           'invalid_request',
@@ -280,6 +293,18 @@ accounts
         const account = ctx.registry.addImapAccount(email, credentials, opts.displayName, member?.id, opts.reauthorize);
         console.log(`Connected ${account.email} (account id: ${account.id})`);
         for (const warning of warnings) console.log(`Warning: ${warning.message}.`);
+        return;
+      }
+
+      const gmailConnectionMode = selectGmailConnectionMode(ctx.config, opts);
+      if (gmailConnectionMode === 'hosted') {
+        const { connectionUrl } = prepareHostedGmailConnection(ctx.db, ctx.config, {
+          ...(member ? { memberId: member.id } : {}),
+          ...(existing ? { reauthorizeAccountId: existing.id } : {}),
+        });
+        console.log('\nOpen this URL in your browser to connect Gmail:\n');
+        console.log(`  ${connectionUrl}\n`);
+        console.log('This link expires in 10 minutes and can only be used once.');
         return;
       }
 

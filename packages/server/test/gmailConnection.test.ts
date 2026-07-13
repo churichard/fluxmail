@@ -1,0 +1,68 @@
+import { randomBytes } from 'node:crypto';
+import { describe, expect, it } from 'vitest';
+import type { FluxmailConfig } from '../src/config.js';
+import {
+  prepareHostedGmailConnection,
+  selectGmailConnectionMode,
+  validateAccountConnectionFlags,
+} from '../src/accounts/gmailConnection.js';
+import { gmailConnectionGrants, openDb } from '../src/storage/db.js';
+
+function config(publicUrlConfigured: boolean, publicUrl?: string): FluxmailConfig {
+  return {
+    dataDir: '/tmp',
+    dbPath: ':memory:',
+    encryptionKey: randomBytes(32),
+    port: 8977,
+    publicUrl: publicUrl ?? (publicUrlConfigured ? 'https://mail.example.com' : 'http://localhost:8977'),
+    publicUrlConfigured,
+    oauthPort: 8976,
+    oauthHost: '127.0.0.1',
+    authMode: 'apikey',
+    licenseServerUrl: 'https://license.invalid',
+    google: { clientId: 'client-id', clientSecret: 'client-secret' },
+  };
+}
+
+describe('Gmail connection mode', () => {
+  it('selects hosted for an explicit public URL and local for the default URL', () => {
+    expect(selectGmailConnectionMode(config(true), {})).toBe('hosted');
+    expect(selectGmailConnectionMode(config(false), {})).toBe('local');
+  });
+
+  it.each(['http://localhost:8977', 'http://127.0.0.1:8977', 'http://[::1]:8977'])(
+    'keeps an explicitly configured loopback URL on the local flow: %s',
+    (publicUrl) => {
+      expect(selectGmailConnectionMode(config(true, publicUrl), {})).toBe('local');
+    },
+  );
+
+  it('honors explicit overrides', () => {
+    expect(selectGmailConnectionMode(config(true), { local: true })).toBe('local');
+    expect(selectGmailConnectionMode(config(true), { hosted: true })).toBe('hosted');
+    expect(selectGmailConnectionMode(config(true, 'http://localhost:8977'), { hosted: true })).toBe('hosted');
+  });
+
+  it('rejects incompatible flags and hosted mode without a configured public URL', () => {
+    expect(() => selectGmailConnectionMode(config(true), { local: true, hosted: true })).toThrow(
+      /cannot be used together/,
+    );
+    expect(() => selectGmailConnectionMode(config(false), { hosted: true })).toThrow(/requires FLUXMAIL_PUBLIC_URL/);
+  });
+
+  it('rejects Gmail connection flags for IMAP', () => {
+    expect(() => validateAccountConnectionFlags('imap', { hosted: true })).toThrow(/only available for Gmail/);
+    expect(() => validateAccountConnectionFlags('imap', { local: true })).toThrow(/only available for Gmail/);
+  });
+
+  it('creates a grant and returns a URL based on FLUXMAIL_PUBLIC_URL', () => {
+    const db = openDb(':memory:');
+    const prepared = prepareHostedGmailConnection(db, config(true), { memberId: 'member_1' });
+    const url = new URL(prepared.connectionUrl);
+
+    expect(`${url.origin}${url.pathname}`).toBe('https://mail.example.com/auth/google/connect');
+    const rawToken = url.searchParams.get('token');
+    expect(rawToken).toBeTruthy();
+    expect(JSON.stringify(db.select().from(gmailConnectionGrants).get())).not.toContain(rawToken);
+  });
+});

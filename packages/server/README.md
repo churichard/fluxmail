@@ -20,7 +20,15 @@ fluxmail config set GOOGLE_CLIENT_SECRET <your-client-secret>
 fluxmail accounts add gmail
 ```
 
-The last command opens Google's consent flow in your browser.
+For a local installation, the last command starts Google's consent flow in your browser.
+
+For Docker or a remote server, set `FLUXMAIL_PUBLIC_URL` to the server's public HTTPS address and register `<FLUXMAIL_PUBLIC_URL>/auth/google/callback` as an authorized redirect URI in Google Cloud. Run the command on the server, then open the printed URL in your local browser:
+
+```bash
+docker compose exec fluxmail fluxmail accounts add gmail
+```
+
+Open the printed link, then select Continue with Google. The link expires after 10 minutes and works once. Fluxmail selects the flow from `FLUXMAIL_PUBLIC_URL`; `--local` and `--hosted` override that selection when needed.
 
 ## Connect IMAP
 

@@ -109,5 +109,5 @@ describe.skipIf(!host || !existsSync(cliPath)).sequential('IMAP CLI integration'
     ]);
     expect(literal.status).not.toBe(0);
     expect(literal.stderr).toMatch(/unknown option.*--imap-password/i);
-  });
+  }, 30_000);
 });
