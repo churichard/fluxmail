@@ -21,8 +21,30 @@ export type GmailConnectionClaim =
   | { status: 'expired' }
   | { status: 'used' };
 
+export type GmailConnectionGrantStatus = 'available' | 'invalid' | 'expired' | 'used';
+
 export function gmailConnectionTokenHash(token: string): string {
   return createHash('sha256').update(token).digest('hex');
+}
+
+export function inspectGmailConnectionGrant(
+  db: FluxmailDb,
+  token: string,
+  now = Date.now(),
+): GmailConnectionGrantStatus {
+  const existing = db
+    .select()
+    .from(gmailConnectionGrants)
+    .where(
+      and(
+        eq(gmailConnectionGrants.tokenHash, gmailConnectionTokenHash(token)),
+        eq(gmailConnectionGrants.scope, GMAIL_CONNECTION_SCOPE),
+      ),
+    )
+    .get();
+  if (!existing) return 'invalid';
+  if (existing.consumedAt !== null) return 'used';
+  return existing.expiresAt > now ? 'available' : 'expired';
 }
 
 export function createGmailConnectionGrant(

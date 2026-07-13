@@ -11,7 +11,12 @@ import type { AccessScope, EmailService } from '../service/emailService.js';
 import { authenticateApiKey } from '../storage/apiKeys.js';
 import { buildMcpServer } from '../mcp/buildServer.js';
 import { buildAuthUrl, createOAuthClient, exchangeCode } from '../accounts/googleAuth.js';
-import { claimGmailConnectionGrant, type GmailConnectionIntent } from '../storage/gmailConnectionGrants.js';
+import {
+  claimGmailConnectionGrant,
+  inspectGmailConnectionGrant,
+  type GmailConnectionGrantStatus,
+  type GmailConnectionIntent,
+} from '../storage/gmailConnectionGrants.js';
 import { VERSION } from '../version.js';
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -30,6 +35,42 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
 
   const connectionLinkPage = (title: string, message: string): string =>
     `<html><body style="font-family: sans-serif"><h2>${title}</h2><p>${message}</p></body></html>`;
+
+  const connectionLinkError = (
+    status: Exclude<GmailConnectionGrantStatus, 'available'>,
+  ): { html: string; status: 400 | 410 } => {
+    if (status === 'expired') {
+      return {
+        html: connectionLinkPage(
+          'This Gmail connection link has expired',
+          'Run the Fluxmail command again to get a new link.',
+        ),
+        status: 410,
+      };
+    }
+    if (status === 'used') {
+      return {
+        html: connectionLinkPage(
+          'This Gmail connection link has already been used',
+          'Run the Fluxmail command again if you still need to connect Gmail.',
+        ),
+        status: 410,
+      };
+    }
+    return {
+      html: connectionLinkPage(
+        'This Gmail connection link is invalid',
+        'Run the Fluxmail command again to get a new link.',
+      ),
+      status: 400,
+    };
+  };
+
+  const connectionConfirmationPage = (): string =>
+    '<html><body style="font-family: sans-serif"><h2>Connect Gmail to Fluxmail</h2>' +
+    '<p>Continue to Google to choose the Gmail account you want to connect.</p>' +
+    '<form method="post">' +
+    '<button type="submit">Continue with Google</button></form></body></html>';
 
   const beginGoogleOAuth = (intent?: GmailConnectionIntent): string => {
     const now = Date.now();
@@ -122,52 +163,35 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
   // Hono falls back to GET handlers for HEAD requests. Handle HEAD explicitly
   // so link previews and security scanners cannot consume a one-time grant.
   app.use('/auth/google/connect', async (c, next) => {
-    if (c.req.method !== 'HEAD') return next();
     c.header('cache-control', 'no-store');
     c.header('referrer-policy', 'no-referrer');
-    return c.body(null, 204);
+    return c.req.method === 'HEAD' ? c.body(null, 204) : next();
   });
 
   app.get('/auth/google/connect', (c) => {
-    c.header('cache-control', 'no-store');
-    c.header('referrer-policy', 'no-referrer');
     const token = c.req.query('token');
     if (!token) {
-      return c.html(
-        connectionLinkPage(
-          'This Gmail connection link is invalid',
-          'Run the Fluxmail command again to get a new link.',
-        ),
-        400,
-      );
+      const error = connectionLinkError('invalid');
+      return c.html(error.html, error.status);
+    }
+    const status = inspectGmailConnectionGrant(db, token);
+    if (status !== 'available') {
+      const error = connectionLinkError(status);
+      return c.html(error.html, error.status);
+    }
+    return c.html(connectionConfirmationPage());
+  });
+
+  app.post('/auth/google/connect', (c) => {
+    const token = c.req.query('token');
+    if (!token) {
+      const error = connectionLinkError('invalid');
+      return c.html(error.html, error.status);
     }
     const claim = claimGmailConnectionGrant(db, token);
-    if (claim.status === 'invalid') {
-      return c.html(
-        connectionLinkPage(
-          'This Gmail connection link is invalid',
-          'Run the Fluxmail command again to get a new link.',
-        ),
-        400,
-      );
-    }
-    if (claim.status === 'expired') {
-      return c.html(
-        connectionLinkPage(
-          'This Gmail connection link has expired',
-          'Run the Fluxmail command again to get a new link.',
-        ),
-        410,
-      );
-    }
-    if (claim.status === 'used') {
-      return c.html(
-        connectionLinkPage(
-          'This Gmail connection link has already been used',
-          'Run the Fluxmail command again if you still need to connect Gmail.',
-        ),
-        410,
-      );
+    if (claim.status !== 'claimed') {
+      const error = connectionLinkError(claim.status);
+      return c.html(error.html, error.status);
     }
     return c.redirect(beginGoogleOAuth(claim.grant));
   });

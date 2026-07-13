@@ -28,7 +28,7 @@ For Docker or a remote server, set `FLUXMAIL_PUBLIC_URL` to the server's public 
 docker compose exec fluxmail fluxmail accounts add gmail
 ```
 
-The printed link expires after 10 minutes and works once. Fluxmail selects the flow from `FLUXMAIL_PUBLIC_URL`; `--local` and `--hosted` override that selection when needed.
+Open the printed link, then select Continue with Google. The link expires after 10 minutes and works once. Fluxmail selects the flow from `FLUXMAIL_PUBLIC_URL`; `--local` and `--hosted` override that selection when needed.
 
 ## Connect IMAP
 

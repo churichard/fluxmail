@@ -9,6 +9,7 @@ import {
   createGmailConnectionGrant,
   gmailConnectionTokenHash,
   GMAIL_CONNECTION_GRANT_TTL_MS,
+  inspectGmailConnectionGrant,
 } from '../src/storage/gmailConnectionGrants.js';
 import { addMember, removeMember } from '../src/storage/members.js';
 import {
@@ -97,6 +98,7 @@ describe('Gmail connection grants', () => {
     const row = db.select().from(gmailConnectionGrants).get();
     expect(row?.tokenHash).toBe(gmailConnectionTokenHash(created.token));
     expect(JSON.stringify(row)).not.toContain(created.token);
+    expect(inspectGmailConnectionGrant(db, created.token)).toBe('available');
 
     expect(claimGmailConnectionGrant(db, created.token)).toEqual({
       status: 'claimed',
@@ -106,6 +108,7 @@ describe('Gmail connection grants', () => {
         reauthorizeAccountId: 'acct_1',
       },
     });
+    expect(inspectGmailConnectionGrant(db, created.token)).toBe('used');
   });
 
   it('rejects invalid, expired, and already-used grants', () => {
@@ -113,6 +116,7 @@ describe('Gmail connection grants', () => {
     expect(claimGmailConnectionGrant(db, 'missing')).toEqual({ status: 'invalid' });
 
     const expired = createGmailConnectionGrant(db, {}, 100);
+    expect(inspectGmailConnectionGrant(db, expired.token, 100 + GMAIL_CONNECTION_GRANT_TTL_MS)).toBe('expired');
     expect(claimGmailConnectionGrant(db, expired.token, 100 + GMAIL_CONNECTION_GRANT_TTL_MS)).toEqual({
       status: 'expired',
     });

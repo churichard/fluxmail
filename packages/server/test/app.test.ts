@@ -92,7 +92,7 @@ describe('HTTP app', () => {
     expect(allowed.status).toBe(302);
   });
 
-  it('claims a one-time connection link and uses the public callback URL', async () => {
+  it('requires confirmation before claiming a connection link', async () => {
     const deps = appDeps('apikey');
     deps.config.publicUrl = 'https://mail.example.com';
     deps.config.publicUrlConfigured = true;
@@ -106,13 +106,24 @@ describe('HTTP app', () => {
     expect(preview.headers.get('cache-control')).toBe('no-store');
 
     const response = await app.request(`/auth/google/connect?token=${encodeURIComponent(token)}`);
-    expect(response.status).toBe(302);
-    expect(response.headers.get('cache-control')).toBe('no-store');
-    expect(response.headers.get('referrer-policy')).toBe('no-referrer');
-    const googleUrl = new URL(response.headers.get('location') ?? '');
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toContain('Continue with Google');
+
+    const repeatedPreview = await app.request(`/auth/google/connect?token=${encodeURIComponent(token)}`);
+    expect(repeatedPreview.status).toBe(200);
+
+    const continued = await app.request(`/auth/google/connect?token=${encodeURIComponent(token)}`, {
+      method: 'POST',
+    });
+    expect(continued.status).toBe(302);
+    expect(continued.headers.get('cache-control')).toBe('no-store');
+    expect(continued.headers.get('referrer-policy')).toBe('no-referrer');
+    const googleUrl = new URL(continued.headers.get('location') ?? '');
     expect(googleUrl.searchParams.get('redirect_uri')).toBe('https://mail.example.com/auth/google/callback');
 
-    const reused = await app.request(`/auth/google/connect?token=${encodeURIComponent(token)}`);
+    const reused = await app.request(`/auth/google/connect?token=${encodeURIComponent(token)}`, {
+      method: 'POST',
+    });
     expect(reused.status).toBe(410);
     await expect(reused.text()).resolves.toContain('already been used');
   });
@@ -162,7 +173,7 @@ describe('HTTP app', () => {
 
     for (const code of ['first-code', 'second-code']) {
       const { token } = createGmailConnectionGrant(deps.db);
-      const start = await app.request(`/auth/google/connect?token=${encodeURIComponent(token)}`);
+      const start = await app.request(`/auth/google/connect?token=${encodeURIComponent(token)}`, { method: 'POST' });
       const state = new URL(start.headers.get('location') ?? '').searchParams.get('state');
       const callback = await app.request(`/auth/google/callback?state=${state}&code=${code}`);
       expect(callback.status).toBe(200);
@@ -186,7 +197,9 @@ describe('HTTP app', () => {
     const app = createApp(deps);
 
     const ownedGrant = createGmailConnectionGrant(deps.db, { memberId: member.id });
-    const ownedStart = await app.request(`/auth/google/connect?token=${encodeURIComponent(ownedGrant.token)}`);
+    const ownedStart = await app.request(`/auth/google/connect?token=${encodeURIComponent(ownedGrant.token)}`, {
+      method: 'POST',
+    });
     const ownedState = new URL(ownedStart.headers.get('location') ?? '').searchParams.get('state');
     expect((await app.request(`/auth/google/callback?state=${ownedState}&code=owned`)).status).toBe(200);
     expect(deps.registry.listAccounts().find((account) => account.email === 'other@example.com')?.memberId).toBe(
@@ -194,7 +207,9 @@ describe('HTTP app', () => {
     );
 
     const reauthGrant = createGmailConnectionGrant(deps.db, { reauthorizeAccountId: existing.id });
-    const reauthStart = await app.request(`/auth/google/connect?token=${encodeURIComponent(reauthGrant.token)}`);
+    const reauthStart = await app.request(`/auth/google/connect?token=${encodeURIComponent(reauthGrant.token)}`, {
+      method: 'POST',
+    });
     const reauthState = new URL(reauthStart.headers.get('location') ?? '').searchParams.get('state');
     const mismatch = await app.request(`/auth/google/callback?state=${reauthState}&code=wrong-account`);
     expect(mismatch.status).toBe(400);
@@ -212,7 +227,7 @@ describe('HTTP app', () => {
     }
     const app = createApp(deps);
     const { token } = createGmailConnectionGrant(deps.db);
-    const start = await app.request(`/auth/google/connect?token=${encodeURIComponent(token)}`);
+    const start = await app.request(`/auth/google/connect?token=${encodeURIComponent(token)}`, { method: 'POST' });
     const state = new URL(start.headers.get('location') ?? '').searchParams.get('state');
 
     const callback = await app.request(`/auth/google/callback?state=${state}&code=fourth`);
