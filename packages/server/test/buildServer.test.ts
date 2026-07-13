@@ -7,6 +7,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { EmailError } from '@fluxmail/core';
 import type { EmailService } from '../src/service/emailService.js';
 import { buildMcpServer, resolveAttachmentSavePath, saveAttachment, toSendRequest } from '../src/mcp/buildServer.js';
+import type { Telemetry } from '../src/telemetry.js';
 
 async function connectMcp(service: Partial<EmailService>) {
   const server = buildMcpServer(service as EmailService);
@@ -14,6 +15,14 @@ async function connectMcp(service: Partial<EmailService>) {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   return client;
+}
+
+function telemetrySpy(): { telemetry: Telemetry; capture: ReturnType<typeof vi.fn> } {
+  const capture = vi.fn();
+  return {
+    capture,
+    telemetry: { capture, shutdown: vi.fn().mockResolvedValue(undefined) },
+  };
 }
 
 describe('resolveAttachmentSavePath', () => {
@@ -145,6 +154,72 @@ describe('scheduled send tools', () => {
 
     expect(result.isError).toBe(true);
     expect(scheduleSend).not.toHaveBeenCalled();
+  });
+});
+
+describe('tool telemetry', () => {
+  it('captures the tool, transport, outcome, and allowlisted feature properties', async () => {
+    const { telemetry, capture } = telemetrySpy();
+    const service = {
+      enforceQuota: () => undefined,
+      scheduleSend: vi.fn().mockResolvedValue({ scheduleId: 'sch_1', status: 'pending' }),
+    } as Partial<EmailService>;
+    const server = buildMcpServer(service as EmailService, { telemetry, transport: 'http' });
+    const client = new Client({ name: 'test', version: '0.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    await client.callTool({
+      name: 'send_email',
+      arguments: {
+        to: ['private@example.com'],
+        subject: 'private subject',
+        bodyText: 'private body',
+        sendAt: '2026-07-11T09:00:00-07:00',
+      },
+    });
+
+    expect(capture).toHaveBeenCalledWith('mcp tool called', {
+      product_surface: 'mcp',
+      tool: 'send_email',
+      transport: 'http',
+      outcome: 'success',
+      duration_ms: expect.any(Number),
+      mode: 'direct',
+      scheduled: true,
+      reply_all: false,
+    });
+    expect(JSON.stringify(capture.mock.calls)).not.toContain('private@example.com');
+    expect(JSON.stringify(capture.mock.calls)).not.toContain('private subject');
+    expect(JSON.stringify(capture.mock.calls)).not.toContain('private body');
+  });
+
+  it('captures a safe error code without the error message', async () => {
+    const { telemetry, capture } = telemetrySpy();
+    const service = {
+      enforceQuota: () => undefined,
+      listAccounts: vi.fn(() => {
+        throw new EmailError('provider_unavailable', 'private provider response');
+      }),
+    } as Partial<EmailService>;
+    const server = buildMcpServer(service as EmailService, { telemetry, transport: 'stdio' });
+    const client = new Client({ name: 'test', version: '0.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    await client.callTool({ name: 'list_accounts', arguments: {} });
+
+    expect(capture).toHaveBeenCalledWith(
+      'mcp tool called',
+      expect.objectContaining({
+        product_surface: 'mcp',
+        tool: 'list_accounts',
+        transport: 'stdio',
+        outcome: 'error',
+        error_code: 'provider_unavailable',
+      }),
+    );
+    expect(JSON.stringify(capture.mock.calls)).not.toContain('private provider response');
   });
 });
 

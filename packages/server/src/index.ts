@@ -1,6 +1,6 @@
 export { createContext, type AppContext } from './context.js';
 export { createApp } from './http/app.js';
-export { buildMcpServer } from './mcp/buildServer.js';
+export { buildMcpServer, type BuildMcpServerOptions, type McpTransport } from './mcp/buildServer.js';
 export { EmailService, buildForwardBody, type SendInput, type ForwardInput } from './service/emailService.js';
 export { AccountRegistry } from './accounts/registry.js';
 export {
@@ -40,3 +40,11 @@ export {
   type ValidateOutcome,
 } from './licensing/client.js';
 export { refreshLicense, startLicenseRefresher, loadInstanceId, type RefreshResult } from './licensing/refresher.js';
+export {
+  createTelemetry,
+  isTelemetryEnabled,
+  setTelemetryEnabled,
+  telemetryDisabled,
+  type Telemetry,
+  type TelemetryProperties,
+} from './telemetry.js';
