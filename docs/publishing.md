@@ -49,3 +49,33 @@ The image is built for both `linux/amd64` and `linux/arm64`, so servers on eithe
 Use `--tag next` for a prerelease. This applies the `next` tag to both npm and Docker instead of moving `latest`.
 
 The command publishes npm packages before pushing Docker tags. It will not overwrite an existing versioned Docker tag; increment all package versions before publishing another build.
+
+## MCP Registry
+
+Fluxmail is listed in the official MCP Registry as `io.github.churichard/fluxmail`. The registry entry points to the `fluxmail` npm package and uses its `stdio` command.
+
+Keep these values in sync before each release:
+
+- `mcpName` and `version` in `packages/server/package.json`
+- The server and npm package versions in `server.json`
+
+Check them with:
+
+```bash
+pnpm registry:check
+```
+
+After the npm package is published, install the official publisher and authenticate with GitHub:
+
+```bash
+brew install mcp-publisher
+mcp-publisher login github
+```
+
+Publish the registry metadata from the repository root:
+
+```bash
+mcp-publisher publish
+```
+
+The npm package must already contain the matching `mcpName`. The registry will reject a version if the package is missing that ownership marker or if any name or version in `server.json` does not match.
