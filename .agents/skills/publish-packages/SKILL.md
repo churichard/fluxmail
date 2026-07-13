@@ -13,9 +13,9 @@ Determine whether the user wants preparation, a dry run, or a live release.
 
 - For preparation, make the version and metadata changes, validate them, and stop before publishing.
 - For a dry run, run the checks and package builds without pushing artifacts.
-- For a live release, require explicit publishing intent. Publishing changes npm, GHCR, and the MCP Registry.
+- For a full live release, require explicit publishing intent. A full release changes npm, GHCR, and the MCP Registry.
 
-Do not add Docker publishing or Registry publishing when the user asks for only one destination.
+`pnpm publish:all` always handles npm and Docker together. The Registry uses separate commands. Do not run `publish:all` when the user asks for only npm or only Docker. Explain that the repository has no single-destination mode and stop before publishing unless the user explicitly authorizes a manual destination-specific procedure.
 
 ## Prepare the release
 
@@ -39,6 +39,26 @@ Replace `patch` with a specific version or another pnpm-supported increment when
 
 The MCP Registry does not allow changing a published version or its metadata. Use a new package version for a new stable listing. If the user does not want a new release, update the source metadata only and state that the live listing will change with the next release.
 
+## Inspect existing release state
+
+Before changing manifests or running a live command, check whether the intended version already exists at each requested destination:
+
+```bash
+npm view fluxmail@<version> version mcpName --json
+npm view @fluxmail/core@<version> version --json
+npm view @fluxmail/provider-gmail@<version> version --json
+npm view @fluxmail/provider-imap@<version> version --json
+docker manifest inspect ghcr.io/churichard/fluxmail-mcp:<version>
+curl -fsS 'https://registry.modelcontextprotocol.io/v0/servers?search=io.github.churichard%2Ffluxmail'
+```
+
+Treat a missing npm version, Docker manifest, or Registry entry as unpublished. Route partial releases by destination state:
+
+- If npm is partly or fully published and the versioned Docker tag is missing, rerun `pnpm publish:all`. It skips npm packages that already exist.
+- If all npm packages and the versioned Docker tag exist but the Registry entry is missing, skip `publish:all` and publish only the Registry metadata.
+- If the versioned Docker tag exists while any npm package is missing, stop and report the inconsistent release. Do not improvise a repair without explicit approval.
+- If the Registry version exists, do not publish it again. Complete any missing npm or Docker destination using the rules above, then verify the Registry entry. Use a new version when its metadata must change.
+
 ## Validate before publishing
 
 Run the focused metadata checks first:
@@ -46,6 +66,13 @@ Run the focused metadata checks first:
 ```bash
 pnpm registry:check
 node scripts/check-package-licenses.mjs packages/core packages/provider-gmail packages/provider-imap packages/server
+```
+
+If the release includes Registry metadata, install the official publisher if needed and run its read-only validation. This checks the Registry schema and semantic rules without publishing or requiring login.
+
+```bash
+command -v mcp-publisher >/dev/null || brew install mcp-publisher
+mcp-publisher validate server.json
 ```
 
 Then run the repository checks in build order:
@@ -80,10 +107,9 @@ Authenticate to GHCR before a live Docker release:
 docker login ghcr.io
 ```
 
-For the MCP Registry, install and authenticate the official publisher if needed:
+For the MCP Registry, authenticate the official publisher if needed:
 
 ```bash
-brew install mcp-publisher
 mcp-publisher login github
 ```
 
@@ -134,9 +160,11 @@ The command publishes all four npm packages before pushing Docker tags. It skips
 After the first GHCR release, confirm the package is public. If it is private, direct the user to `https://github.com/churichard/fluxmail-mcp/pkgs/container/fluxmail-mcp`, open Package settings, and change its visibility to Public. GitHub does not provide an API for this setting. Verify anonymous access with:
 
 ```bash
-docker logout ghcr.io
-docker pull ghcr.io/churichard/fluxmail-mcp:latest
+anonymous_docker_config="$(mktemp -d)"
+DOCKER_CONFIG="$anonymous_docker_config" docker pull ghcr.io/churichard/fluxmail-mcp:<version>
 ```
+
+Remove the temporary directory afterward. Do not use `docker logout`, which would remove the user's saved GHCR credentials.
 
 ## Publish Registry metadata
 
@@ -156,11 +184,13 @@ Do not retry with the same Registry version after a successful publication. Regi
 Verify every destination used by the release:
 
 ```bash
-npm view fluxmail version mcpName dist-tags --json
-npm view @fluxmail/core version --json
-npm view @fluxmail/provider-gmail version --json
-npm view @fluxmail/provider-imap version --json
+npm view fluxmail@<version> version mcpName --json
+npm view fluxmail dist-tags --json
+npm view @fluxmail/core@<version> version --json
+npm view @fluxmail/provider-gmail@<version> version --json
+npm view @fluxmail/provider-imap@<version> version --json
 docker manifest inspect ghcr.io/churichard/fluxmail-mcp:<version>
+curl -fsS 'https://registry.modelcontextprotocol.io/v0/servers?search=io.github.churichard%2Ffluxmail'
 ```
 
-Search the MCP Registry for `io.github.churichard/fluxmail` after publishing its metadata. Report the exact versions published, skipped, or blocked. Include any remaining manual step and do not claim success for a destination that was not verified.
+Confirm that the Registry response contains `io.github.churichard/fluxmail` at the intended version. Report the exact versions published, skipped, or blocked. Include any remaining manual step and do not claim success for a destination that was not verified.
