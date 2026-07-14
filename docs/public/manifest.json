@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "fluxmail-mcp",
+  "category": "Fluxmail MCP",
+  "pages": [
+    "quickstart",
+    "connect-gmail-to-mcp",
+    "connect-an-imap-mailbox",
+    "tools",
+    "permissions",
+    "configuration",
+    "cli",
+    "teams-and-plans",
+    "architecture"
+  ]
+}

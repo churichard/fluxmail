@@ -4,143 +4,42 @@
 
 <p align="center"><a href="https://github.com/churichard/fluxmail-mcp/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/churichard/fluxmail-mcp/ci.yml?branch=main&amp;style=flat-square&amp;label=CI&amp;logo=github"></a> <a href="https://www.npmjs.com/package/fluxmail"><img alt="npm version" src="https://img.shields.io/npm/v/fluxmail?style=flat-square&amp;logo=npm&amp;color=1f4fcc"></a> <a href="https://github.com/churichard/fluxmail-mcp/pkgs/container/fluxmail-mcp"><img alt="Container image" src="https://img.shields.io/badge/GHCR-container-2496ED?style=flat-square&amp;logo=docker&amp;logoColor=white"></a></p>
 
-`fluxmail-mcp` is a self-hosted MCP server that connects AI agents to Gmail and IMAP/SMTP mailboxes. Agents get one set of tools to read, search, draft, send, and organize mail.
+Fluxmail is a self-hosted MCP server that connects AI agents to Gmail and IMAP/SMTP mailboxes. It provides one API for reading, searching, drafting, sending, and organizing mail over stdio or Streamable HTTP.
 
-- 16 MCP tools, served over stdio (Claude Desktop, Claude Code) or Streamable HTTP (Docker, remote deployments)
-- One provider-agnostic model (folders, threads, drafts, a structured query language), so nothing above the provider layer knows it is talking to Gmail
-- A single Docker container with SQLite storage; OAuth tokens and mailbox passwords are encrypted at rest with AES-256-GCM
-- Free to self-host on the Personal plan (3 mailboxes, 1 member); paid plans add mailboxes and team members
+## Get started
 
-## Getting started
+Fluxmail requires Node.js 20.20.x, or Node.js 22.22 or later.
 
 ```bash
 npm install -g fluxmail
-```
-
-To run Fluxmail without installing it globally:
-
-```bash
-npx fluxmail
-```
-
-Create the first member before connecting a mailbox. The first member is an admin unless you pass `--role member`.
-
-```bash
 fluxmail members add --name "Your name" --email you@example.com
 ```
 
-See the [quickstart](https://fluxmail.ai/docs/quickstart) for how to connect to your email provider and AI agent.
+Then follow the [quickstart](docs/public/pages/quickstart.md) to connect a mailbox, choose who can use it, and configure your MCP client. The published version is available at [fluxmail.ai/docs/quickstart](https://fluxmail.ai/docs/quickstart).
 
-## Tools
+## Documentation
 
-| Tool                                             | Description                                                                  |
-| ------------------------------------------------ | ---------------------------------------------------------------------------- |
-| `list_accounts`                                  | Connected accounts with status and capabilities                              |
-| `get_status`                                     | Server health: accounts, auth errors, plan limits                            |
-| `list_folders`                                   | Folders/labels with roles (inbox, sent, drafts, …)                           |
-| `list_emails`                                    | Metadata and snippets, filterable (folder, sender, unread, dates), paginated |
-| `search_emails`                                  | Full-text search with the same filters                                       |
-| `get_email` / `get_thread`                       | Full bodies and attachment metadata                                          |
-| `create_draft` / `update_draft` / `delete_draft` | Draft management, including reply drafts                                     |
-| `send_email`                                     | Send now or schedule with `sendAt`; supports drafts and threaded replies     |
-| `list_scheduled_emails`                          | List pending and failed scheduled sends                                      |
-| `cancel_scheduled_email`                         | Cancel a scheduled send before delivery                                      |
-| `forward_email`                                  | Forward with quoted body and original attachments                            |
-| `modify_emails`                                  | Batch: read/unread, star, archive, trash, move, labels, delete               |
-| `download_attachment`                            | Attachment data as an embedded MCP resource                                  |
+- [Tools](docs/public/pages/tools.md)
+- [Permissions](docs/public/pages/permissions.md)
+- [Configuration](docs/public/pages/configuration.md)
+- [CLI reference](docs/public/pages/cli.md)
+- [Architecture](docs/public/pages/architecture.md)
+- [Teams and plans](docs/public/pages/teams-and-plans.md)
 
-`fluxmail-mcp` computes reply recipients on the server (Reply-To or From, plus the original To/Cc minus your own address for reply-all), so an agent can reply-all without assembling the recipient list itself.
+The source for Fluxmail MCP's public documentation lives in [`docs/public`](docs/public). Generated reference sections come from the server implementation. Run `pnpm docs:generate` after changing tools, commands, configuration, or permissions, and run `pnpm docs:check` before committing.
 
-## Configuration
+## Repository layout
 
-Every setting is an environment variable, and there are three places to put one. In precedence order:
-
-1. The shell environment (always wins)
-2. `.env.local`, then `.env`, read from the working directory
-3. `fluxmail config set <KEY> <value>`, stored in `<data dir>/config.env` and available no matter where you run the CLI from
-
-For a personal setup, `fluxmail config set` is the simplest: set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` once and every command and server mode finds them. Use `fluxmail config list` to review stored settings (secret values are masked) and `fluxmail config unset <KEY>` to remove one.
-
-| Env var                                     | Default                           | Purpose                                                            |
-| ------------------------------------------- | --------------------------------- | ------------------------------------------------------------------ |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | (required for Gmail)              | Your Google OAuth app                                              |
-| `FLUXMAIL_DATA_DIR`                         | `~/.fluxmail` (`/data` in Docker) | SQLite DB and autogenerated encryption key                         |
-| `FLUXMAIL_ENCRYPTION_KEY`                   | autogenerated                     | 64 hex chars; encrypts provider credentials at rest                |
-| `FLUXMAIL_PORT`                             | `8977`                            | HTTP port                                                          |
-| `FLUXMAIL_PUBLIC_URL`                       | `http://localhost:8977`           | Public HTTPS URL for remote Gmail setup                            |
-| `FLUXMAIL_AUTH`                             | `apikey`                          | `none` disables MCP auth (trusted networks only)                   |
-| `FLUXMAIL_OAUTH_PORT`                       | `8976`                            | Loopback port for the CLI OAuth flow                               |
-| `FLUXMAIL_OAUTH_HOST`                       | `127.0.0.1`                       | OAuth listener bind address (`0.0.0.0` in Docker)                  |
-| `FLUXMAIL_MAX_ATTACHMENT_MB`                | `10`                              | Largest attachment returned through MCP, in MB; maximum `25`       |
-| `FLUXMAIL_LICENSE_KEY`                      | (none)                            | Paid-plan license key; usually set via `fluxmail license activate` |
-| `FLUXMAIL_TELEMETRY`                        | `1`                               | Set to `0` to turn off anonymous usage telemetry                   |
-
-## Connect Gmail
-
-For a local installation, run:
-
-```bash
-fluxmail accounts add gmail --owner you@example.com
-```
-
-For Docker or a remote server, set `FLUXMAIL_PUBLIC_URL` to the server's public HTTPS address. Register `<FLUXMAIL_PUBLIC_URL>/auth/google/callback` as an authorized redirect URI in Google Cloud, then run the same command on the server:
-
-```bash
-docker compose exec fluxmail fluxmail accounts add gmail --owner you@example.com
-```
-
-Open the printed URL in your browser, then select Continue with Google. The link expires after 10 minutes and works once. Fluxmail selects the local or hosted flow from `FLUXMAIL_PUBLIC_URL`; use `--local` or `--hosted` only when you need to override that choice.
-
-New mailboxes are private to their owner. Add `--shared` to share with every member, or repeat `--share-with <id-or-email>` to choose specific members. Admins can manage accounts and members, but the admin role does not grant access to another member's private email.
-
-## CLI
-
-Using Docker? Prefix these commands with `docker compose exec fluxmail`, for example `docker compose exec fluxmail fluxmail accounts list`.
-
-```
-fluxmail serve                      # HTTP server (MCP at /mcp)
-fluxmail stdio --member <id-or-email> [--account <id-or-email>]
-fluxmail accounts add gmail --owner <id-or-email>
-fluxmail accounts add gmail --reauthorize <account-id>
-fluxmail accounts add imap --owner <id-or-email> --email <address> --imap-host <host> --smtp-host <host>
-fluxmail accounts configure <id> --sent-folder <path|auto>
-fluxmail accounts list | remove <id>
-fluxmail accounts assign <id> --owner <id-or-email>
-fluxmail accounts access <id> --owner-only | --shared | --share-with <member>
-fluxmail members add --name <name> [--email <email>] [--role <admin|member>]
-fluxmail members role <id-or-email> <admin|member>
-fluxmail members list | remove <id>
-fluxmail apikey create --name <name> --member <id-or-email>
-fluxmail apikey create --name <name> --member <member> --account <id-or-email>
-fluxmail apikey accounts <id> --account <id-or-email>  # use --all-accounts to clear
-fluxmail apikey permissions <id> --profile <read-only|read-write|full>
-fluxmail apikey list | revoke <id>
-fluxmail config set <KEY> <value>   # persist settings in the data dir
-fluxmail config list | unset <KEY>
-fluxmail telemetry status | enable | disable
-fluxmail license activate <key>     # unlock paid-plan limits
-fluxmail license status | deactivate
-fluxmail status
-```
-
-## Architecture
-
-```
+```text
 packages/
-  core/             # unified types, the EmailQuery language, the EmailProvider interface
-  provider-gmail/   # Gmail adapter (googleapis): query translation, MIME, threading, labels
-  provider-imap/    # IMAP/SMTP adapter: folders, search, MIME parts, synthetic threads
-  server/           # EmailService, SQLite storage, OAuth, MCP tools, HTTP + stdio transports, CLI
+  core/             unified types and provider interface
+  provider-gmail/   Gmail adapter
+  provider-imap/    IMAP and SMTP adapter
+  server/           service, storage, MCP transports, and CLI
 ```
 
-MCP tools are thin wrappers over `EmailService`, which owns account routing, reply and forward computation, and plan limits. A future REST API or an expanded CLI would call the same service. Each provider implements one `EmailProvider` interface and declares a `capabilities` object, so tools can degrade cleanly where providers differ (IMAP has no labels, for example).
+## Plans and license
 
-## Plans
-
-Self-hosting is free on the **Personal** plan: 3 connected mailboxes and 1 member. Paid plans (Pro, Team, Enterprise) raise those limits for teams that share one instance. Every mailbox has an owner. The owner can keep it private, share it with everyone, or share it with selected members. See [fluxmail.ai](https://fluxmail.ai) for current pricing.
-
-A paid plan is unlocked with `fluxmail license activate <key>`. One license activates one instance, and enforcement keeps working offline. If the license lapses, the instance drops back to Personal limits. Deactivating, downgrading, or lapsing never deletes accounts or data.
-
-## License
+The Personal plan supports three mailboxes and one member. Paid plans raise those limits for teams that share an instance. See [Fluxmail pricing](https://fluxmail.ai/pricing) for current details.
 
 Fluxmail is proprietary, source-available software. You may inspect, test, and privately modify the source, but production use is limited to your Fluxmail entitlement. Redistribution, hosted resale, competing use, and bypassing license controls are not permitted. See [LICENSE.md](LICENSE.md) for the full terms.

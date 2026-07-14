@@ -1,5 +1,6 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "ignorePatterns": ["docs/public/**/*.md"],
   "printWidth": 120,
   "singleQuote": true,
   "sortPackageJson": false
