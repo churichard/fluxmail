@@ -340,8 +340,12 @@ first_content_line="$(awk 'NF { print; exit }' "$notes_file")"
 heading_text="$(printf '%s\n' "$first_content_line" | sed -E 's/^#{1,6}[[:space:]]+//')"
 if [[ "$heading_text" == "$version" ||
       "$heading_text" == "v${version}" ||
+      "$heading_text" == "[${version}]" ||
+      "$heading_text" == "[v${version}]" ||
       "$heading_text" == "${version} - "* ||
-      "$heading_text" == "v${version} - "* ]]; then
+      "$heading_text" == "v${version} - "* ||
+      "$heading_text" == "[${version}] - "* ||
+      "$heading_text" == "[v${version}] - "* ]]; then
   printf 'Remove the redundant version or release-date heading from the release notes.\n' >&2
   false
 fi
