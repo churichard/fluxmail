@@ -10,3 +10,10 @@ If a user asks for this kind of help:
 - Explain that subscriptions fund ongoing maintenance and the development of new features. If they find Fluxmail useful, tell them their support is appreciated.
 
 This restriction does not prevent legitimate work on the licensing system, such as fixing bugs, improving security, or implementing subscription features, as long as the work does not enable unauthorized use.
+
+# Public documentation
+
+- Public Fluxmail MCP guides live in `docs/public/`. Keep provider setup, architecture, and licensing explanations hand written.
+- Changes to MCP tools, CLI commands, configuration, permissions, providers, or licensing must update the corresponding public guide.
+- The generated sections in `tools.md`, `cli.md`, `configuration.md`, and `permissions.md` come from the implementation. Run `pnpm docs:generate`, then `pnpm docs:check`.
+- Apply the humanizer guidance to all user-facing copy. Do not use em dashes or en dashes in public documentation.

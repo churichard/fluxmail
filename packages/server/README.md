@@ -1,6 +1,6 @@
 # Fluxmail
 
-[Fluxmail](https://github.com/churichard/fluxmail-mcp) is a self-hosted MCP server that connects AI agents to Gmail and IMAP/SMTP mailboxes. It gives MCP clients a consistent set of tools to read, search, draft, send, and organize email.
+Fluxmail is a self-hosted MCP server for Gmail and IMAP/SMTP mailboxes. It gives MCP clients one API for reading, searching, drafting, sending, and organizing email.
 
 ## Install
 
@@ -10,63 +10,19 @@ Fluxmail requires Node.js 20.20.x, or Node.js 22.22 or later.
 npm install -g fluxmail
 ```
 
-To run Fluxmail without installing it globally:
+Then follow the [quickstart](../../docs/public/pages/quickstart.md) to connect a mailbox and MCP client. The published guide is available at [fluxmail.ai/docs/quickstart](https://fluxmail.ai/docs/quickstart).
 
-```bash
-npx fluxmail
-```
+## Documentation
 
-## Connect Gmail
+- [Tools](../../docs/public/pages/tools.md)
+- [Permissions](../../docs/public/pages/permissions.md)
+- [Configuration](../../docs/public/pages/configuration.md)
+- [CLI reference](../../docs/public/pages/cli.md)
+- [Gmail setup](../../docs/public/pages/connect-gmail-to-mcp.md)
+- [IMAP setup](../../docs/public/pages/connect-an-imap-mailbox.md)
 
-Create a Google Cloud OAuth client with the Gmail API enabled, then save its credentials:
-
-```bash
-fluxmail config set GOOGLE_CLIENT_ID <your-client-id>.apps.googleusercontent.com
-fluxmail config set GOOGLE_CLIENT_SECRET <your-client-secret>
-fluxmail accounts add gmail
-```
-
-For a local installation, the last command starts Google's consent flow in your browser.
-
-For Docker or a remote server, set `FLUXMAIL_PUBLIC_URL` to the server's public HTTPS address and register `<FLUXMAIL_PUBLIC_URL>/auth/google/callback` as an authorized redirect URI in Google Cloud. Run the command on the server, then open the printed URL in your local browser:
-
-```bash
-docker compose exec fluxmail fluxmail accounts add gmail
-```
-
-Open the printed link, then select Continue with Google. The link expires after 10 minutes and works once. Fluxmail selects the flow from `FLUXMAIL_PUBLIC_URL`; `--local` and `--hosted` override that selection when needed.
-
-## Connect IMAP
-
-```bash
-fluxmail accounts add imap \
-  --email you@example.com \
-  --imap-host imap.example.com \
-  --smtp-host smtp.example.com
-```
-
-Fluxmail prompts for the password and stores it encrypted. Use `--imap-password-env <name>` for Docker or scripted setup.
-
-## Connect an MCP client
-
-For example, with Claude Code:
-
-```bash
-claude mcp add fluxmail -- fluxmail stdio
-```
-
-Or with Codex CLI:
-
-```bash
-codex mcp add fluxmail -- fluxmail stdio
-```
-
-To have your MCP client run Fluxmail without a global installation, replace `fluxmail stdio` with `npx -y fluxmail@latest stdio`. Replace `@latest` with an exact version to keep the client on that version.
-
-Fluxmail also supports Streamable HTTP for Docker and remote deployments.
-
-See the [setup guide](https://fluxmail.ai/docs/quickstart) for Google OAuth configuration, Docker deployment, supported MCP clients, environment variables, and the complete tool list.
+Fluxmail supports stdio for local clients and Streamable HTTP for Docker and remote deployments. Use an exact package version instead of `@latest` when you need a reproducible installation.
 
 ## License
 
-See the [repository](https://github.com/churichard/fluxmail-mcp) for license terms.
+Fluxmail is proprietary, source-available software. Production use is limited to your Fluxmail entitlement. See the [repository license](https://github.com/churichard/fluxmail-mcp/blob/main/LICENSE.md) for the full terms.

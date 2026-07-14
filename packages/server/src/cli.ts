@@ -1,5 +1,8 @@
 #!/usr/bin/env node
+import { realpathSync } from 'node:fs';
 import { emitKeypressEvents } from 'node:readline';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Command } from 'commander';
 import { serve } from '@hono/node-server';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -175,747 +178,777 @@ function warnLicense(db: FluxmailDb, log: (line: string) => void = console.error
   if (warning) log(`Warning: ${warning}`);
 }
 
-const program = new Command();
-program
-  .name('fluxmail')
-  .description('Fluxmail, a self-hosted MCP server for your email')
-  .version(VERSION, '-v, --version');
+/** Build the command tree without parsing arguments or running command actions. */
+export function createCliProgram(): Command {
+  const program = new Command();
+  program
+    .name('fluxmail')
+    .description('Fluxmail, a self-hosted MCP server for your email')
+    .version(VERSION, '-v, --version');
 
-function commandPath(command: Command): string {
-  const names: string[] = [];
-  for (let current: Command | null = command; current?.parent; current = current.parent) names.unshift(current.name());
-  return names.join(' ');
-}
+  function commandPath(command: Command): string {
+    const names: string[] = [];
+    for (let current: Command | null = command; current?.parent; current = current.parent)
+      names.unshift(current.name());
+    return names.join(' ');
+  }
 
-let telemetrySignalHandlersInstalled = false;
-const TELEMETRY_SIGNAL_SHUTDOWN_TIMEOUT_MS = 1_000;
+  let telemetrySignalHandlersInstalled = false;
+  const TELEMETRY_SIGNAL_SHUTDOWN_TIMEOUT_MS = 1_000;
 
-/** Flush queued telemetry before restoring Node's default signal behavior. */
-function installTelemetrySignalHandlers(): void {
-  if (telemetrySignalHandlersInstalled) return;
-  telemetrySignalHandlersInstalled = true;
+  /** Flush queued telemetry before restoring Node's default signal behavior. */
+  function installTelemetrySignalHandlers(): void {
+    if (telemetrySignalHandlersInstalled) return;
+    telemetrySignalHandlersInstalled = true;
 
-  const shutdownAndResignal = (signal: NodeJS.Signals): void => {
-    process.off('SIGINT', onSigint);
-    process.off('SIGTERM', onSigterm);
-    process.off('SIGHUP', onSighup);
-    let resignaled = false;
-    const resignal = (): void => {
-      if (resignaled) return;
-      resignaled = true;
-      process.kill(process.pid, signal);
+    const shutdownAndResignal = (signal: NodeJS.Signals): void => {
+      process.off('SIGINT', onSigint);
+      process.off('SIGTERM', onSigterm);
+      process.off('SIGHUP', onSighup);
+      let resignaled = false;
+      const resignal = (): void => {
+        if (resignaled) return;
+        resignaled = true;
+        process.kill(process.pid, signal);
+      };
+      const timeout = setTimeout(resignal, TELEMETRY_SIGNAL_SHUTDOWN_TIMEOUT_MS);
+      void shutdownTelemetry().finally(() => {
+        clearTimeout(timeout);
+        resignal();
+      });
     };
-    const timeout = setTimeout(resignal, TELEMETRY_SIGNAL_SHUTDOWN_TIMEOUT_MS);
-    void shutdownTelemetry().finally(() => {
-      clearTimeout(timeout);
-      resignal();
+    const onSigint = (): void => shutdownAndResignal('SIGINT');
+    const onSigterm = (): void => shutdownAndResignal('SIGTERM');
+    const onSighup = (): void => shutdownAndResignal('SIGHUP');
+
+    process.once('SIGINT', onSigint);
+    process.once('SIGTERM', onSigterm);
+    process.once('SIGHUP', onSighup);
+  }
+
+  program.hook('preAction', (_command, actionCommand) => {
+    const command = commandPath(actionCommand);
+    // Respect the opt-out before creating a telemetry client or recording this command.
+    if (command === 'telemetry disable') return;
+    const dataDir = resolveDataDir();
+    getTelemetry(dataDir).capture('cli command used', {
+      product_surface: 'cli',
+      command,
     });
-  };
-  const onSigint = (): void => shutdownAndResignal('SIGINT');
-  const onSigterm = (): void => shutdownAndResignal('SIGTERM');
-  const onSighup = (): void => shutdownAndResignal('SIGHUP');
-
-  process.once('SIGINT', onSigint);
-  process.once('SIGTERM', onSigterm);
-  process.once('SIGHUP', onSighup);
-}
-
-program.hook('preAction', (_command, actionCommand) => {
-  const command = commandPath(actionCommand);
-  // Respect the opt-out before creating a telemetry client or recording this command.
-  if (command === 'telemetry disable') return;
-  const dataDir = resolveDataDir();
-  getTelemetry(dataDir).capture('cli command used', {
-    product_surface: 'cli',
-    command,
   });
-});
 
-program.hook('postAction', async (_command, actionCommand) => {
-  if (actionCommand.name() !== 'serve' && actionCommand.name() !== 'stdio') await shutdownTelemetry();
-});
+  program.hook('postAction', async (_command, actionCommand) => {
+    if (actionCommand.name() !== 'serve' && actionCommand.name() !== 'stdio') await shutdownTelemetry();
+  });
 
-program
-  .command('serve')
-  .description('Run the HTTP server (Streamable HTTP MCP at /mcp)')
-  .action(() => {
-    installTelemetrySignalHandlers();
-    const ctx = createContext();
-    const app = createApp(ctx);
-    ctx.scheduler.start();
-    serve({ fetch: app.fetch, port: ctx.config.port }, () => {
-      ctx.telemetry.capture('mcp server started', { product_surface: 'mcp', transport: 'http' });
-      console.log(`Fluxmail listening on ${ctx.config.publicUrl}`);
-      console.log(`  MCP endpoint:   ${ctx.config.publicUrl}/mcp`);
-      console.log(`  Auth mode:      ${ctx.config.authMode}`);
-      if (ctx.config.authMode === 'apikey' && listApiKeys(ctx.db).length === 0) {
-        console.log('  Note: no API keys exist yet. Run "fluxmail apikey create --name <name>" to create one.');
-      }
-      const accounts = ctx.registry.listAccounts();
-      console.log(
-        accounts.length
-          ? `  Accounts:       ${accounts.map((a) => `${a.email} (${a.status})`).join(', ')}`
-          : '  Accounts:       none (run "fluxmail accounts add gmail" or "fluxmail accounts add imap")',
-      );
-      console.log(`  Plan:           ${planLine(getEntitlements(ctx.db))}`);
-      warnLicense(ctx.db, console.log);
+  program
+    .command('serve')
+    .description('Run the HTTP server (Streamable HTTP MCP at /mcp)')
+    .action(() => {
+      installTelemetrySignalHandlers();
+      const ctx = createContext();
+      const app = createApp(ctx);
+      ctx.scheduler.start();
+      serve({ fetch: app.fetch, port: ctx.config.port }, () => {
+        ctx.telemetry.capture('mcp server started', { product_surface: 'mcp', transport: 'http' });
+        console.log(`Fluxmail listening on ${ctx.config.publicUrl}`);
+        console.log(`  MCP endpoint:   ${ctx.config.publicUrl}/mcp`);
+        console.log(`  Auth mode:      ${ctx.config.authMode}`);
+        if (ctx.config.authMode === 'apikey' && listApiKeys(ctx.db).length === 0) {
+          console.log('  Note: no API keys exist yet. Run "fluxmail apikey create --name <name>" to create one.');
+        }
+        const accounts = ctx.registry.listAccounts();
+        console.log(
+          accounts.length
+            ? `  Accounts:       ${accounts.map((a) => `${a.email} (${a.status})`).join(', ')}`
+            : '  Accounts:       none (run "fluxmail accounts add gmail" or "fluxmail accounts add imap")',
+        );
+        console.log(`  Plan:           ${planLine(getEntitlements(ctx.db))}`);
+        warnLicense(ctx.db, console.log);
+        startLicenseRefresher({
+          db: ctx.db,
+          config: ctx.config,
+          log: console.log,
+          onRefreshed: () => ctx.scheduler.wake(),
+        });
+      });
+    });
+
+  program
+    .command('stdio')
+    .description('Run as a stdio MCP server (for Claude Desktop / Claude Code local config)')
+    .option('--profile <profile>', `Tool profile: ${NAMED_PERMISSION_PROFILES.join(', ')}`)
+    .option('--allow <capability>', 'Allow one MCP capability; repeat as needed', collectOption, [])
+    .action(async (opts: PermissionOptions) => {
+      installTelemetrySignalHandlers();
+      installTelemetryStreamEndHandler(process.stdin);
+      const ctx = createContext();
+      const permissions = permissionPolicyFromOptions(opts);
+      const server = buildMcpServer(ctx.service, {
+        permissions,
+        maxAttachmentBytes: ctx.config.maxAttachmentBytes,
+        telemetry: ctx.telemetry,
+        transport: 'stdio',
+      });
+      ctx.scheduler.start();
+      await server.connect(new StdioServerTransport());
+      ctx.telemetry.capture('mcp server started', { product_surface: 'mcp', transport: 'stdio' });
+      // stdout belongs to the MCP protocol; log to stderr only.
       startLicenseRefresher({
         db: ctx.db,
         config: ctx.config,
-        log: console.log,
+        log: console.error,
         onRefreshed: () => ctx.scheduler.wake(),
       });
+      console.error('Fluxmail MCP server running on stdio');
+      warnLicense(ctx.db);
+      const { pending } = countPending(ctx.db);
+      if (pending > 0) console.error(`Scheduled sends pending: ${pending}`);
     });
-  });
 
-program
-  .command('stdio')
-  .description('Run as a stdio MCP server (for Claude Desktop / Claude Code local config)')
-  .option('--profile <profile>', `Tool profile: ${NAMED_PERMISSION_PROFILES.join(', ')}`)
-  .option('--allow <capability>', 'Allow one MCP capability; repeat as needed', collectOption, [])
-  .action(async (opts: PermissionOptions) => {
-    installTelemetrySignalHandlers();
-    installTelemetryStreamEndHandler(process.stdin);
-    const ctx = createContext();
-    const permissions = permissionPolicyFromOptions(opts);
-    const server = buildMcpServer(ctx.service, {
-      permissions,
-      maxAttachmentBytes: ctx.config.maxAttachmentBytes,
-      telemetry: ctx.telemetry,
-      transport: 'stdio',
-    });
-    ctx.scheduler.start();
-    await server.connect(new StdioServerTransport());
-    ctx.telemetry.capture('mcp server started', { product_surface: 'mcp', transport: 'stdio' });
-    // stdout belongs to the MCP protocol; log to stderr only.
-    startLicenseRefresher({
-      db: ctx.db,
-      config: ctx.config,
-      log: console.error,
-      onRefreshed: () => ctx.scheduler.wake(),
-    });
-    console.error('Fluxmail MCP server running on stdio');
-    warnLicense(ctx.db);
-    const { pending } = countPending(ctx.db);
-    if (pending > 0) console.error(`Scheduled sends pending: ${pending}`);
-  });
+  const accounts = program.command('accounts').description('Manage connected email accounts');
 
-const accounts = program.command('accounts').description('Manage connected email accounts');
-
-accounts
-  .command('add')
-  .argument('<provider>', 'Email provider: gmail or imap')
-  .option('--reauthorize <account-id>', 'Reconnect an existing account')
-  .option('--member <member>', 'Member (id or email) who owns the new mailbox; omit for a shared mailbox')
-  .option('--local', 'Use the local browser callback for Gmail')
-  .option('--hosted', 'Use FLUXMAIL_PUBLIC_URL for the Gmail callback')
-  .option('--email <address>', 'Mailbox address (required for IMAP)')
-  .option('--display-name <name>', 'Sender name for IMAP messages')
-  .option('--imap-host <host>', 'IMAP server hostname')
-  .option('--imap-port <port>', 'IMAP server port', '993')
-  .option('--imap-security <mode>', 'IMAP security: tls or starttls', 'tls')
-  .option('--imap-user <user>', 'IMAP username; defaults to the mailbox address')
-  .option('--imap-password-env <name>', 'Read the IMAP password from this environment variable')
-  .option('--smtp-host <host>', 'SMTP server hostname')
-  .option('--smtp-port <port>', 'SMTP server port', '587')
-  .option('--smtp-security <mode>', 'SMTP security: tls or starttls', 'starttls')
-  .option('--smtp-user <user>', 'SMTP username; defaults to the IMAP username')
-  .option('--smtp-password-env <name>', 'Read a separate SMTP password from this environment variable')
-  .option('--sent-folder <path>', 'Sent mailbox path')
-  .option('--drafts-folder <path>', 'Drafts mailbox path')
-  .option('--trash-folder <path>', 'Trash mailbox path')
-  .option('--archive-folder <path>', 'Archive mailbox path')
-  .option('--spam-folder <path>', 'Spam mailbox path')
-  .option('--no-save-sent', 'Do not append SMTP submissions to the Sent folder')
-  .description('Connect a Gmail or IMAP account')
-  .action(async (provider: string, opts: AddAccountOptions, command: Command) => {
-    if (provider !== 'gmail' && provider !== 'imap') {
-      console.error(`Provider "${provider}" is not supported. Available: gmail, imap`);
-      process.exitCode = 1;
-      return;
-    }
-    const ctx = createContext();
-    warnLicense(ctx.db);
-    try {
-      validateAccountConnectionFlags(provider, opts);
-      if (opts.reauthorize && opts.member) {
-        throw new EmailError(
-          'invalid_request',
-          '--member cannot be combined with --reauthorize; use "fluxmail accounts assign" to change ownership.',
-        );
-      }
-      // Resolve before the OAuth flow so a typo fails fast.
-      const member = opts.member ? findMember(ctx.db, opts.member) : undefined;
-      const existing = opts.reauthorize ? ctx.registry.getAccount(opts.reauthorize) : undefined;
-      if (existing && existing.provider !== provider) {
-        throw new EmailError('invalid_request', `Account ${existing.id} uses ${existing.provider}, not ${provider}.`);
-      }
-      if (!existing) ctx.registry.assertCanAddAccount();
-
-      if (provider === 'imap') {
-        const previousCredentials = existing ? ctx.registry.loadImapCredentials(existing.id) : undefined;
-        const email = opts.email?.trim();
-        if (!email || !email.includes('@'))
-          throw new EmailError('invalid_request', '--email must be a mailbox address.');
-        if (!opts.imapHost) throw new EmailError('invalid_request', '--imap-host is required for IMAP accounts.');
-        if (!opts.smtpHost) throw new EmailError('invalid_request', '--smtp-host is required for IMAP accounts.');
-        if (existing && existing.email !== email) {
-          throw new EmailError('invalid_request', `Account ${existing.id} belongs to ${existing.email}, not ${email}.`);
-        }
-        const imapPassword = await accountSecret(opts.imapPasswordEnv, 'IMAP password');
-        const smtpPassword = opts.smtpPasswordEnv
-          ? await accountSecret(opts.smtpPasswordEnv, 'SMTP password')
-          : imapPassword;
-        const imapUser = opts.imapUser ?? email;
-        const credentials: ImapCredentials = {
-          imap: {
-            host: opts.imapHost,
-            port: connectionPort(opts.imapPort, '--imap-port'),
-            security: connectionSecurity(opts.imapSecurity, '--imap-security'),
-            user: imapUser,
-            password: imapPassword,
-          },
-          smtp: {
-            host: opts.smtpHost,
-            port: connectionPort(opts.smtpPort, '--smtp-port'),
-            security: connectionSecurity(opts.smtpSecurity, '--smtp-security'),
-            user: opts.smtpUser ?? imapUser,
-            password: smtpPassword,
-          },
-          saveSent:
-            previousCredentials && command.getOptionValueSource('saveSent') === 'default'
-              ? previousCredentials.saveSent
-              : opts.saveSent,
-          folderOverrides: {
-            ...previousCredentials?.folderOverrides,
-            ...(opts.sentFolder ? { sent: opts.sentFolder } : {}),
-            ...(opts.draftsFolder ? { drafts: opts.draftsFolder } : {}),
-            ...(opts.trashFolder ? { trash: opts.trashFolder } : {}),
-            ...(opts.archiveFolder ? { archive: opts.archiveFolder } : {}),
-            ...(opts.spamFolder ? { spam: opts.spamFolder } : {}),
-          },
-        };
-        console.log('Checking IMAP and SMTP settings...');
-        const warnings = await ctx.registry.testImapCredentials(email, credentials, opts.displayName);
-        const account = ctx.registry.addImapAccount(email, credentials, opts.displayName, member?.id, opts.reauthorize);
-        console.log(`Connected ${account.email} (account id: ${account.id})`);
-        for (const warning of warnings) console.log(`Warning: ${warning.message}.`);
+  accounts
+    .command('add')
+    .argument('<provider>', 'Email provider: gmail or imap')
+    .option('--reauthorize <account-id>', 'Reconnect an existing account')
+    .option('--member <member>', 'Member (id or email) who owns the new mailbox; omit for a shared mailbox')
+    .option('--local', 'Use the local browser callback for Gmail')
+    .option('--hosted', 'Use FLUXMAIL_PUBLIC_URL for the Gmail callback')
+    .option('--email <address>', 'Mailbox address (required for IMAP)')
+    .option('--display-name <name>', 'Sender name for IMAP messages')
+    .option('--imap-host <host>', 'IMAP server hostname')
+    .option('--imap-port <port>', 'IMAP server port', '993')
+    .option('--imap-security <mode>', 'IMAP security: tls or starttls', 'tls')
+    .option('--imap-user <user>', 'IMAP username; defaults to the mailbox address')
+    .option('--imap-password-env <name>', 'Read the IMAP password from this environment variable')
+    .option('--smtp-host <host>', 'SMTP server hostname')
+    .option('--smtp-port <port>', 'SMTP server port', '587')
+    .option('--smtp-security <mode>', 'SMTP security: tls or starttls', 'starttls')
+    .option('--smtp-user <user>', 'SMTP username; defaults to the IMAP username')
+    .option('--smtp-password-env <name>', 'Read a separate SMTP password from this environment variable')
+    .option('--sent-folder <path>', 'Sent mailbox path')
+    .option('--drafts-folder <path>', 'Drafts mailbox path')
+    .option('--trash-folder <path>', 'Trash mailbox path')
+    .option('--archive-folder <path>', 'Archive mailbox path')
+    .option('--spam-folder <path>', 'Spam mailbox path')
+    .option('--no-save-sent', 'Do not append SMTP submissions to the Sent folder')
+    .description('Connect a Gmail or IMAP account')
+    .action(async (provider: string, opts: AddAccountOptions, command: Command) => {
+      if (provider !== 'gmail' && provider !== 'imap') {
+        console.error(`Provider "${provider}" is not supported. Available: gmail, imap`);
+        process.exitCode = 1;
         return;
       }
-
-      const gmailConnectionMode = selectGmailConnectionMode(ctx.config, opts);
-      if (gmailConnectionMode === 'hosted') {
-        const { connectionUrl } = prepareHostedGmailConnection(ctx.db, ctx.config, {
-          ...(member ? { memberId: member.id } : {}),
-          ...(existing ? { reauthorizeAccountId: existing.id } : {}),
-        });
-        console.log('\nOpen this URL in your browser to connect Gmail:\n');
-        console.log(`  ${connectionUrl}\n`);
-        console.log('This link expires in 10 minutes and can only be used once.');
-        return;
-      }
-
-      const account = await runLoopbackFlow(
-        ctx.config,
-        (url) => {
-          console.log('\nOpen this URL in your browser to authorize Gmail access:\n');
-          console.log(`  ${url}\n`);
-          console.log('Waiting for Google to redirect back…');
-        },
-        (result) => {
-          if (existing && result.email !== existing.email) {
-            throw new EmailError(
-              'invalid_request',
-              `Google authorized ${result.email}, but account ${existing.id} belongs to ${existing.email}. ` +
-                'Try again and choose the matching Google account.',
-            );
-          }
-          return ctx.registry.addGmailAccount(result.email, result.tokens, result.displayName, member?.id);
-        },
-      );
-      console.log(
-        `\nConnected ${account.email} (account id: ${account.id})` +
-          (member && account.memberId === member.id ? ` for member ${member.name}` : ''),
-      );
-      if (member && account.memberId !== member.id) {
-        // The mailbox was already connected; re-auth keeps its existing owner.
-        console.log(
-          `${account.email} was already connected, so its ownership is unchanged. ` +
-            `To assign it to ${member.name}, run "fluxmail accounts assign ${account.id} --member ${member.id}".`,
-        );
-      }
-    } catch (err) {
-      console.error(`\nError: ${err instanceof Error ? err.message : String(err)}`);
-      process.exitCode = 1;
-    }
-  });
-
-accounts
-  .command('configure')
-  .argument('<accountId>')
-  .option('--sent-folder <path>', 'Sent path, or auto to clear the override')
-  .option('--drafts-folder <path>', 'Drafts path, or auto to clear the override')
-  .option('--trash-folder <path>', 'Trash path, or auto to clear the override')
-  .option('--archive-folder <path>', 'Archive path, or auto to clear the override')
-  .option('--spam-folder <path>', 'Spam path, or auto to clear the override')
-  .description('Set special folder paths for an IMAP account')
-  .action(
-    async (
-      accountId: string,
-      opts: {
-        sentFolder?: string;
-        draftsFolder?: string;
-        trashFolder?: string;
-        archiveFolder?: string;
-        spamFolder?: string;
-      },
-    ) => {
       const ctx = createContext();
       warnLicense(ctx.db);
       try {
-        const changes = [
-          ['sent', opts.sentFolder],
-          ['drafts', opts.draftsFolder],
-          ['trash', opts.trashFolder],
-          ['archive', opts.archiveFolder],
-          ['spam', opts.spamFolder],
-        ] as const;
-        if (!changes.some(([, value]) => value !== undefined)) {
-          throw new EmailError('invalid_request', 'Pass at least one folder option.');
+        validateAccountConnectionFlags(provider, opts);
+        if (opts.reauthorize && opts.member) {
+          throw new EmailError(
+            'invalid_request',
+            '--member cannot be combined with --reauthorize; use "fluxmail accounts assign" to change ownership.',
+          );
         }
-        const credentials = ctx.registry.loadImapCredentials(accountId);
-        const provider = ctx.registry.getProvider(accountId) as ReturnType<typeof ctx.registry.getProvider> & {
-          close?: () => Promise<void>;
-        };
-        try {
-          const existingPaths = new Set((await provider.listFolders()).map((folder) => folder.id));
-          const overrides = { ...credentials.folderOverrides };
-          for (const [role, value] of changes) {
-            if (value === undefined) continue;
-            if (value === 'auto') delete overrides[role];
-            else {
-              if (!existingPaths.has(value)) {
-                throw new EmailError('not_found', `No selectable mailbox named "${value}".`);
-              }
-              overrides[role] = value;
-            }
+        // Resolve before the OAuth flow so a typo fails fast.
+        const member = opts.member ? findMember(ctx.db, opts.member) : undefined;
+        const existing = opts.reauthorize ? ctx.registry.getAccount(opts.reauthorize) : undefined;
+        if (existing && existing.provider !== provider) {
+          throw new EmailError('invalid_request', `Account ${existing.id} uses ${existing.provider}, not ${provider}.`);
+        }
+        if (!existing) ctx.registry.assertCanAddAccount();
+
+        if (provider === 'imap') {
+          const previousCredentials = existing ? ctx.registry.loadImapCredentials(existing.id) : undefined;
+          const email = opts.email?.trim();
+          if (!email || !email.includes('@'))
+            throw new EmailError('invalid_request', '--email must be a mailbox address.');
+          if (!opts.imapHost) throw new EmailError('invalid_request', '--imap-host is required for IMAP accounts.');
+          if (!opts.smtpHost) throw new EmailError('invalid_request', '--smtp-host is required for IMAP accounts.');
+          if (existing && existing.email !== email) {
+            throw new EmailError(
+              'invalid_request',
+              `Account ${existing.id} belongs to ${existing.email}, not ${email}.`,
+            );
           }
-          credentials.folderOverrides = overrides;
-          ctx.registry.saveImapCredentials(accountId, credentials);
-          const checked = ctx.registry.getProvider(accountId) as typeof provider & {
-            getFolderWarnings?: () => Promise<Array<{ message: string }>>;
+          const imapPassword = await accountSecret(opts.imapPasswordEnv, 'IMAP password');
+          const smtpPassword = opts.smtpPasswordEnv
+            ? await accountSecret(opts.smtpPasswordEnv, 'SMTP password')
+            : imapPassword;
+          const imapUser = opts.imapUser ?? email;
+          const credentials: ImapCredentials = {
+            imap: {
+              host: opts.imapHost,
+              port: connectionPort(opts.imapPort, '--imap-port'),
+              security: connectionSecurity(opts.imapSecurity, '--imap-security'),
+              user: imapUser,
+              password: imapPassword,
+            },
+            smtp: {
+              host: opts.smtpHost,
+              port: connectionPort(opts.smtpPort, '--smtp-port'),
+              security: connectionSecurity(opts.smtpSecurity, '--smtp-security'),
+              user: opts.smtpUser ?? imapUser,
+              password: smtpPassword,
+            },
+            saveSent:
+              previousCredentials && command.getOptionValueSource('saveSent') === 'default'
+                ? previousCredentials.saveSent
+                : opts.saveSent,
+            folderOverrides: {
+              ...previousCredentials?.folderOverrides,
+              ...(opts.sentFolder ? { sent: opts.sentFolder } : {}),
+              ...(opts.draftsFolder ? { drafts: opts.draftsFolder } : {}),
+              ...(opts.trashFolder ? { trash: opts.trashFolder } : {}),
+              ...(opts.archiveFolder ? { archive: opts.archiveFolder } : {}),
+              ...(opts.spamFolder ? { spam: opts.spamFolder } : {}),
+            },
+          };
+          console.log('Checking IMAP and SMTP settings...');
+          const warnings = await ctx.registry.testImapCredentials(email, credentials, opts.displayName);
+          const account = ctx.registry.addImapAccount(
+            email,
+            credentials,
+            opts.displayName,
+            member?.id,
+            opts.reauthorize,
+          );
+          console.log(`Connected ${account.email} (account id: ${account.id})`);
+          for (const warning of warnings) console.log(`Warning: ${warning.message}.`);
+          return;
+        }
+
+        const gmailConnectionMode = selectGmailConnectionMode(ctx.config, opts);
+        if (gmailConnectionMode === 'hosted') {
+          const { connectionUrl } = prepareHostedGmailConnection(ctx.db, ctx.config, {
+            ...(member ? { memberId: member.id } : {}),
+            ...(existing ? { reauthorizeAccountId: existing.id } : {}),
+          });
+          console.log('\nOpen this URL in your browser to connect Gmail:\n');
+          console.log(`  ${connectionUrl}\n`);
+          console.log('This link expires in 10 minutes and can only be used once.');
+          return;
+        }
+
+        const account = await runLoopbackFlow(
+          ctx.config,
+          (url) => {
+            console.log('\nOpen this URL in your browser to authorize Gmail access:\n');
+            console.log(`  ${url}\n`);
+            console.log('Waiting for Google to redirect back…');
+          },
+          (result) => {
+            if (existing && result.email !== existing.email) {
+              throw new EmailError(
+                'invalid_request',
+                `Google authorized ${result.email}, but account ${existing.id} belongs to ${existing.email}. ` +
+                  'Try again and choose the matching Google account.',
+              );
+            }
+            return ctx.registry.addGmailAccount(result.email, result.tokens, result.displayName, member?.id);
+          },
+        );
+        console.log(
+          `\nConnected ${account.email} (account id: ${account.id})` +
+            (member && account.memberId === member.id ? ` for member ${member.name}` : ''),
+        );
+        if (member && account.memberId !== member.id) {
+          // The mailbox was already connected; re-auth keeps its existing owner.
+          console.log(
+            `${account.email} was already connected, so its ownership is unchanged. ` +
+              `To assign it to ${member.name}, run "fluxmail accounts assign ${account.id} --member ${member.id}".`,
+          );
+        }
+      } catch (err) {
+        console.error(`\nError: ${err instanceof Error ? err.message : String(err)}`);
+        process.exitCode = 1;
+      }
+    });
+
+  accounts
+    .command('configure')
+    .argument('<accountId>')
+    .option('--sent-folder <path>', 'Sent path, or auto to clear the override')
+    .option('--drafts-folder <path>', 'Drafts path, or auto to clear the override')
+    .option('--trash-folder <path>', 'Trash path, or auto to clear the override')
+    .option('--archive-folder <path>', 'Archive path, or auto to clear the override')
+    .option('--spam-folder <path>', 'Spam path, or auto to clear the override')
+    .description('Set special folder paths for an IMAP account')
+    .action(
+      async (
+        accountId: string,
+        opts: {
+          sentFolder?: string;
+          draftsFolder?: string;
+          trashFolder?: string;
+          archiveFolder?: string;
+          spamFolder?: string;
+        },
+      ) => {
+        const ctx = createContext();
+        warnLicense(ctx.db);
+        try {
+          const changes = [
+            ['sent', opts.sentFolder],
+            ['drafts', opts.draftsFolder],
+            ['trash', opts.trashFolder],
+            ['archive', opts.archiveFolder],
+            ['spam', opts.spamFolder],
+          ] as const;
+          if (!changes.some(([, value]) => value !== undefined)) {
+            throw new EmailError('invalid_request', 'Pass at least one folder option.');
+          }
+          const credentials = ctx.registry.loadImapCredentials(accountId);
+          const provider = ctx.registry.getProvider(accountId) as ReturnType<typeof ctx.registry.getProvider> & {
+            close?: () => Promise<void>;
           };
           try {
-            console.log(`Updated folder settings for ${accountId}.`);
-            for (const warning of (await checked.getFolderWarnings?.()) ?? []) {
-              console.log(`Warning: ${warning.message}.`);
+            const existingPaths = new Set((await provider.listFolders()).map((folder) => folder.id));
+            const overrides = { ...credentials.folderOverrides };
+            for (const [role, value] of changes) {
+              if (value === undefined) continue;
+              if (value === 'auto') delete overrides[role];
+              else {
+                if (!existingPaths.has(value)) {
+                  throw new EmailError('not_found', `No selectable mailbox named "${value}".`);
+                }
+                overrides[role] = value;
+              }
+            }
+            credentials.folderOverrides = overrides;
+            ctx.registry.saveImapCredentials(accountId, credentials);
+            const checked = ctx.registry.getProvider(accountId) as typeof provider & {
+              getFolderWarnings?: () => Promise<Array<{ message: string }>>;
+            };
+            try {
+              console.log(`Updated folder settings for ${accountId}.`);
+              for (const warning of (await checked.getFolderWarnings?.()) ?? []) {
+                console.log(`Warning: ${warning.message}.`);
+              }
+            } finally {
+              await checked.close?.();
             }
           } finally {
-            await checked.close?.();
+            await provider.close?.();
           }
-        } finally {
-          await provider.close?.();
+        } catch (err) {
+          console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+          process.exitCode = 1;
         }
+      },
+    );
+
+  accounts
+    .command('list')
+    .description('List connected accounts')
+    .action(() => {
+      const ctx = createContext();
+      warnLicense(ctx.db);
+      const all = ctx.registry.listAccounts();
+      if (!all.length) {
+        console.log('No accounts connected. Run "fluxmail accounts add gmail" or "fluxmail accounts add imap".');
+        return;
+      }
+      const memberNames = new Map(listMembers(ctx.db).map((m) => [m.id, m.name]));
+      for (const a of all) {
+        const owner = a.memberId ? (memberNames.get(a.memberId) ?? a.memberId) : 'shared';
+        console.log(`${a.id}  ${a.provider}  ${a.email}  [${a.status}]  owner=${owner}`);
+      }
+    });
+
+  accounts
+    .command('remove')
+    .argument('<accountId>')
+    .description('Disconnect an account and delete its stored tokens')
+    .action((accountId: string) => {
+      const ctx = createContext();
+      warnLicense(ctx.db);
+      ctx.registry.removeAccount(accountId);
+      console.log(`Removed ${accountId}`);
+    });
+
+  accounts
+    .command('assign')
+    .argument('<accountId>')
+    .option('--member <member>', 'Member (id or email) to own the mailbox')
+    .option('--shared', 'Make the mailbox shared across the instance')
+    .description('Assign a mailbox to a member, or make it shared')
+    .action((accountId: string, opts: { member?: string; shared?: boolean }) => {
+      const ctx = createContext();
+      warnLicense(ctx.db);
+      try {
+        if (!opts.member === !opts.shared) {
+          throw new EmailError('invalid_request', 'Pass exactly one of --member <member> or --shared.');
+        }
+        const member = opts.member ? findMember(ctx.db, opts.member) : undefined;
+        const account = ctx.registry.assignAccountMember(accountId, member?.id ?? null);
+        console.log(member ? `${account.email} is now owned by ${member.name}` : `${account.email} is now shared`);
       } catch (err) {
         console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
         process.exitCode = 1;
       }
-    },
-  );
+    });
 
-accounts
-  .command('list')
-  .description('List connected accounts')
-  .action(() => {
-    const ctx = createContext();
-    warnLicense(ctx.db);
-    const all = ctx.registry.listAccounts();
-    if (!all.length) {
-      console.log('No accounts connected. Run "fluxmail accounts add gmail" or "fluxmail accounts add imap".');
-      return;
-    }
-    const memberNames = new Map(listMembers(ctx.db).map((m) => [m.id, m.name]));
-    for (const a of all) {
-      const owner = a.memberId ? (memberNames.get(a.memberId) ?? a.memberId) : 'shared';
-      console.log(`${a.id}  ${a.provider}  ${a.email}  [${a.status}]  owner=${owner}`);
-    }
-  });
+  const membersCmd = program.command('members').description('Manage members (people using this instance)');
 
-accounts
-  .command('remove')
-  .argument('<accountId>')
-  .description('Disconnect an account and delete its stored tokens')
-  .action((accountId: string) => {
-    const ctx = createContext();
-    warnLicense(ctx.db);
-    ctx.registry.removeAccount(accountId);
-    console.log(`Removed ${accountId}`);
-  });
-
-accounts
-  .command('assign')
-  .argument('<accountId>')
-  .option('--member <member>', 'Member (id or email) to own the mailbox')
-  .option('--shared', 'Make the mailbox shared across the instance')
-  .description('Assign a mailbox to a member, or make it shared')
-  .action((accountId: string, opts: { member?: string; shared?: boolean }) => {
-    const ctx = createContext();
-    warnLicense(ctx.db);
-    try {
-      if (!opts.member === !opts.shared) {
-        throw new EmailError('invalid_request', 'Pass exactly one of --member <member> or --shared.');
+  membersCmd
+    .command('add')
+    .requiredOption('--name <name>', 'Member name')
+    .option('--email <email>', 'Member email, usable as a shorthand in --member flags')
+    .description('Add a member (subject to the plan seat limit)')
+    .action((opts: { name: string; email?: string }) => {
+      const ctx = createContext();
+      warnLicense(ctx.db);
+      try {
+        const member = addMember(ctx.db, { name: opts.name, ...(opts.email ? { email: opts.email } : {}) });
+        console.log(`Added member ${member.name} (id: ${member.id})`);
+      } catch (err) {
+        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exitCode = 1;
       }
-      const member = opts.member ? findMember(ctx.db, opts.member) : undefined;
-      const account = ctx.registry.assignAccountMember(accountId, member?.id ?? null);
-      console.log(member ? `${account.email} is now owned by ${member.name}` : `${account.email} is now shared`);
-    } catch (err) {
-      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-      process.exitCode = 1;
-    }
-  });
+    });
 
-const membersCmd = program.command('members').description('Manage members (people using this instance)');
+  membersCmd
+    .command('list')
+    .description('List members with their mailbox and API key counts')
+    .action(() => {
+      const ctx = createContext();
+      warnLicense(ctx.db);
+      const all = listMembers(ctx.db);
+      if (!all.length) {
+        console.log('No members. Run "fluxmail members add --name <name>".');
+        return;
+      }
+      for (const m of all) {
+        console.log(`${m.id}  ${m.name}  email=${m.email ?? '-'}  mailboxes=${m.accountCount}  keys=${m.apiKeyCount}`);
+      }
+    });
 
-membersCmd
-  .command('add')
-  .requiredOption('--name <name>', 'Member name')
-  .option('--email <email>', 'Member email, usable as a shorthand in --member flags')
-  .description('Add a member (subject to the plan seat limit)')
-  .action((opts: { name: string; email?: string }) => {
-    const ctx = createContext();
-    warnLicense(ctx.db);
-    try {
-      const member = addMember(ctx.db, { name: opts.name, ...(opts.email ? { email: opts.email } : {}) });
-      console.log(`Added member ${member.name} (id: ${member.id})`);
-    } catch (err) {
-      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-      process.exitCode = 1;
-    }
-  });
+  membersCmd
+    .command('remove')
+    .argument('<memberId>')
+    .description('Remove a member; their mailboxes become shared and their API keys are revoked')
+    .action((memberId: string) => {
+      const ctx = createContext();
+      warnLicense(ctx.db);
+      try {
+        const { name, freedAccounts, revokedApiKeys } = removeMember(ctx.db, memberId);
+        console.log(
+          `Removed ${name}. ${freedAccounts} mailbox(es) are now shared and ${revokedApiKeys} API key(s) revoked.`,
+        );
+      } catch (err) {
+        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exitCode = 1;
+      }
+    });
 
-membersCmd
-  .command('list')
-  .description('List members with their mailbox and API key counts')
-  .action(() => {
-    const ctx = createContext();
-    warnLicense(ctx.db);
-    const all = listMembers(ctx.db);
-    if (!all.length) {
-      console.log('No members. Run "fluxmail members add --name <name>".');
-      return;
-    }
-    for (const m of all) {
-      console.log(`${m.id}  ${m.name}  email=${m.email ?? '-'}  mailboxes=${m.accountCount}  keys=${m.apiKeyCount}`);
-    }
-  });
+  const apikey = program.command('apikey').description('Manage API keys for the HTTP MCP endpoint');
 
-membersCmd
-  .command('remove')
-  .argument('<memberId>')
-  .description('Remove a member; their mailboxes become shared and their API keys are revoked')
-  .action((memberId: string) => {
-    const ctx = createContext();
-    warnLicense(ctx.db);
-    try {
-      const { name, freedAccounts, revokedApiKeys } = removeMember(ctx.db, memberId);
-      console.log(
-        `Removed ${name}. ${freedAccounts} mailbox(es) are now shared and ${revokedApiKeys} API key(s) revoked.`,
-      );
-    } catch (err) {
-      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-      process.exitCode = 1;
-    }
-  });
+  apikey
+    .command('capabilities')
+    .description('List MCP capabilities for custom permission policies')
+    .action(() => {
+      for (const capability of MCP_CAPABILITIES) console.log(capability);
+    });
 
-const apikey = program.command('apikey').description('Manage API keys for the HTTP MCP endpoint');
+  apikey
+    .command('create')
+    .requiredOption('--name <name>', 'Human-readable key name')
+    .option('--member <member>', 'Member (id or email) the key is issued to')
+    .option('--profile <profile>', `Tool profile: ${NAMED_PERMISSION_PROFILES.join(', ')}`)
+    .option('--allow <capability>', 'Allow one MCP capability; repeat as needed', collectOption, [])
+    .description('Create an API key (shown once)')
+    .action((opts: { name: string; member?: string } & PermissionOptions) => {
+      const ctx = createContext();
+      warnLicense(ctx.db);
+      try {
+        const member = opts.member ? findMember(ctx.db, opts.member) : undefined;
+        const permissions = permissionPolicyFromOptions(opts);
+        const { key, info } = createApiKey(ctx.db, opts.name, member?.id, permissions);
+        console.log(
+          `Created API key "${info.name}" (id: ${info.id}, profile: ${info.permissionProfile})` +
+            (member ? ` for member ${member.name}` : '') +
+            '\n',
+        );
+        console.log(`  ${key}\n`);
+        console.log('Store it now; it cannot be shown again.');
+      } catch (err) {
+        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exitCode = 1;
+      }
+    });
 
-apikey
-  .command('capabilities')
-  .description('List MCP capabilities for custom permission policies')
-  .action(() => {
-    for (const capability of MCP_CAPABILITIES) console.log(capability);
-  });
+  apikey
+    .command('list')
+    .description('List API keys')
+    .action(() => {
+      const ctx = createContext();
+      warnLicense(ctx.db);
+      const keys = listApiKeys(ctx.db);
+      if (!keys.length) {
+        console.log('No API keys. Run "fluxmail apikey create --name <name>".');
+        return;
+      }
+      const memberNames = new Map(listMembers(ctx.db).map((m) => [m.id, m.name]));
+      for (const k of keys) {
+        const lastUsed = k.lastUsedAt ? new Date(k.lastUsedAt).toISOString() : 'never';
+        const member = k.memberId ? (memberNames.get(k.memberId) ?? k.memberId) : '-';
+        console.log(
+          `${k.id}  ${k.name}  member=${member}  profile=${k.permissionProfile}` +
+            (k.permissionProfile === 'custom' ? `  allows=${k.capabilities.join(',')}` : '') +
+            `  created=${new Date(k.createdAt).toISOString()}  lastUsed=${lastUsed}`,
+        );
+      }
+    });
 
-apikey
-  .command('create')
-  .requiredOption('--name <name>', 'Human-readable key name')
-  .option('--member <member>', 'Member (id or email) the key is issued to')
-  .option('--profile <profile>', `Tool profile: ${NAMED_PERMISSION_PROFILES.join(', ')}`)
-  .option('--allow <capability>', 'Allow one MCP capability; repeat as needed', collectOption, [])
-  .description('Create an API key (shown once)')
-  .action((opts: { name: string; member?: string } & PermissionOptions) => {
-    const ctx = createContext();
-    warnLicense(ctx.db);
-    try {
-      const member = opts.member ? findMember(ctx.db, opts.member) : undefined;
-      const permissions = permissionPolicyFromOptions(opts);
-      const { key, info } = createApiKey(ctx.db, opts.name, member?.id, permissions);
-      console.log(
-        `Created API key "${info.name}" (id: ${info.id}, profile: ${info.permissionProfile})` +
-          (member ? ` for member ${member.name}` : '') +
-          '\n',
-      );
-      console.log(`  ${key}\n`);
-      console.log('Store it now; it cannot be shown again.');
-    } catch (err) {
-      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-      process.exitCode = 1;
-    }
-  });
+  apikey
+    .command('permissions')
+    .argument('<keyId>')
+    .option('--profile <profile>', `Tool profile: ${NAMED_PERMISSION_PROFILES.join(', ')}`)
+    .option('--allow <capability>', 'Allow one MCP capability; repeat as needed', collectOption, [])
+    .description('Change the MCP permissions for an API key')
+    .action((keyId: string, opts: PermissionOptions) => {
+      const ctx = createContext();
+      warnLicense(ctx.db);
+      try {
+        const permissions = permissionPolicyFromOptions(opts, true);
+        if (!updateApiKeyPermissions(ctx.db, keyId, permissions)) {
+          console.error(`No key with id ${keyId}`);
+          process.exitCode = 1;
+          return;
+        }
+        console.log(`Updated ${keyId} to profile ${permissions.profile}`);
+      } catch (err) {
+        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exitCode = 1;
+      }
+    });
 
-apikey
-  .command('list')
-  .description('List API keys')
-  .action(() => {
-    const ctx = createContext();
-    warnLicense(ctx.db);
-    const keys = listApiKeys(ctx.db);
-    if (!keys.length) {
-      console.log('No API keys. Run "fluxmail apikey create --name <name>".');
-      return;
-    }
-    const memberNames = new Map(listMembers(ctx.db).map((m) => [m.id, m.name]));
-    for (const k of keys) {
-      const lastUsed = k.lastUsedAt ? new Date(k.lastUsedAt).toISOString() : 'never';
-      const member = k.memberId ? (memberNames.get(k.memberId) ?? k.memberId) : '-';
-      console.log(
-        `${k.id}  ${k.name}  member=${member}  profile=${k.permissionProfile}` +
-          (k.permissionProfile === 'custom' ? `  allows=${k.capabilities.join(',')}` : '') +
-          `  created=${new Date(k.createdAt).toISOString()}  lastUsed=${lastUsed}`,
-      );
-    }
-  });
+  apikey
+    .command('revoke')
+    .argument('<keyId>')
+    .description('Revoke an API key')
+    .action((keyId: string) => {
+      const ctx = createContext();
+      warnLicense(ctx.db);
+      console.log(revokeApiKey(ctx.db, keyId) ? `Revoked ${keyId}` : `No key with id ${keyId}`);
+    });
 
-apikey
-  .command('permissions')
-  .argument('<keyId>')
-  .option('--profile <profile>', `Tool profile: ${NAMED_PERMISSION_PROFILES.join(', ')}`)
-  .option('--allow <capability>', 'Allow one MCP capability; repeat as needed', collectOption, [])
-  .description('Change the MCP permissions for an API key')
-  .action((keyId: string, opts: PermissionOptions) => {
-    const ctx = createContext();
-    warnLicense(ctx.db);
-    try {
-      const permissions = permissionPolicyFromOptions(opts, true);
-      if (!updateApiKeyPermissions(ctx.db, keyId, permissions)) {
-        console.error(`No key with id ${keyId}`);
+  const license = program.command('license').description('Manage the paid-tier license');
+
+  license
+    .command('activate')
+    .argument('<key>', 'License key (fluxmail_lic_…), shown once at purchase')
+    .description('Store a license key and validate it with the license server')
+    .action(async (key: string) => {
+      if (!LICENSE_KEY_PATTERN.test(key)) {
+        console.error(
+          'That does not look like a Fluxmail license key (expected "fluxmail_lic_" followed by 40 hex characters).',
+        );
         process.exitCode = 1;
         return;
       }
-      console.log(`Updated ${keyId} to profile ${permissions.profile}`);
-    } catch (err) {
-      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-      process.exitCode = 1;
-    }
-  });
-
-apikey
-  .command('revoke')
-  .argument('<keyId>')
-  .description('Revoke an API key')
-  .action((keyId: string) => {
-    const ctx = createContext();
-    warnLicense(ctx.db);
-    console.log(revokeApiKey(ctx.db, keyId) ? `Revoked ${keyId}` : `No key with id ${keyId}`);
-  });
-
-const license = program.command('license').description('Manage the paid-tier license');
-
-license
-  .command('activate')
-  .argument('<key>', 'License key (fluxmail_lic_…), shown once at purchase')
-  .description('Store a license key and validate it with the license server')
-  .action(async (key: string) => {
-    if (!LICENSE_KEY_PATTERN.test(key)) {
-      console.error(
-        'That does not look like a Fluxmail license key (expected "fluxmail_lic_" followed by 40 hex characters).',
-      );
-      process.exitCode = 1;
-      return;
-    }
-    const dataDir = resolveDataDir();
-    const overridingKey = process.env.FLUXMAIL_LICENSE_KEY?.trim();
-    if (overridingKey && overridingKey !== key) {
-      console.error(
-        'FLUXMAIL_LICENSE_KEY is already set by the shell or a .env file, which takes precedence over stored settings. Remove it before activating a different key.',
-      );
-      process.exitCode = 1;
-      return;
-    }
-    const ctx = createContext();
-    const result = await activateLicense(ctx.db, {
-      licenseKey: key,
-      serverUrl: ctx.config.licenseServerUrl,
-      dataDir,
-    });
-    if (result.outcome === 'refreshed') {
-      const { lease } = result;
-      console.log(
-        `License activated: ${lease.plan} plan, up to ${lease.maxAccounts} mailboxes and ` +
-          `${lease.maxMembers} member${lease.maxMembers === 1 ? '' : 's'}.`,
-      );
-      console.log(`The lease is valid until ${lease.expiresAt} and renews automatically while the server runs.`);
-      return;
-    }
-    console.error(result.message);
-    if (result.outcome === 'outage') {
-      console.error('The key is saved; validation will be retried automatically once the server can reach it.');
-    } else {
-      process.exitCode = 1;
-    }
-  });
-
-license
-  .command('status')
-  .description('Show the configured license and cached lease')
-  .action(() => {
-    const ctx = createContext();
-    if (ctx.config.licenseKey) {
-      console.log(`License key: ${maskStoredConfigValue('FLUXMAIL_LICENSE_KEY', ctx.config.licenseKey)}`);
-    } else {
-      console.log('No license key configured. Run "fluxmail license activate <key>" after purchasing one.');
-    }
-    const row = readLeaseRow(ctx.db);
-    if (row) {
-      console.log(`Last validated: ${new Date(row.updatedAt).toISOString()}`);
-      try {
-        const lease = verifyLease(row.token, licensePublicKeys(), new Date(), { allowExpired: true });
-        const expired = Date.parse(lease.expiresAt) <= Date.now();
-        console.log(
-          `Lease ${expired ? 'expired' : 'valid until'} ${lease.expiresAt}: ${lease.plan} plan, ` +
-            `up to ${lease.maxAccounts} mailboxes and ${lease.maxMembers} member${lease.maxMembers === 1 ? '' : 's'}.`,
-        );
-      } catch (err) {
-        console.log(`Cached lease is not usable (${err instanceof Error ? err.message : String(err)}).`);
-      }
-    } else {
-      console.log('No cached lease.');
-    }
-    console.log(`Current plan: ${planLine(getEntitlements(ctx.db))}`);
-    warnLicense(ctx.db, console.log);
-  });
-
-license
-  .command('deactivate')
-  .description('Release the license from this instance and remove the stored key and cached lease')
-  .action(async () => {
-    const dataDir = resolveDataDir();
-    // Captured before createContext() merges the stored config into the
-    // environment: truthy only when the key comes from the shell or a .env file.
-    const envLicenseKey = process.env.FLUXMAIL_LICENSE_KEY?.trim();
-    const ctx = createContext();
-    // Best effort: free the server-side instance binding so the key can be
-    // activated elsewhere. Local deactivation proceeds either way.
-    if (ctx.config.licenseKey) {
-      const released = await releaseLicense({
-        serverUrl: ctx.config.licenseServerUrl,
-        licenseKey: ctx.config.licenseKey,
-        instanceId: loadInstanceId(dataDir),
-      });
-      console.log(
-        released
-          ? 'Released the license from this instance; it can now be activated elsewhere.'
-          : 'Could not reach the license server to release this instance; unused bindings are released automatically after a while.',
-      );
-    }
-    const removed = unsetStoredConfig(dataDir, 'FLUXMAIL_LICENSE_KEY');
-    clearLease(ctx.db);
-    console.log(
-      removed
-        ? 'License removed; this instance is back to Personal-plan limits.'
-        : 'No stored license key; cleared any cached lease.',
-    );
-    if (envLicenseKey) {
-      console.log('Note: FLUXMAIL_LICENSE_KEY is still set in the environment or a .env file.');
-    }
-  });
-
-const configCmd = program
-  .command('config')
-  .description('Persistent settings stored in the data dir, usable from any directory');
-
-configCmd
-  .command('set')
-  .argument('<key>', 'Setting name, e.g. GOOGLE_CLIENT_ID')
-  .argument('<value>')
-  .description('Store a setting (shell env vars and local .env files still take precedence)')
-  .action((key: string, value: string) => {
-    try {
       const dataDir = resolveDataDir();
-      setStoredConfig(dataDir, key, value);
-      console.log(`Set ${key} in ${configFilePath(dataDir)}`);
-    } catch (err) {
-      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-      process.exitCode = 1;
-    }
-  });
+      const overridingKey = process.env.FLUXMAIL_LICENSE_KEY?.trim();
+      if (overridingKey && overridingKey !== key) {
+        console.error(
+          'FLUXMAIL_LICENSE_KEY is already set by the shell or a .env file, which takes precedence over stored settings. Remove it before activating a different key.',
+        );
+        process.exitCode = 1;
+        return;
+      }
+      const ctx = createContext();
+      const result = await activateLicense(ctx.db, {
+        licenseKey: key,
+        serverUrl: ctx.config.licenseServerUrl,
+        dataDir,
+      });
+      if (result.outcome === 'refreshed') {
+        const { lease } = result;
+        console.log(
+          `License activated: ${lease.plan} plan, up to ${lease.maxAccounts} mailboxes and ` +
+            `${lease.maxMembers} member${lease.maxMembers === 1 ? '' : 's'}.`,
+        );
+        console.log(`The lease is valid until ${lease.expiresAt} and renews automatically while the server runs.`);
+        return;
+      }
+      console.error(result.message);
+      if (result.outcome === 'outage') {
+        console.error('The key is saved; validation will be retried automatically once the server can reach it.');
+      } else {
+        process.exitCode = 1;
+      }
+    });
 
-configCmd
-  .command('unset')
-  .argument('<key>')
-  .description('Remove a stored setting')
-  .action((key: string) => {
-    const dataDir = resolveDataDir();
-    console.log(unsetStoredConfig(dataDir, key) ? `Removed ${key}` : `${key} is not set`);
-  });
+  license
+    .command('status')
+    .description('Show the configured license and cached lease')
+    .action(() => {
+      const ctx = createContext();
+      if (ctx.config.licenseKey) {
+        console.log(`License key: ${maskStoredConfigValue('FLUXMAIL_LICENSE_KEY', ctx.config.licenseKey)}`);
+      } else {
+        console.log('No license key configured. Run "fluxmail license activate <key>" after purchasing one.');
+      }
+      const row = readLeaseRow(ctx.db);
+      if (row) {
+        console.log(`Last validated: ${new Date(row.updatedAt).toISOString()}`);
+        try {
+          const lease = verifyLease(row.token, licensePublicKeys(), new Date(), { allowExpired: true });
+          const expired = Date.parse(lease.expiresAt) <= Date.now();
+          console.log(
+            `Lease ${expired ? 'expired' : 'valid until'} ${lease.expiresAt}: ${lease.plan} plan, ` +
+              `up to ${lease.maxAccounts} mailboxes and ${lease.maxMembers} member${lease.maxMembers === 1 ? '' : 's'}.`,
+          );
+        } catch (err) {
+          console.log(`Cached lease is not usable (${err instanceof Error ? err.message : String(err)}).`);
+        }
+      } else {
+        console.log('No cached lease.');
+      }
+      console.log(`Current plan: ${planLine(getEntitlements(ctx.db))}`);
+      warnLicense(ctx.db, console.log);
+    });
 
-configCmd
-  .command('list')
-  .description('Show stored settings (secret values are masked)')
-  .action(() => {
-    const dataDir = resolveDataDir();
-    const stored = readStoredConfig(dataDir);
-    const keys = Object.keys(stored);
-    if (!keys.length) {
-      console.log(`No stored settings. Run "fluxmail config set <KEY> <value>" (file: ${configFilePath(dataDir)}).`);
-      return;
-    }
-    for (const key of keys) {
-      const value = stored[key] ?? '';
-      console.log(`${key}=${maskStoredConfigValue(key, value)}`);
-    }
-  });
+  license
+    .command('deactivate')
+    .description('Release the license from this instance and remove the stored key and cached lease')
+    .action(async () => {
+      const dataDir = resolveDataDir();
+      // Captured before createContext() merges the stored config into the
+      // environment: truthy only when the key comes from the shell or a .env file.
+      const envLicenseKey = process.env.FLUXMAIL_LICENSE_KEY?.trim();
+      const ctx = createContext();
+      // Best effort: free the server-side instance binding so the key can be
+      // activated elsewhere. Local deactivation proceeds either way.
+      if (ctx.config.licenseKey) {
+        const released = await releaseLicense({
+          serverUrl: ctx.config.licenseServerUrl,
+          licenseKey: ctx.config.licenseKey,
+          instanceId: loadInstanceId(dataDir),
+        });
+        console.log(
+          released
+            ? 'Released the license from this instance; it can now be activated elsewhere.'
+            : 'Could not reach the license server to release this instance; unused bindings are released automatically after a while.',
+        );
+      }
+      const removed = unsetStoredConfig(dataDir, 'FLUXMAIL_LICENSE_KEY');
+      clearLease(ctx.db);
+      console.log(
+        removed
+          ? 'License removed; this instance is back to Personal-plan limits.'
+          : 'No stored license key; cleared any cached lease.',
+      );
+      if (envLicenseKey) {
+        console.log('Note: FLUXMAIL_LICENSE_KEY is still set in the environment or a .env file.');
+      }
+    });
 
-const telemetryCmd = program.command('telemetry').description('Manage anonymous usage telemetry');
+  const configCmd = program
+    .command('config')
+    .description('Persistent settings stored in the data dir, usable from any directory');
 
-telemetryCmd
-  .command('disable')
-  .description('Stop sending anonymous usage telemetry')
-  .action(() => {
-    const dataDir = resolveDataDir();
-    setTelemetryEnabled(dataDir, false);
-    console.log('Telemetry disabled.');
-  });
+  configCmd
+    .command('set')
+    .argument('<key>', 'Setting name, e.g. GOOGLE_CLIENT_ID')
+    .argument('<value>')
+    .description('Store a setting (shell env vars and local .env files still take precedence)')
+    .action((key: string, value: string) => {
+      try {
+        const dataDir = resolveDataDir();
+        setStoredConfig(dataDir, key, value);
+        console.log(`Set ${key} in ${configFilePath(dataDir)}`);
+      } catch (err) {
+        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exitCode = 1;
+      }
+    });
 
-telemetryCmd
-  .command('enable')
-  .description('Allow anonymous usage telemetry')
-  .action(() => {
-    const dataDir = resolveDataDir();
-    setTelemetryEnabled(dataDir, true);
-    unsetStoredConfig(dataDir, 'FLUXMAIL_TELEMETRY');
-    console.log('Telemetry enabled. FLUXMAIL_TELEMETRY=0 or DO_NOT_TRACK=1 can still turn it off.');
-  });
+  configCmd
+    .command('unset')
+    .argument('<key>')
+    .description('Remove a stored setting')
+    .action((key: string) => {
+      const dataDir = resolveDataDir();
+      console.log(unsetStoredConfig(dataDir, key) ? `Removed ${key}` : `${key} is not set`);
+    });
 
-telemetryCmd
-  .command('status')
-  .description('Show whether anonymous usage telemetry is enabled')
-  .action(() => {
-    const dataDir = resolveDataDir();
-    console.log(`Telemetry is ${isTelemetryEnabled(dataDir) ? 'enabled' : 'disabled'}.`);
-  });
+  configCmd
+    .command('list')
+    .description('Show stored settings (secret values are masked)')
+    .action(() => {
+      const dataDir = resolveDataDir();
+      const stored = readStoredConfig(dataDir);
+      const keys = Object.keys(stored);
+      if (!keys.length) {
+        console.log(`No stored settings. Run "fluxmail config set <KEY> <value>" (file: ${configFilePath(dataDir)}).`);
+        return;
+      }
+      for (const key of keys) {
+        const value = stored[key] ?? '';
+        console.log(`${key}=${maskStoredConfigValue(key, value)}`);
+      }
+    });
 
-program
-  .command('status')
-  .description('Show accounts, members, entitlements, and provider availability')
-  .action(async () => {
-    const ctx = createContext();
-    warnLicense(ctx.db);
-    console.log(JSON.stringify(await ctx.service.status(), null, 2));
-  });
+  const telemetryCmd = program.command('telemetry').description('Manage anonymous usage telemetry');
 
-program.parseAsync(process.argv).catch(async (err: unknown) => {
-  console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-  process.exitCode = 1;
-  await shutdownTelemetry();
-});
+  telemetryCmd
+    .command('disable')
+    .description('Stop sending anonymous usage telemetry')
+    .action(() => {
+      const dataDir = resolveDataDir();
+      setTelemetryEnabled(dataDir, false);
+      console.log('Telemetry disabled.');
+    });
+
+  telemetryCmd
+    .command('enable')
+    .description('Allow anonymous usage telemetry')
+    .action(() => {
+      const dataDir = resolveDataDir();
+      setTelemetryEnabled(dataDir, true);
+      unsetStoredConfig(dataDir, 'FLUXMAIL_TELEMETRY');
+      console.log('Telemetry enabled. FLUXMAIL_TELEMETRY=0 or DO_NOT_TRACK=1 can still turn it off.');
+    });
+
+  telemetryCmd
+    .command('status')
+    .description('Show whether anonymous usage telemetry is enabled')
+    .action(() => {
+      const dataDir = resolveDataDir();
+      console.log(`Telemetry is ${isTelemetryEnabled(dataDir) ? 'enabled' : 'disabled'}.`);
+    });
+
+  program
+    .command('status')
+    .description('Show accounts, members, entitlements, and provider availability')
+    .action(async () => {
+      const ctx = createContext();
+      warnLicense(ctx.db);
+      console.log(JSON.stringify(await ctx.service.status(), null, 2));
+    });
+
+  return program;
+}
+
+export async function runCli(argv: readonly string[] = process.argv): Promise<void> {
+  try {
+    await createCliProgram().parseAsync([...argv]);
+  } catch (err) {
+    console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    process.exitCode = 1;
+    await shutdownTelemetry();
+  }
+}
+
+function isEntrypoint(): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
+  }
+}
+
+if (isEntrypoint()) void runCli();

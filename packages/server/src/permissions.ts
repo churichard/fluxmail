@@ -9,9 +9,24 @@ export const MCP_CAPABILITIES = [
 
 export type McpCapability = (typeof MCP_CAPABILITIES)[number];
 
+export const MCP_CAPABILITY_DESCRIPTIONS: Record<McpCapability, string> = {
+  'mail.read': 'List, search, and read mail; inspect status and folders; list scheduled sends; download attachments.',
+  'mail.drafts': 'Create, update, and delete drafts; cancel scheduled sends.',
+  'mail.organize': 'Mark read or unread, star, archive, move, and manage user labels.',
+  'mail.trash': 'Move messages to or from Trash.',
+  'mail.delete': 'Permanently delete messages.',
+  'mail.send': 'Send or schedule messages.',
+};
+
 export const NAMED_PERMISSION_PROFILES = ['read-only', 'read-write', 'full'] as const;
 export type NamedPermissionProfile = (typeof NAMED_PERMISSION_PROFILES)[number];
 export type PermissionProfile = NamedPermissionProfile | 'custom';
+
+export const PERMISSION_PROFILE_DESCRIPTIONS: Record<NamedPermissionProfile, string> = {
+  'read-only': 'Read and search mail, inspect folders and scheduled sends, and download attachments.',
+  'read-write': 'Read mail, manage drafts, organize messages, and move messages to or from Trash.',
+  full: 'Use every Fluxmail tool, including sending mail and permanently deleting messages.',
+};
 
 export interface PermissionPolicy {
   profile: PermissionProfile;

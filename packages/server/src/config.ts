@@ -8,6 +8,91 @@ export const DEFAULT_MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 export const HARD_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const BYTES_PER_MEGABYTE = 1024 * 1024;
 
+export interface ConfigReferenceEntry {
+  defaultValue: string;
+  description: string;
+  secret?: boolean;
+  documented?: boolean;
+}
+
+/**
+ * User-settable environment variables understood by the server. The public
+ * documentation generator reads this registry, and config loading uses its
+ * keys so adding a new setting cannot bypass the reference list by accident.
+ */
+export const CONFIG_REFERENCE = {
+  GOOGLE_CLIENT_ID: {
+    defaultValue: 'required for Gmail',
+    description: 'Google OAuth client ID.',
+  },
+  GOOGLE_CLIENT_SECRET: {
+    defaultValue: 'required for Gmail',
+    description: 'Google OAuth client secret.',
+    secret: true,
+  },
+  FLUXMAIL_DATA_DIR: {
+    defaultValue: '~/.fluxmail (/data in Docker)',
+    description: 'Directory for the SQLite database, stored config, and generated encryption key.',
+  },
+  FLUXMAIL_DB_PATH: {
+    defaultValue: '<data dir>/fluxmail.db',
+    description: 'Override the SQLite database path.',
+  },
+  FLUXMAIL_ENCRYPTION_KEY: {
+    defaultValue: 'generated automatically',
+    description: 'A 64-character hexadecimal key used to encrypt provider credentials.',
+    secret: true,
+  },
+  FLUXMAIL_PORT: {
+    defaultValue: '8977',
+    description: 'HTTP server port.',
+  },
+  FLUXMAIL_PUBLIC_URL: {
+    defaultValue: 'http://localhost:<FLUXMAIL_PORT>',
+    description: 'Public base URL used for the MCP endpoint and hosted Gmail callback.',
+  },
+  FLUXMAIL_AUTH: {
+    defaultValue: 'apikey',
+    description: 'HTTP authentication mode. Use none only behind a trusted network boundary.',
+  },
+  FLUXMAIL_OAUTH_PORT: {
+    defaultValue: '8976',
+    description: 'Port for the local Gmail OAuth callback listener.',
+  },
+  FLUXMAIL_OAUTH_HOST: {
+    defaultValue: '127.0.0.1',
+    description: 'Bind address for the local Gmail OAuth callback listener.',
+  },
+  FLUXMAIL_MAX_ATTACHMENT_MB: {
+    defaultValue: '10',
+    description: 'Largest decoded attachment returned through MCP, from 1 through 25 MB.',
+  },
+  FLUXMAIL_LICENSE_KEY: {
+    defaultValue: 'none',
+    description: 'Paid-plan license key, normally stored with fluxmail license activate.',
+    secret: true,
+  },
+  FLUXMAIL_TELEMETRY: {
+    defaultValue: '1',
+    description: 'Set to 0 to turn off anonymous CLI and MCP usage telemetry.',
+  },
+  DO_NOT_TRACK: {
+    defaultValue: 'unset',
+    description: 'Set to 1 to turn off anonymous usage telemetry.',
+  },
+  FLUXMAIL_LICENSE_SERVER_URL: {
+    defaultValue: DEFAULT_LICENSE_SERVER_URL,
+    description: 'License validation service override used for development and testing.',
+    documented: false,
+  },
+} as const satisfies Record<string, ConfigReferenceEntry>;
+
+export type ConfigEnvironmentName = keyof typeof CONFIG_REFERENCE;
+
+function readEnvironment(name: ConfigEnvironmentName): string | undefined {
+  return process.env[name];
+}
+
 export interface FluxmailConfig {
   dataDir: string;
   dbPath: string;
@@ -103,7 +188,7 @@ export function expandHome(p: string): string {
 /** Resolve (and create) the data dir, honoring cwd .env files and FLUXMAIL_DATA_DIR. */
 export function resolveDataDir(): string {
   loadDotEnv();
-  const fromEnv = process.env.FLUXMAIL_DATA_DIR;
+  const fromEnv = readEnvironment('FLUXMAIL_DATA_DIR');
   const dataDir = fromEnv ? expandHome(fromEnv) : path.join(homedir(), '.fluxmail');
   mkdirSync(dataDir, { recursive: true });
   return dataDir;
@@ -175,7 +260,7 @@ function decodeEncryptionKey(value: string, errorMessage: string): Buffer {
 }
 
 function readPort(name: 'FLUXMAIL_PORT' | 'FLUXMAIL_OAUTH_PORT', fallback: number): number {
-  const raw = process.env[name];
+  const raw = readEnvironment(name);
   if (raw === undefined) return fallback;
   const value = Number(raw);
   if (!Number.isInteger(value) || value < 1 || value > 65_535) {
@@ -185,7 +270,7 @@ function readPort(name: 'FLUXMAIL_PORT' | 'FLUXMAIL_OAUTH_PORT', fallback: numbe
 }
 
 function readMaxAttachmentBytes(): number {
-  const raw = process.env.FLUXMAIL_MAX_ATTACHMENT_MB;
+  const raw = readEnvironment('FLUXMAIL_MAX_ATTACHMENT_MB');
   if (raw === undefined) return DEFAULT_MAX_ATTACHMENT_BYTES;
   const value = Number(raw);
   const hardMaxMegabytes = HARD_MAX_ATTACHMENT_BYTES / BYTES_PER_MEGABYTE;
@@ -196,7 +281,7 @@ function readMaxAttachmentBytes(): number {
 }
 
 function readPublicUrl(port: number): string {
-  const value = (process.env.FLUXMAIL_PUBLIC_URL ?? `http://localhost:${port}`).replace(/\/+$/, '');
+  const value = (readEnvironment('FLUXMAIL_PUBLIC_URL') ?? `http://localhost:${port}`).replace(/\/+$/, '');
   let parsed: URL;
   try {
     parsed = new URL(value);
@@ -216,7 +301,7 @@ function readPublicUrl(port: number): string {
 }
 
 function loadEncryptionKey(dataDir: string): Buffer {
-  const fromEnv = process.env.FLUXMAIL_ENCRYPTION_KEY;
+  const fromEnv = readEnvironment('FLUXMAIL_ENCRYPTION_KEY');
   if (fromEnv) {
     return decodeEncryptionKey(fromEnv, 'FLUXMAIL_ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes)');
   }
@@ -239,32 +324,36 @@ export function loadConfig(): FluxmailConfig {
 
   const port = readPort('FLUXMAIL_PORT', 8977);
   const oauthPort = readPort('FLUXMAIL_OAUTH_PORT', 8976);
-  const publicUrlConfigured = process.env.FLUXMAIL_PUBLIC_URL !== undefined;
+  const publicUrlConfigured = readEnvironment('FLUXMAIL_PUBLIC_URL') !== undefined;
   const publicUrl = readPublicUrl(port);
-  const authModeEnv = process.env.FLUXMAIL_AUTH ?? 'apikey';
+  const databasePath = readEnvironment('FLUXMAIL_DB_PATH');
+  const authModeEnv = readEnvironment('FLUXMAIL_AUTH') ?? 'apikey';
   if (authModeEnv !== 'apikey' && authModeEnv !== 'none') {
     throw new Error(`FLUXMAIL_AUTH must be "apikey" or "none", got "${authModeEnv}"`);
   }
 
   const config: FluxmailConfig = {
     dataDir,
-    dbPath: process.env.FLUXMAIL_DB_PATH ? expandHome(process.env.FLUXMAIL_DB_PATH) : path.join(dataDir, 'fluxmail.db'),
+    dbPath: databasePath ? expandHome(databasePath) : path.join(dataDir, 'fluxmail.db'),
     encryptionKey: loadEncryptionKey(dataDir),
     port,
     publicUrl,
     publicUrlConfigured,
     oauthPort,
-    oauthHost: process.env.FLUXMAIL_OAUTH_HOST ?? '127.0.0.1',
+    oauthHost: readEnvironment('FLUXMAIL_OAUTH_HOST') ?? '127.0.0.1',
     authMode: authModeEnv,
     maxAttachmentBytes: readMaxAttachmentBytes(),
-    licenseServerUrl: (process.env.FLUXMAIL_LICENSE_SERVER_URL ?? DEFAULT_LICENSE_SERVER_URL).replace(/\/+$/, ''),
+    licenseServerUrl: (readEnvironment('FLUXMAIL_LICENSE_SERVER_URL') ?? DEFAULT_LICENSE_SERVER_URL).replace(
+      /\/+$/,
+      '',
+    ),
   };
 
-  const licenseKey = process.env.FLUXMAIL_LICENSE_KEY?.trim();
+  const licenseKey = readEnvironment('FLUXMAIL_LICENSE_KEY')?.trim();
   if (licenseKey) config.licenseKey = licenseKey;
 
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const clientId = readEnvironment('GOOGLE_CLIENT_ID');
+  const clientSecret = readEnvironment('GOOGLE_CLIENT_SECRET');
   if (clientId && clientSecret) {
     config.google = { clientId, clientSecret };
   }
