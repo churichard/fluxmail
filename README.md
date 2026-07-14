@@ -61,6 +61,7 @@ For a personal setup, `fluxmail config set` is the simplest: set `GOOGLE_CLIENT_
 | `FLUXMAIL_OAUTH_HOST`                       | `127.0.0.1`                       | OAuth listener bind address (`0.0.0.0` in Docker)                  |
 | `FLUXMAIL_MAX_ATTACHMENT_MB`                | `10`                              | Largest attachment returned through MCP, in MB; maximum `25`       |
 | `FLUXMAIL_LICENSE_KEY`                      | (none)                            | Paid-plan license key; usually set via `fluxmail license activate` |
+| `FLUXMAIL_TELEMETRY`                        | `1`                               | Set to `0` to turn off anonymous usage telemetry                   |
 
 ## Connect Gmail
 
@@ -99,14 +100,11 @@ fluxmail apikey permissions <id> --profile <read-only|read-write|full>
 fluxmail apikey list | revoke <id>
 fluxmail config set <KEY> <value>   # persist settings in the data dir
 fluxmail config list | unset <KEY>
+fluxmail telemetry status | enable | disable
 fluxmail license activate <key>     # unlock paid-plan limits
 fluxmail license status | deactivate
 fluxmail status
 ```
-
-API key profiles control which MCP tools are available. Use `read-only`, `read-write`, or `full`. A key created with `--member` can access that member's mailboxes and shared mailboxes.
-
-Attachments are returned through MCP instead of being written to the server filesystem. Binary data is base64-encoded on the wire, so Fluxmail limits decoded attachments to 10 MB by default. Set `FLUXMAIL_MAX_ATTACHMENT_MB` to a whole number from 1 through 25 if needed.
 
 ## Architecture
 

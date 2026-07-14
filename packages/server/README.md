@@ -55,22 +55,7 @@ Or with Codex CLI:
 codex mcp add fluxmail -- fluxmail stdio
 ```
 
-Stdio uses the full tool set by default. To connect a client that can only read mail and download attachments, add a profile to the command:
-
-```bash
-claude mcp add fluxmail-reader -- fluxmail stdio --profile read-only
-```
-
 Fluxmail also supports Streamable HTTP for Docker and remote deployments.
-
-HTTP API keys use the same profiles:
-
-```bash
-fluxmail apikey create --name reader --profile read-only
-fluxmail apikey permissions <key-id> --profile read-write
-```
-
-Assign a key to a member to limit it to that member's mailboxes and shared mailboxes.
 
 See the [setup guide](https://fluxmail.ai/docs/quickstart) for Google OAuth configuration, Docker deployment, supported MCP clients, environment variables, and the complete tool list.
 
