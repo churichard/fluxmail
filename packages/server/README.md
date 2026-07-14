@@ -49,19 +49,19 @@ Fluxmail prompts for the password and stores it encrypted. Use `--imap-password-
 
 ## Connect an MCP client
 
-Configure your client to launch Fluxmail through `npx`. For example, with Claude Code:
+For example, with Claude Code:
 
 ```bash
-claude mcp add fluxmail -- npx -y fluxmail@latest stdio
+claude mcp add fluxmail -- fluxmail stdio
 ```
 
 Or with Codex CLI:
 
 ```bash
-codex mcp add fluxmail -- npx -y fluxmail@latest stdio
+codex mcp add fluxmail -- fluxmail stdio
 ```
 
-Replace `@latest` with an exact version to keep your MCP client on that version. If you installed Fluxmail globally, you can use `fluxmail stdio` instead.
+To have your MCP client run Fluxmail without a global installation, replace `fluxmail stdio` with `npx -y fluxmail@latest stdio`. Replace `@latest` with an exact version to keep the client on that version.
 
 Fluxmail also supports Streamable HTTP for Docker and remote deployments.
 
