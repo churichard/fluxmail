@@ -26,8 +26,10 @@ Decide whether the intended release is stable or a prerelease before selecting t
 Inspect the complete first-parent range and the relevant diffs, not only commit or pull request titles:
 
 ```bash
-git fetch origin main --tags
+git fetch origin main:refs/remotes/origin/main --tags
+main_sha="$(git rev-parse origin/main)"
 candidate_sha="$(git rev-parse HEAD)"
+git merge-base --is-ancestor "$main_sha" "$candidate_sha"
 base_tag="<nearest-eligible-published-release-tag-that-is-an-ancestor-of-candidate-sha>"
 git merge-base --is-ancestor "$base_tag" "$candidate_sha"
 git log --first-parent --reverse --format='- %s (%h)' "$base_tag..$candidate_sha"
@@ -35,7 +37,7 @@ git diff --stat "$base_tag..$candidate_sha"
 git diff "$base_tag..$candidate_sha"
 ```
 
-Use the commit from the release-candidate checkout, even when preparing the release on a branch. Do not replace `candidate_sha` with `origin/main` unless `origin/main` is the release candidate. Resolve the SHA once so every audit command covers the same commit.
+Use the commit from the release-candidate checkout, even when preparing the release on a branch. The candidate must contain the fetched `main_sha` so the audit includes unreleased changes from `origin/main` and changes made on the release branch. If the ancestry check fails, update the branch or audit the actual merge commit before continuing. Resolve each SHA once so every audit command covers the same commits.
 
 Review every public contract that changed, including CLI arguments and output, environment variables, MCP tool names and schemas, HTTP behavior, package exports and types, stored data, authentication, defaults, and runtime requirements. A change is breaking when an existing consumer must change code or configuration, or when existing input produces an incompatible result.
 
