@@ -11,16 +11,16 @@ npm install -g fluxmail
 fluxmail members add --name "Your name" --email you@example.com
 ```
 
-Then follow the [quickstart](../../docs/public/pages/quickstart.md) to connect a mailbox, choose who can use it, and configure your MCP client. The published guide is available at [fluxmail.ai/docs/quickstart](https://fluxmail.ai/docs/quickstart).
+Then follow the [quickstart](https://fluxmail.ai/docs/quickstart) to connect a mailbox, choose who can use it, and configure your MCP client.
 
 ## Documentation
 
-- [Tools](../../docs/public/pages/tools.md)
-- [Permissions](../../docs/public/pages/permissions.md)
-- [Configuration](../../docs/public/pages/configuration.md)
-- [CLI reference](../../docs/public/pages/cli.md)
-- [Gmail setup](../../docs/public/pages/connect-gmail-to-mcp.md)
-- [IMAP setup](../../docs/public/pages/connect-an-imap-mailbox.md)
+- [Tools](https://fluxmail.ai/docs/tools)
+- [Permissions](https://fluxmail.ai/docs/permissions)
+- [Configuration](https://fluxmail.ai/docs/configuration)
+- [CLI reference](https://fluxmail.ai/docs/cli)
+- [Gmail setup](https://fluxmail.ai/docs/connect-gmail-to-mcp)
+- [IMAP setup](https://fluxmail.ai/docs/connect-an-imap-mailbox)
 
 Fluxmail supports stdio for local clients and Streamable HTTP for Docker and remote deployments. Use an exact package version instead of `@latest` when you need a reproducible installation.
 

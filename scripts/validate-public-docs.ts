@@ -74,13 +74,19 @@ for (const [filename, markers] of generatedPages) {
   }
 }
 
-for (const readme of ['README.md', 'packages/server/README.md']) {
+const readmeDocLinks = new Map<string, (slug: string) => string>([
+  ['README.md', (slug) => `docs/public/pages/${slug}.md`],
+  ['packages/server/README.md', (slug) => `https://fluxmail.ai/docs/${slug}`],
+]);
+for (const [readme, docLink] of readmeDocLinks) {
   if (!existsSync(readme)) continue;
   const source = readFileSync(readme, 'utf8');
   for (const required of ['quickstart', 'tools', 'permissions', 'configuration', 'cli']) {
-    const link = `docs/public/pages/${required}.md`;
-    const relativeLink = readme.startsWith('packages/') ? `../../${link}` : link;
-    if (!source.includes(relativeLink)) throw new Error(`${readme} must link to ${relativeLink}.`);
+    const link = docLink(required);
+    if (!source.includes(link)) throw new Error(`${readme} must link to ${link}.`);
+  }
+  if (readme === 'packages/server/README.md' && source.includes('../../docs/public/')) {
+    throw new Error(`${readme} must use published documentation URLs because repository files are not shipped to npm.`);
   }
 }
 
