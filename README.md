@@ -23,6 +23,12 @@ To run Fluxmail without installing it globally:
 npx fluxmail
 ```
 
+Create the first member before connecting a mailbox. The first member is an admin unless you pass `--role member`.
+
+```bash
+fluxmail members add --name "Your name" --email you@example.com
+```
+
 See the [quickstart](https://fluxmail.ai/docs/quickstart) for how to connect to your email provider and AI agent.
 
 ## Tools
@@ -74,16 +80,18 @@ For a personal setup, `fluxmail config set` is the simplest: set `GOOGLE_CLIENT_
 For a local installation, run:
 
 ```bash
-fluxmail accounts add gmail
+fluxmail accounts add gmail --owner you@example.com
 ```
 
 For Docker or a remote server, set `FLUXMAIL_PUBLIC_URL` to the server's public HTTPS address. Register `<FLUXMAIL_PUBLIC_URL>/auth/google/callback` as an authorized redirect URI in Google Cloud, then run the same command on the server:
 
 ```bash
-docker compose exec fluxmail fluxmail accounts add gmail
+docker compose exec fluxmail fluxmail accounts add gmail --owner you@example.com
 ```
 
 Open the printed URL in your browser, then select Continue with Google. The link expires after 10 minutes and works once. Fluxmail selects the local or hosted flow from `FLUXMAIL_PUBLIC_URL`; use `--local` or `--hosted` only when you need to override that choice.
+
+New mailboxes are private to their owner. Add `--shared` to share with every member, or repeat `--share-with <id-or-email>` to choose specific members. Admins can manage accounts and members, but the admin role does not grant access to another member's private email.
 
 ## CLI
 
@@ -91,17 +99,20 @@ Using Docker? Prefix these commands with `docker compose exec fluxmail`, for exa
 
 ```
 fluxmail serve                      # HTTP server (MCP at /mcp)
-fluxmail stdio [--profile <profile>] # stdio MCP server; profile defaults to full
-fluxmail accounts add gmail         # OAuth consent flow; add --member <id-or-email> to set an owner
+fluxmail stdio --member <id-or-email> [--account <id-or-email>]
+fluxmail accounts add gmail --owner <id-or-email>
 fluxmail accounts add gmail --reauthorize <account-id>
-fluxmail accounts add imap --email <address> --imap-host <host> --smtp-host <host>
+fluxmail accounts add imap --owner <id-or-email> --email <address> --imap-host <host> --smtp-host <host>
 fluxmail accounts configure <id> --sent-folder <path|auto>
 fluxmail accounts list | remove <id>
-fluxmail accounts assign <id> --member <id-or-email>   # or --shared
-fluxmail members add --name <name> [--email <email>]   # people using this instance
+fluxmail accounts assign <id> --owner <id-or-email>
+fluxmail accounts access <id> --owner-only | --shared | --share-with <member>
+fluxmail members add --name <name> [--email <email>] [--role <admin|member>]
+fluxmail members role <id-or-email> <admin|member>
 fluxmail members list | remove <id>
-fluxmail apikey create --name <name>  # HTTP key, shown once; defaults to the full tool profile
 fluxmail apikey create --name <name> --member <id-or-email>
+fluxmail apikey create --name <name> --member <member> --account <id-or-email>
+fluxmail apikey accounts <id> --account <id-or-email>  # use --all-accounts to clear
 fluxmail apikey permissions <id> --profile <read-only|read-write|full>
 fluxmail apikey list | revoke <id>
 fluxmail config set <KEY> <value>   # persist settings in the data dir
@@ -126,7 +137,7 @@ MCP tools are thin wrappers over `EmailService`, which owns account routing, rep
 
 ## Plans
 
-Self-hosting is free on the **Personal** plan: 3 connected mailboxes and 1 member. Paid plans (Pro, Team, Enterprise) raise those limits for teams that share one instance. Each person can connect their own mailboxes, and a mailbox can also be shared. See [fluxmail.ai](https://fluxmail.ai) for current pricing.
+Self-hosting is free on the **Personal** plan: 3 connected mailboxes and 1 member. Paid plans (Pro, Team, Enterprise) raise those limits for teams that share one instance. Every mailbox has an owner. The owner can keep it private, share it with everyone, or share it with selected members. See [fluxmail.ai](https://fluxmail.ai) for current pricing.
 
 A paid plan is unlocked with `fluxmail license activate <key>`. One license activates one instance, and enforcement keeps working offline. If the license lapses, the instance drops back to Personal limits. Deactivating, downgrading, or lapsing never deletes accounts or data.
 
