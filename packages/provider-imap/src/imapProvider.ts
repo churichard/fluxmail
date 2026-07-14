@@ -19,6 +19,7 @@ import {
   type EmailQuery,
   type Folder,
   type FolderRole,
+  type GetAttachmentOpts,
   type GetMessageOpts,
   type Message,
   type ModifyAction,
@@ -56,9 +57,18 @@ function findStructurePart(
   return visit(structure);
 }
 
-function bodyStructureSizeIsDecoded(node: MessageStructureObject | undefined): boolean {
+function isDecodedBodyStructureSize(node: MessageStructureObject | undefined): boolean {
   const encoding = node?.encoding?.toLowerCase();
   return encoding === '7bit' || encoding === '8bit' || encoding === 'binary';
+}
+
+function assertAttachmentSize(sizeBytes: number, maxBytes: number | undefined): void {
+  if (maxBytes !== undefined && sizeBytes > maxBytes) {
+    throw new EmailError('invalid_request', 'Attachment is too large to return through MCP.', {
+      sizeBytes,
+      maxBytes,
+    });
+  }
 }
 
 export const IMAP_CAPABILITIES: Capabilities = {
@@ -812,10 +822,10 @@ export class ImapProvider implements EmailProvider {
       if (!this.resolved?.selectablePaths.includes(requestedMoveDestination)) {
         throw new EmailError('not_found', `No folder named "${action.move}"`);
       }
-      const protectedDestinations = [this.resolved?.paths.archive, trashPath].filter(
-        (path): path is string => path !== undefined,
-      );
-      if (groups.has(trashPath ?? '') || protectedDestinations.includes(requestedMoveDestination)) {
+      const sourceIsTrash = trashPath !== undefined && groups.has(trashPath);
+      const destinationIsProtected =
+        requestedMoveDestination === this.resolved?.paths.archive || requestedMoveDestination === trashPath;
+      if (sourceIsTrash || destinationIsProtected) {
         throw new EmailError(
           'invalid_request',
           'Use the archive, trash, or untrash action when moving messages through a protected folder',
@@ -866,7 +876,7 @@ export class ImapProvider implements EmailProvider {
   async getAttachment(
     messageId: string,
     attachmentId: string,
-    opts: { maxBytes?: number } = {},
+    opts: GetAttachmentOpts = {},
   ): Promise<{ meta: AttachmentMeta; content: Buffer }> {
     const location = await this.options.store.findById(messageId);
     if (!location) throw new EmailError('not_found', `No message with id "${messageId}"`);
@@ -876,16 +886,8 @@ export class ImapProvider implements EmailProvider {
       if (!fetched) throw new EmailError('not_found', `No message with id "${messageId}"`);
       const meta = inspectStructure(fetched.bodyStructure).attachments.find((item) => item.id === attachmentId);
       const structurePart = findStructurePart(fetched.bodyStructure, attachmentId);
-      if (
-        meta &&
-        opts.maxBytes !== undefined &&
-        bodyStructureSizeIsDecoded(structurePart) &&
-        meta.sizeBytes > opts.maxBytes
-      ) {
-        throw new EmailError('invalid_request', 'Attachment is too large to return through MCP.', {
-          sizeBytes: meta.sizeBytes,
-          maxBytes: opts.maxBytes,
-        });
+      if (meta && isDecodedBodyStructureSize(structurePart)) {
+        assertAttachmentSize(meta.sizeBytes, opts.maxBytes);
       }
       if (!meta && attachmentId.startsWith('raw-')) {
         const index = Number(attachmentId.slice(4));
@@ -900,12 +902,7 @@ export class ImapProvider implements EmailProvider {
             : attachment.content instanceof ArrayBuffer
               ? Buffer.from(attachment.content)
               : Buffer.from(attachment.content.buffer, attachment.content.byteOffset, attachment.content.byteLength);
-        if (opts.maxBytes !== undefined && content.length > opts.maxBytes) {
-          throw new EmailError('invalid_request', 'Attachment is too large to return through MCP.', {
-            sizeBytes: content.length,
-            maxBytes: opts.maxBytes,
-          });
-        }
+        assertAttachmentSize(content.length, opts.maxBytes);
         return {
           meta: {
             id: attachmentId,
@@ -925,13 +922,8 @@ export class ImapProvider implements EmailProvider {
       for await (const chunk of downloaded.content) {
         const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         sizeBytes += bytes.length;
-        if (opts.maxBytes !== undefined && sizeBytes > opts.maxBytes) {
-          downloaded.content.destroy();
-          throw new EmailError('invalid_request', 'Attachment is too large to return through MCP.', {
-            sizeBytes,
-            maxBytes: opts.maxBytes,
-          });
-        }
+        if (opts.maxBytes !== undefined && sizeBytes > opts.maxBytes) downloaded.content.destroy();
+        assertAttachmentSize(sizeBytes, opts.maxBytes);
         chunks.push(bytes);
       }
       return { meta, content: Buffer.concat(chunks, sizeBytes) };

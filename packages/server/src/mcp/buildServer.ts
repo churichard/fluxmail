@@ -162,12 +162,9 @@ function truncateBody(message: Message): Message {
   return { ...message, body };
 }
 
-function ok(data: unknown, warning?: string): CallToolResult {
+function ok(data: unknown): CallToolResult {
   return {
-    content: [
-      { type: 'text', text: JSON.stringify(data, null, 2) },
-      ...(warning ? [{ type: 'text' as const, text: `Note: ${warning}` }] : []),
-    ],
+    content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
   };
 }
 
@@ -178,28 +175,14 @@ function toolError(err: unknown): CallToolResult {
   return { isError: true, content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }] };
 }
 
-function handle<A extends unknown[]>(
-  fn: (...args: A) => Promise<unknown>,
-  gate?: () => string | undefined,
-): (...args: A) => Promise<CallToolResult> {
-  return async (...args: A) => {
-    try {
-      // The gate throws when a lapsed license leaves the instance over quota,
-      // and yields a renewal warning to attach while the license is in grace.
-      const warning = gate?.();
-      return ok(await fn(...args), warning);
-    } catch (err) {
-      return toolError(err);
-    }
-  };
-}
-
 function handleResult<A extends unknown[]>(
   fn: (...args: A) => Promise<CallToolResult>,
   gate?: () => string | undefined,
 ): (...args: A) => Promise<CallToolResult> {
   return async (...args: A) => {
     try {
+      // The gate throws when a lapsed license leaves the instance over quota,
+      // and yields a renewal warning to attach while the license is in grace.
       const warning = gate?.();
       const result = await fn(...args);
       if (warning) result.content.push({ type: 'text', text: `Note: ${warning}` });
@@ -208,6 +191,13 @@ function handleResult<A extends unknown[]>(
       return toolError(err);
     }
   };
+}
+
+function handle<A extends unknown[]>(
+  fn: (...args: A) => Promise<unknown>,
+  gate?: () => string | undefined,
+): (...args: A) => Promise<CallToolResult> {
+  return handleResult(async (...args: A) => ok(await fn(...args)), gate);
 }
 
 function pageOpts(args: { pageSize?: number; pageToken?: string }): PageOpts {

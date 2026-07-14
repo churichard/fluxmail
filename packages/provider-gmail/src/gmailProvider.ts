@@ -11,6 +11,7 @@ import {
   type EmailQuery,
   type Folder,
   type FolderRole,
+  type GetAttachmentOpts,
   type GetMessageOpts,
   type Message,
   type ModifyAction,
@@ -60,6 +61,15 @@ const NON_IDEMPOTENT_MAX_RETRIES = 3;
 const BATCH_MODIFY_MAX_IDS = 1_000;
 const GOOGLE_USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo';
 const IMMUTABLE_SYSTEM_LABELS = new Set(['sent', 'draft', 'drafts', 'trash']);
+
+function assertAttachmentSize(sizeBytes: number, maxBytes: number | undefined): void {
+  if (maxBytes !== undefined && sizeBytes > maxBytes) {
+    throw new EmailError('invalid_request', 'Attachment is too large to return through MCP.', {
+      sizeBytes,
+      maxBytes,
+    });
+  }
+}
 
 export interface GmailProviderOptions {
   accountId: string;
@@ -547,24 +557,14 @@ export class GmailProvider implements EmailProvider {
   async getAttachment(
     messageId: string,
     attachmentId: string,
-    opts: { maxBytes?: number } = {},
+    opts: GetAttachmentOpts = {},
   ): Promise<{ meta: AttachmentMeta; content: Buffer }> {
     const msg = await withRetry(() => this.gmail.users.messages.get({ userId: 'me', id: messageId, format: 'full' }));
     const attachment = findAttachment(msg.data.payload, attachmentId);
     if (!attachment) throw new EmailError('not_found', `Attachment ${attachmentId} not found on message ${messageId}`);
-    if (opts.maxBytes !== undefined && attachment.meta.sizeBytes > opts.maxBytes) {
-      throw new EmailError('invalid_request', `Attachment is too large to return through MCP.`, {
-        sizeBytes: attachment.meta.sizeBytes,
-        maxBytes: opts.maxBytes,
-      });
-    }
+    assertAttachmentSize(attachment.meta.sizeBytes, opts.maxBytes);
     if (attachment.content !== undefined) {
-      if (opts.maxBytes !== undefined && attachment.content.length > opts.maxBytes) {
-        throw new EmailError('invalid_request', `Attachment is too large to return through MCP.`, {
-          sizeBytes: attachment.content.length,
-          maxBytes: opts.maxBytes,
-        });
-      }
+      assertAttachmentSize(attachment.content.length, opts.maxBytes);
       return { meta: attachment.meta, content: attachment.content };
     }
     if (!attachment.providerAttachmentId) {
@@ -579,12 +579,7 @@ export class GmailProvider implements EmailProvider {
     );
     if (res.data.data == null) throw new EmailError('provider_unavailable', 'Gmail returned no attachment data');
     const content = decodeBase64Url(res.data.data);
-    if (opts.maxBytes !== undefined && content.length > opts.maxBytes) {
-      throw new EmailError('invalid_request', `Attachment is too large to return through MCP.`, {
-        sizeBytes: content.length,
-        maxBytes: opts.maxBytes,
-      });
-    }
+    assertAttachmentSize(content.length, opts.maxBytes);
     return { meta: attachment.meta, content };
   }
 }
