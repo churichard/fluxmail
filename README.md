@@ -1,4 +1,8 @@
-# fluxmail-mcp
+<p align="center">
+  <img src="docs/assets/fluxmail-banner.png" alt="Fluxmail" width="100%">
+</p>
+
+<p align="center"><a href="https://github.com/churichard/fluxmail-mcp/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/churichard/fluxmail-mcp/ci.yml?branch=main&amp;style=flat-square&amp;label=CI&amp;logo=github"></a> <a href="https://www.npmjs.com/package/fluxmail"><img alt="npm version" src="https://img.shields.io/npm/v/fluxmail?style=flat-square&amp;logo=npm&amp;color=1f4fcc"></a> <a href="https://github.com/churichard/fluxmail-mcp/pkgs/container/fluxmail-mcp"><img alt="Container image" src="https://img.shields.io/badge/GHCR-container-2496ED?style=flat-square&amp;logo=docker&amp;logoColor=white"></a></p>
 
 `fluxmail-mcp` is a self-hosted MCP server that connects AI agents to Gmail and IMAP/SMTP mailboxes. Agents get one set of tools to read, search, draft, send, and organize mail.
 
