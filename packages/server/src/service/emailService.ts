@@ -180,6 +180,13 @@ export class EmailService {
     return all.filter((a) => this.canAccess(a));
   }
 
+  private metadataAccounts(): Account[] {
+    if (!this.isAdministrator()) return this.accessibleAccounts();
+    const all = this.registry.listAccounts();
+    const allowlist = this.scope.accountIds;
+    return allowlist == null ? all : all.filter((account) => allowlist.includes(account.id));
+  }
+
   /**
    * Resolve an account id within the current scope. A member connection defaults
    * to its sole accessible mailbox and can never reach another member's mailbox;
@@ -232,7 +239,7 @@ export class EmailService {
   }
 
   listAccounts(): Account[] {
-    return this.isAdministrator() ? this.registry.listAccounts() : this.accessibleAccounts();
+    return this.metadataAccounts();
   }
 
   async status(): Promise<ServiceStatus> {
@@ -275,18 +282,16 @@ export class EmailService {
     const license = admin ? checkLicenseState(this.db) : undefined;
     return {
       // Re-read so statuses reflect any markStatus writes from the live checks above.
-      accounts: (admin ? this.registry.listAccounts() : this.accessibleAccounts()).map(
-        ({ id, provider, email, status, ownerId, memberId }) => ({
-          id,
-          provider,
-          email,
-          status,
-          ...(ownerId ? { ownerId } : {}),
-          ...(memberId ? { memberId } : {}),
-          ...(errors.has(id) ? { error: errors.get(id)! } : {}),
-          ...(warnings.has(id) ? { warnings: warnings.get(id)! } : {}),
-        }),
-      ),
+      accounts: this.metadataAccounts().map(({ id, provider, email, status, ownerId, memberId }) => ({
+        id,
+        provider,
+        email,
+        status,
+        ...(ownerId ? { ownerId } : {}),
+        ...(memberId ? { memberId } : {}),
+        ...(errors.has(id) ? { error: errors.get(id)! } : {}),
+        ...(warnings.has(id) ? { warnings: warnings.get(id)! } : {}),
+      })),
       ...(admin
         ? {
             members: { count: listMembers(this.db).length },

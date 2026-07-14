@@ -261,6 +261,21 @@ describe('EmailService member scope', () => {
     expect(listFolders).not.toHaveBeenCalled();
   });
 
+  it('intersects admin metadata views with a connection allowlist', async () => {
+    const { registry, listFolders } = scopedRegistry([ann, bob]);
+    const service = new EmailService(registry as never, testDb()).withScope({
+      memberId: 'member_ann',
+      role: 'admin',
+      accountIds: ['acct_bob'],
+    });
+
+    expect(service.listAccounts().map((account) => account.id)).toEqual(['acct_bob']);
+    const status = await service.status();
+    expect(status.accounts.map((account) => account.id)).toEqual(['acct_bob']);
+    await expect(service.listFolders('acct_bob')).rejects.toMatchObject({ code: 'not_found' });
+    expect(listFolders).not.toHaveBeenCalled();
+  });
+
   it('keeps migrated memberless credentials management-only', async () => {
     const { registry, listFolders } = scopedRegistry([ann, bob]);
     const service = new EmailService(registry as never, testDb()).withScope({
