@@ -395,9 +395,9 @@ describe('OutlookProvider', () => {
       .mock.calls.map(([input]) => new URL(String(input)))
       .filter((url) => url.pathname.endsWith('/attachments/attachment-1'));
     expect(attachmentRequests).toHaveLength(4);
-    expect(attachmentRequests[0]?.searchParams.get('$select')).toBe('id,name,contentType,size,isInline,contentId');
+    expect(attachmentRequests[0]?.searchParams.get('$select')).toBe('id,name,contentType,size,isInline');
     expect(attachmentRequests[1]?.search).toBe('');
-    expect(attachmentRequests[2]?.searchParams.get('$select')).toBe('id,name,contentType,size,isInline,contentId');
+    expect(attachmentRequests[2]?.searchParams.get('$select')).toBe('id,name,contentType,size,isInline');
     expect(attachmentRequests[3]?.search).toBe('');
   });
 });

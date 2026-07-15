@@ -53,6 +53,7 @@ const MESSAGE_LIST_FIELDS = [
 
 const MESSAGE_FULL_FIELDS = `${MESSAGE_LIST_FIELDS},body`;
 const ATTACHMENT_SELECT = 'id,name,contentType,size,isInline,contentId';
+const ATTACHMENT_METADATA_SELECT = 'id,name,contentType,size,isInline';
 
 const WELL_KNOWN_FOLDERS: Array<{ id: string; role: FolderRole; name: string }> = [
   { id: 'inbox', role: 'inbox', name: 'Inbox' },
@@ -658,7 +659,7 @@ export class OutlookProvider implements EmailProvider {
   ): Promise<{ meta: AttachmentMeta; content: Buffer }> {
     const path = `/me/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`;
     const metadata = await this.request<GraphAttachment>(
-      options.maxBytes === undefined ? path : `${path}?$select=${ATTACHMENT_SELECT}`,
+      options.maxBytes === undefined ? path : `${path}?$select=${ATTACHMENT_METADATA_SELECT}`,
     );
     const meta = parseGraphAttachment(metadata);
     if (!meta) throw new EmailError('not_found', `Attachment ${attachmentId} not found on message ${messageId}`);
