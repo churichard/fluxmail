@@ -656,18 +656,20 @@ export class OutlookProvider implements EmailProvider {
     attachmentId: string,
     options: GetAttachmentOpts = {},
   ): Promise<{ meta: AttachmentMeta; content: Buffer }> {
-    const raw = await this.request<GraphAttachment>(
-      `/me/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`,
+    const path = `/me/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`;
+    const metadata = await this.request<GraphAttachment>(
+      options.maxBytes === undefined ? path : `${path}?$select=${ATTACHMENT_SELECT}`,
     );
-    const meta = parseGraphAttachment(raw);
+    const meta = parseGraphAttachment(metadata);
     if (!meta) throw new EmailError('not_found', `Attachment ${attachmentId} not found on message ${messageId}`);
     assertAttachmentSize(meta.sizeBytes, options.maxBytes);
-    if (raw['@odata.type'] && raw['@odata.type'] !== '#microsoft.graph.fileAttachment') {
+    if (metadata['@odata.type'] && metadata['@odata.type'] !== '#microsoft.graph.fileAttachment') {
       throw new EmailError('unsupported_capability', 'Only Outlook file attachments can be downloaded');
     }
-    if (raw.contentBytes == null)
+    const attachment = options.maxBytes === undefined ? metadata : await this.request<GraphAttachment>(path);
+    if (attachment.contentBytes == null)
       throw new EmailError('provider_unavailable', 'Microsoft Graph returned no attachment data');
-    const content = Buffer.from(raw.contentBytes, 'base64');
+    const content = Buffer.from(attachment.contentBytes, 'base64');
     assertAttachmentSize(content.length, options.maxBytes);
     return { meta, content };
   }
