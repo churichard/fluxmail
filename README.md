@@ -19,6 +19,7 @@ Then follow the [quickstart](docs/public/pages/quickstart.md) to connect a mailb
 
 ## Documentation
 
+- [Overview](docs/public/pages/overview.md)
 - [Tools](docs/public/pages/tools.md)
 - [Permissions](docs/public/pages/permissions.md)
 - [Configuration](docs/public/pages/configuration.md)

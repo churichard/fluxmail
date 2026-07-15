@@ -15,6 +15,7 @@ Then follow the [quickstart](https://fluxmail.ai/docs/quickstart) to connect a m
 
 ## Documentation
 
+- [Overview](https://fluxmail.ai/docs/overview)
 - [Tools](https://fluxmail.ai/docs/tools)
 - [Permissions](https://fluxmail.ai/docs/permissions)
 - [Configuration](https://fluxmail.ai/docs/configuration)

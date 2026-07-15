@@ -3,6 +3,7 @@
   "id": "fluxmail-mcp",
   "category": "Fluxmail MCP",
   "pages": [
+    "overview",
     "quickstart",
     "connect-gmail-to-mcp",
     "connect-an-imap-mailbox",
