@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { OAuth2Client, type Credentials } from 'google-auth-library';
 import { EmailError, type Account, type AccountSharingMode, type EmailProvider, type Provider } from '@fluxmail/core';
 import { GmailProvider, GMAIL_CAPABILITIES } from '@fluxmail/provider-gmail';
-import { ImapProvider, IMAP_CAPABILITIES, type ImapCredentials } from '@fluxmail/provider-imap';
+import { ImapProvider, IMAP_CAPABILITIES, type FolderWarning, type ImapCredentials } from '@fluxmail/provider-imap';
 import { OutlookProvider, OUTLOOK_CAPABILITIES } from '@fluxmail/provider-outlook';
 import type { FluxmailConfig } from '../config.js';
 import { accountCredentials, accountMemberShares, accounts, oauthTokens, type FluxmailDb } from '../storage/db.js';
@@ -376,7 +376,8 @@ export class AccountRegistry {
     email: string,
     credentials: ImapCredentials,
     displayName?: string,
-  ): Promise<Array<{ message: string }>> {
+    timeoutMs = 30_000,
+  ): Promise<FolderWarning[]> {
     const provider = new ImapProvider({
       accountId: 'imap_setup',
       email,
@@ -384,10 +385,23 @@ export class AccountRegistry {
       credentials,
       store: new SqliteImapStateStore(this.db, 'imap_setup'),
     });
+    let timer: NodeJS.Timeout | undefined;
     try {
-      await provider.testConnection();
-      return await provider.getFolderWarnings();
+      return await Promise.race([
+        (async () => {
+          await provider.testConnection();
+          return provider.getFolderWarnings();
+        })(),
+        new Promise<FolderWarning[]>((_resolve, reject) => {
+          timer = setTimeout(
+            () => reject(new EmailError('provider_unavailable', 'The IMAP and SMTP connection test timed out.')),
+            timeoutMs,
+          );
+          timer.unref();
+        }),
+      ]);
     } finally {
+      if (timer) clearTimeout(timer);
       await provider.close();
     }
   }
