@@ -127,7 +127,7 @@ describe('HTTP app', () => {
     });
   });
 
-  it('only lets admin keys start the server-hosted OAuth flow', async () => {
+  it('only lets admin keys start server-hosted OAuth flows and suppresses Microsoft referrers', async () => {
     const deps = appDeps('apikey');
     const member = addMember(deps.db, { name: 'Alice', role: 'admin' });
     const { key: memberKey } = createApiKey(
@@ -149,6 +149,12 @@ describe('HTTP app', () => {
       headers: { authorization: `Bearer ${memberKey}` },
     });
     expect(allowed.status).toBe(302);
+
+    const microsoft = await app.request(`/auth/microsoft?owner=${member.id}`, {
+      headers: { authorization: `Bearer ${memberKey}` },
+    });
+    expect(microsoft.status).toBe(302);
+    expect(microsoft.headers.get('referrer-policy')).toBe('no-referrer');
   });
 
   it('requires confirmation before claiming a connection link', async () => {

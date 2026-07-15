@@ -121,6 +121,8 @@ fluxmail apikey capabilities
 | `mail.send` | Send or schedule messages. |
 <!-- END GENERATED:permission-capabilities -->
 
+The generic `move` action cannot target Trash or Archive by folder ID, role, or display name. It also cannot move messages out of Trash. Use `trash` to move messages into Trash, `untrash` to restore them, and `archive` to move non-Trash messages into Archive. These restrictions keep Trash access behind the `mail.trash` capability.
+
 Create a custom HTTP key like this:
 
 ```bash
