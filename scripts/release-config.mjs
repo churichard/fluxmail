@@ -6,6 +6,8 @@ export const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.met
 
 export const releaseConfig = Object.freeze({
   githubRepository: 'churichard/fluxmail-mcp',
+  githubWorkflow: 'publish-release.yml',
+  githubEnvironment: 'release',
   dockerImage: 'ghcr.io/churichard/fluxmail-mcp',
   registryName: 'io.github.churichard/fluxmail',
   registryUrl: 'https://registry.modelcontextprotocol.io',

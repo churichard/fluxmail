@@ -17,6 +17,9 @@ export async function main(args = process.argv.slice(2)) {
     case 'inventory':
       await inventory(commandArgs);
       break;
+    case 'doctor':
+      await doctor(commandArgs);
+      break;
     case 'prepare':
       await prepare(commandArgs);
       break;
@@ -52,6 +55,213 @@ async function inventory(args) {
 
   if (options.json) console.log(JSON.stringify(output, null, 2));
   else output.forEach((entry) => console.log(`${entry.name}@${entry.version}\t${entry.directory}`));
+}
+
+async function doctor(args) {
+  const options = parseOptions(args, { boolean: ['json', 'npm-trust'] });
+  const packages = await loadReleasePackages();
+  const checks = [];
+
+  for (const command of ['git', 'gh', 'node', 'npm', 'npx', 'pnpm']) {
+    const available = await commandExists(command);
+    checks.push({
+      id: `tool:${command}`,
+      status: available ? 'pass' : 'fail',
+      message: available ? `${command} is available.` : `${command} is not installed.`,
+    });
+  }
+
+  const missingTools = checks.filter(({ status }) => status === 'fail');
+  if (missingTools.length === 0) {
+    checks.push(await inspectGitHubAuthentication());
+    checks.push(await inspectReleaseWorkflow());
+    checks.push(await inspectReleaseEnvironment());
+    checks.push(await inspectGhcrAccess());
+  }
+
+  if (options.npmTrust && missingTools.length === 0) {
+    checks.push(...(await inspectNpmTrustedPublishers(packages)));
+  } else {
+    checks.push({
+      id: 'npm-trusted-publishers',
+      status: 'skipped',
+      message: 'Run with --npm-trust before the first release or after changing publishing setup.',
+    });
+  }
+
+  const report = buildDoctorReport(checks);
+  if (options.json) console.log(JSON.stringify(report, null, 2));
+  else printDoctorReport(report);
+  if (!report.ok) throw new Error('Release preflight needs attention.');
+}
+
+export function buildDoctorReport(checks) {
+  return {
+    ok: checks.every(({ status }) => status === 'pass' || status === 'skipped'),
+    checks,
+  };
+}
+
+async function inspectGitHubAuthentication() {
+  const result = await run('gh', ['auth', 'status', '--hostname', 'github.com'], {
+    output: 'capture',
+    allowFailure: true,
+  });
+  return result.code === 0
+    ? { id: 'github-auth', status: 'pass', message: 'GitHub CLI authentication is valid.' }
+    : { id: 'github-auth', status: 'fail', message: 'Authenticate the GitHub CLI with `gh auth login`.' };
+}
+
+async function inspectReleaseWorkflow() {
+  const endpoint = `repos/${releaseConfig.githubRepository}/contents/.github/workflows/${releaseConfig.githubWorkflow}?ref=main`;
+  const result = await run('gh', ['api', endpoint], { output: 'capture', allowFailure: true });
+  return result.code === 0
+    ? {
+        id: 'github-workflow',
+        status: 'pass',
+        message: `${releaseConfig.githubWorkflow} exists on main.`,
+      }
+    : {
+        id: 'github-workflow',
+        status: 'fail',
+        message: `${releaseConfig.githubWorkflow} must be merged to main before publishing.`,
+      };
+}
+
+async function inspectReleaseEnvironment() {
+  const endpoint = `repos/${releaseConfig.githubRepository}/environments/${releaseConfig.githubEnvironment}`;
+  const result = await run('gh', ['api', endpoint], { output: 'capture', allowFailure: true });
+  if (result.code !== 0) {
+    return {
+      id: 'github-environment',
+      status: 'fail',
+      message: `Create the ${releaseConfig.githubEnvironment} GitHub environment and restrict it to main.`,
+    };
+  }
+
+  const environment = JSON.parse(result.stdout);
+  const policy = environment.deployment_branch_policy;
+  let restricted = Boolean(policy?.protected_branches);
+  if (policy?.custom_branch_policies) {
+    const policies = await run('gh', ['api', `${endpoint}/deployment-branch-policies`, '--paginate'], {
+      output: 'capture',
+      allowFailure: true,
+    });
+    if (policies.code === 0) {
+      restricted = JSON.parse(policies.stdout).branch_policies?.some(({ name }) => name === 'main') ?? false;
+    }
+  }
+  return {
+    id: 'github-environment',
+    status: restricted ? 'pass' : 'fail',
+    message: restricted
+      ? `The ${releaseConfig.githubEnvironment} environment exists and has a deployment branch policy.`
+      : `Restrict the ${releaseConfig.githubEnvironment} environment to main.`,
+  };
+}
+
+async function inspectGhcrAccess() {
+  const [owner, repository] = releaseConfig.githubRepository.split('/');
+  const packageName = releaseConfig.dockerImage.split('/').at(-1);
+  let result = await run('gh', ['api', `users/${owner}/packages/container/${packageName}`], {
+    output: 'capture',
+    allowFailure: true,
+  });
+  if (result.code !== 0) {
+    result = await run('gh', ['api', `orgs/${owner}/packages/container/${packageName}`], {
+      output: 'capture',
+      allowFailure: true,
+    });
+  }
+  if (result.code !== 0) {
+    return {
+      id: 'ghcr-actions-access',
+      status: 'fail',
+      message: `Connect the ${packageName} container package to ${releaseConfig.githubRepository}.`,
+    };
+  }
+
+  const packageMetadata = JSON.parse(result.stdout);
+  const linkedRepository = packageMetadata.repository?.full_name;
+  return {
+    id: 'ghcr-actions-access',
+    status: linkedRepository === releaseConfig.githubRepository ? 'pass' : 'fail',
+    message:
+      linkedRepository === releaseConfig.githubRepository
+        ? `GHCR inherits Actions access from ${releaseConfig.githubRepository}.`
+        : `Connect the ${packageName} container package to ${owner}/${repository}.`,
+  };
+}
+
+async function inspectNpmTrustedPublishers(packages) {
+  const checks = [];
+
+  for (const { manifest } of packages) {
+    const result = await run('npx', ['--yes', 'npm@11', 'trust', 'list', manifest.name, '--json'], {
+      output: 'capture',
+      allowFailure: true,
+    });
+    if (result.code !== 0) {
+      const authUrl = (extractJson(result.stdout) ?? extractJson(result.stderr))?.error?.authUrl;
+      checks.push({
+        id: `npm-trusted-publisher:${manifest.name}`,
+        status: authUrl ? 'action_required' : 'fail',
+        message: authUrl
+          ? `Authenticate npm for ${manifest.name}, then rerun the preflight.`
+          : `Could not inspect the trusted publisher for ${manifest.name}.`,
+        ...(authUrl ? { authUrl } : {}),
+      });
+      if (authUrl) {
+        for (const remaining of packages.slice(checks.length)) {
+          checks.push({
+            id: `npm-trusted-publisher:${remaining.manifest.name}`,
+            status: 'skipped',
+            message: 'Waiting for npm authentication.',
+          });
+        }
+        break;
+      }
+      continue;
+    }
+
+    const config = extractJson(result.stdout);
+    const valid = isExpectedNpmTrustedPublisher(config);
+    checks.push({
+      id: `npm-trusted-publisher:${manifest.name}`,
+      status: valid ? 'pass' : 'fail',
+      message: valid
+        ? `${manifest.name} trusts the release workflow.`
+        : `${manifest.name} does not have the expected trusted publisher.`,
+    });
+  }
+
+  return checks;
+}
+
+export function isExpectedNpmTrustedPublisher(config) {
+  return (
+    config?.type === 'github' &&
+    config.file === releaseConfig.githubWorkflow &&
+    config.repository === releaseConfig.githubRepository &&
+    config.environment === releaseConfig.githubEnvironment &&
+    Array.isArray(config.permissions) &&
+    config.permissions.includes('createPackage')
+  );
+}
+
+function extractJson(output) {
+  try {
+    return JSON.parse(output.trim());
+  } catch {
+    return undefined;
+  }
+}
+
+function printDoctorReport(report) {
+  for (const check of report.checks) {
+    console.log(`${check.status.padEnd(15)} ${check.id}: ${check.message}`);
+    if (check.authUrl) console.log(`                ${check.authUrl}`);
+  }
 }
 
 async function prepare(args) {
@@ -829,6 +1039,7 @@ function printHelp() {
 
 Commands:
   inventory [--json]                    List publishable workspace packages
+  doctor [--json] [--npm-trust]         Check release tools and external setup
   prepare <version> [options]           Bump versions and draft CHANGELOG.md
   validate [--version <version>]        Validate release metadata and changelog
   notes [--version <version>] [--json]  Render the GitHub Release body

@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { loadReleasePackages } from './release-config.mjs';
 import { parseArgs, planNpmAndDockerRelease, run } from './publish.mjs';
-import { insertReleaseEntry, planRelease, renderReleaseNotes, validateChangelogEntry } from './release.mjs';
+import {
+  buildDoctorReport,
+  insertReleaseEntry,
+  isExpectedNpmTrustedPublisher,
+  planRelease,
+  renderReleaseNotes,
+  validateChangelogEntry,
+} from './release.mjs';
 
 const changelog = `# Changelog
 
@@ -32,6 +39,41 @@ describe('release inventory', () => {
       '@fluxmail/provider-outlook',
       'fluxmail',
     ]);
+  });
+});
+
+describe('release preflight', () => {
+  it('accepts the expected npm trusted publisher', () => {
+    expect(
+      isExpectedNpmTrustedPublisher({
+        type: 'github',
+        file: 'publish-release.yml',
+        repository: 'churichard/fluxmail-mcp',
+        environment: 'release',
+        permissions: ['createPackage'],
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects a trusted publisher for a different workflow', () => {
+    expect(
+      isExpectedNpmTrustedPublisher({
+        type: 'github',
+        file: 'other.yml',
+        repository: 'churichard/fluxmail-mcp',
+        environment: 'release',
+        permissions: ['createPackage'],
+      }),
+    ).toBe(false);
+  });
+
+  it('fails when preflight requires an external action', () => {
+    expect(
+      buildDoctorReport([
+        { id: 'tool:git', status: 'pass', message: 'git is available.' },
+        { id: 'npm-trusted-publisher:fluxmail', status: 'action_required', message: 'Authenticate npm.' },
+      ]),
+    ).toMatchObject({ ok: false });
   });
 });
 

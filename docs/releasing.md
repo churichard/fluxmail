@@ -1,12 +1,31 @@
 # Releasing Fluxmail
 
-Fluxmail releases publish five npm packages, a multi-platform container image, MCP Registry metadata, a Git tag, and a GitHub Release. The release scripts keep those destinations in a fixed order and can resume after a partial failure.
+The `/release` skill is the normal release interface. It audits compatibility, selects a version, prepares the Common Changelog entry, opens the release pull request, waits for CI, asks for publication approval, merges, publishes, resumes failures, and verifies every destination.
+
+The scripts in `scripts/release.mjs` and `scripts/publish.mjs` enforce release invariants. The GitHub workflow performs live publication. This document covers one-time service setup and manual recovery.
 
 ## One-time setup
 
-Create a GitHub environment named `release` and add the required reviewers. The publish job uses this environment as its approval gate.
+Run the automated checks first:
 
-Configure npm trusted publishing for each package:
+```bash
+pnpm release doctor --json
+pnpm release doctor --json --npm-trust
+```
+
+The strict npm check may return an authentication URL because npm requires proof of presence for trusted-publisher settings. Authenticate once, select npm's option to skip additional two-factor prompts for five minutes, and rerun the command. That window is long enough to inspect or configure all five packages.
+
+### GitHub release environment
+
+Create a GitHub environment named `release`. Restrict deployment branches to `main`.
+
+The agent asks for explicit publication approval before it merges and dispatches a release, so the environment does not need required reviewers. Add a reviewer only if the project needs a second approval in the GitHub interface.
+
+The workflow uses the environment name as part of its npm trusted-publisher identity. Do not rename it without updating the workflow and every npm package configuration.
+
+### npm trusted publishers
+
+Configure GitHub Actions as the trusted publisher for these packages:
 
 - `@fluxmail/core`
 - `@fluxmail/provider-gmail`
@@ -14,66 +33,80 @@ Configure npm trusted publishing for each package:
 - `@fluxmail/provider-outlook`
 - `fluxmail`
 
-Use these trusted publisher settings:
+Use the same settings for each package:
 
-- Provider: GitHub Actions
 - Repository: `churichard/fluxmail-mcp`
-- Workflow: `publish-release.yml`
+- Workflow file: `publish-release.yml`
 - Environment: `release`
-- Allowed action: `npm publish`
+- Permission: `npm publish`
 
-Grant the repository write access to the `fluxmail-mcp` container under the package's GitHub Actions access settings. The workflow uses its short-lived `GITHUB_TOKEN` for GHCR and GitHub OIDC for npm and the MCP Registry.
-
-## Prepare a release
-
-Audit the changes since the nearest published release before choosing the version. Once the version is known, start from a clean working tree:
+The agent can configure them after setup approval. The equivalent bulk command is:
 
 ```bash
-pnpm release prepare <version>
+for package in \
+  @fluxmail/core \
+  @fluxmail/provider-gmail \
+  @fluxmail/provider-imap \
+  @fluxmail/provider-outlook \
+  fluxmail
+do
+  npx --yes npm@11 trust github "$package" \
+    --repo churichard/fluxmail-mcp \
+    --file publish-release.yml \
+    --env release \
+    --allow-publish \
+    --yes
+  sleep 2
+done
 ```
 
-The command updates every publishable package, the root package, `server.json`, the lockfile, and `CHANGELOG.md`. It discovers publishable packages from the workspace instead of relying on a copied list.
+### GHCR Actions access
 
-Curate the new changelog entry before opening the release pull request. Keep the Common Changelog groups in this order: `Changed`, `Added`, `Removed`, and `Fixed`. Remove empty groups and internal changes. Each bullet must end with a linked pull request, issue, or commit. Prefix breaking changes with `**Breaking:**`.
+Connect the `fluxmail-mcp` container package to `churichard/fluxmail-mcp`. A linked package inherits GitHub Actions access from that repository. The Dockerfile's `org.opencontainers.image.source` label keeps future images linked to the repository.
 
-Validate the release tree:
+If preflight reports a mismatch, open the package settings and add `churichard/fluxmail-mcp` under Manage Actions access with write permission.
+
+## Agent-driven release flow
+
+Invoke `/release` and let the agent continue until it presents the publication approval packet. The packet includes the selected version, compatibility reasoning, complete changelog entry, pull request, release commit, npm tag, and destinations.
+
+Approval authorizes the agent to merge the reviewed release pull request and dispatch the protected workflow. The workflow publishes five npm packages, a multi-platform GHCR image, MCP Registry metadata, a Git tag, and a GitHub Release. It verifies all destinations before it succeeds.
+
+The release state lives in GitHub and the registries. Running `/release` again resumes an open pull request, a failed workflow, or a partial publication without relying on a local progress file.
+
+## Manual inspection and recovery
+
+Inspect destination state without writing anything:
 
 ```bash
-pnpm release validate --version <version>
-pnpm publish:all --dry-run --tag <latest-or-next>
+pnpm release status --version <version> --json
 ```
 
-Commit the version and changelog together, then open the release pull request. Reviewing that pull request also reviews the GitHub Release notes because the workflow renders them directly from `CHANGELOG.md`.
-
-## Publish from GitHub Actions
-
-After the release pull request merges, copy its full merge commit SHA and run the `Publish release` workflow with:
-
-- `version`: the version without the `v` prefix
-- `release_sha`: the full commit SHA on `main`
-- `npm_tag`: `latest` for a stable release or `next` for a prerelease
-
-The validation job runs metadata checks, formatting, lint, builds, typechecking, documentation checks, and tests. It saves the package builds for the publish job. The protected publish job then publishes npm, GHCR, the MCP Registry, the Git tag, and the GitHub Release before verifying every destination.
-
-If the publish job fails, rerun the failed job. The release CLI reads the current destination state and starts at the first missing destination. It does not republish immutable versions or rerun the validation job.
-
-Inspect a release at any time:
+Verify a completed release:
 
 ```bash
-pnpm release status --version <version>
-pnpm release verify --version <version> --sha <release-sha> --npm-tag <latest-or-next>
+pnpm release verify \
+  --version <version> \
+  --sha <release-sha> \
+  --npm-tag <latest-or-next>
 ```
+
+When a workflow publish job fails after validation, rerun only the failed job. The release command skips existing immutable versions and starts at the first missing destination.
+
+Stop instead of retrying when Docker exists before every npm package, a published GitHub Release has a missing destination, a tag points to the wrong commit, or a draft GitHub Release has uploaded assets.
 
 ## Local fallback
 
-Use the local path only when GitHub Actions is unavailable. Authenticate to npm and GitHub first. The GitHub CLI token must include `write:packages`:
+Use local publishing only when GitHub Actions is unavailable. It requires separate approval because it replaces the normal OIDC and workflow controls.
+
+Authenticate to npm and GitHub first. The GitHub CLI token needs `write:packages`:
 
 ```bash
 npm whoami
 gh auth refresh --hostname github.com --scopes write:packages
 ```
 
-Then run:
+Then publish from a clean checkout of the approved commit:
 
 ```bash
 pnpm release publish \
@@ -82,5 +115,3 @@ pnpm release publish \
   --npm-tag <latest-or-next> \
   --resume
 ```
-
-The command logs Docker into GHCR with the checked GitHub CLI token. It opens the MCP Registry device login immediately before Registry publication so its short-lived credential does not expire during npm or Docker work.
