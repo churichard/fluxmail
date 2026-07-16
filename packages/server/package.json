@@ -1,6 +1,6 @@
 {
   "name": "fluxmail",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "mcpName": "io.github.churichard/fluxmail",
   "description": "Self-hosted email API with MCP and REST support for Gmail, Outlook, and IMAP/SMTP",
   "license": "SEE LICENSE IN LICENSE.md",
@@ -46,8 +46,8 @@
     "@fluxmail/provider-gmail": "workspace:*",
     "@fluxmail/provider-imap": "workspace:*",
     "@fluxmail/provider-outlook": "workspace:*",
-    "@hono/zod-openapi": "0.19.10",
     "@hono/node-server": "^1.14.3",
+    "@hono/zod-openapi": "0.19.10",
     "@modelcontextprotocol/sdk": "^1.13.0",
     "better-sqlite3": "^11.10.0",
     "commander": "^13.1.0",
