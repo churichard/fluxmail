@@ -259,14 +259,18 @@ export function buildNpmTrustFailureCheck(packageName, result) {
 }
 
 export function isExpectedNpmTrustedPublisher(config) {
-  return (
-    config?.type === 'github' &&
-    config.file === releaseConfig.githubWorkflow &&
-    config.repository === releaseConfig.githubRepository &&
-    config.environment === releaseConfig.githubEnvironment &&
-    Array.isArray(config.permissions) &&
-    config.permissions.includes('createPackage')
-  );
+  const configs = Array.isArray(config) ? config : [config];
+  return configs.some((entry) => {
+    const claims = entry?.claims;
+    return (
+      entry?.type === 'github' &&
+      (claims?.workflow_ref?.file ?? entry.file) === releaseConfig.githubWorkflow &&
+      (claims?.repository ?? entry.repository) === releaseConfig.githubRepository &&
+      (claims?.environment ?? entry.environment) === releaseConfig.githubEnvironment &&
+      Array.isArray(entry.permissions) &&
+      entry.permissions.includes('createPackage')
+    );
+  });
 }
 
 function extractJson(output) {

@@ -79,15 +79,40 @@ describe('release preflight', () => {
     ).toBe(true);
   });
 
-  it('rejects a trusted publisher for a different workflow', () => {
+  it('accepts npm registry trust list output', () => {
     expect(
-      isExpectedNpmTrustedPublisher({
-        type: 'github',
-        file: 'other.yml',
-        repository: 'churichard/fluxmail-mcp',
-        environment: 'release',
-        permissions: ['createPackage'],
-      }),
+      isExpectedNpmTrustedPublisher([
+        {
+          type: 'gitlab',
+          claims: { project_id: '12345' },
+          permissions: ['createPackage'],
+        },
+        {
+          type: 'github',
+          claims: {
+            workflow_ref: { file: 'publish-release.yml' },
+            repository: 'churichard/fluxmail-mcp',
+            environment: 'release',
+          },
+          permissions: ['createPackage'],
+        },
+      ]),
+    ).toBe(true);
+  });
+
+  it('rejects registry output for a different workflow', () => {
+    expect(
+      isExpectedNpmTrustedPublisher([
+        {
+          type: 'github',
+          claims: {
+            workflow_ref: { file: 'other.yml' },
+            repository: 'churichard/fluxmail-mcp',
+            environment: 'release',
+          },
+          permissions: ['createPackage'],
+        },
+      ]),
     ).toBe(false);
   });
 
