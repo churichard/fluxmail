@@ -43,13 +43,13 @@ Keep that path handy. Some desktop apps start with a limited `PATH`. If your cli
 
 To run Fluxmail without installing it globally, replace `fluxmail` in any local command with `npx -y fluxmail@latest`.
 
-Create the member whose mailbox you are connecting. Even a personal instance needs one member because every MCP connection and mailbox is scoped to a person.
+Initialize the local instance. Fluxmail asks for a password without displaying it, creates the first administrator, and logs the CLI in:
 
 ```bash
-fluxmail members add --name "Your name" --email you@example.com
+fluxmail setup --name "Your name" --email you@example.com
 ```
 
-The first member is an administrator.
+The local login lasts for up to 90 days. Run `fluxmail login --instance local` when it expires or after you log out.
 
 ### 2. Connect an email account
 
@@ -60,7 +60,7 @@ Choose one provider:
 Start the browser consent flow:
 
 ```bash
-fluxmail accounts add gmail --owner you@example.com
+fluxmail accounts add gmail
 ```
 
 Fluxmail uses its built-in Google Desktop client with PKCE unless you [configure your own app](/docs/connect-gmail-to-mcp#use-your-own-google-oauth-app).
@@ -73,7 +73,7 @@ Store the application client ID, then start the browser consent flow:
 
 ```bash
 fluxmail config set MICROSOFT_CLIENT_ID <application-client-id>
-fluxmail accounts add outlook --owner you@example.com
+fluxmail accounts add outlook
 ```
 
 #### Option C: IMAP and SMTP
@@ -82,7 +82,6 @@ Find the IMAP and SMTP hostnames for your email provider, then run the command b
 
 ```bash
 fluxmail accounts add imap \
-  --owner you@example.com \
   --email you@example.com \
   --imap-host imap.example.com \
   --smtp-host smtp.example.com
@@ -92,13 +91,13 @@ The [IMAP setup guide](/docs/connect-an-imap-mailbox) covers app passwords, cust
 
 ### 3. Connect your agent
 
-Every stdio client launches `fluxmail stdio` with the member it acts for. These examples use Fluxmail's default `full` profile, which includes every tool. See [Limit what an MCP client can do](/docs/permissions) if you want to restrict a connection.
+Every stdio client launches `fluxmail stdio`. Fluxmail uses the member logged in to the selected local instance. These examples use the default `full` profile, which includes every tool. See [Limit what an MCP client can do](/docs/permissions) if you want to restrict a connection.
 
 <details>
 <summary>Claude Code</summary>
 
 ```bash
-claude mcp add fluxmail -- fluxmail stdio --member you@example.com
+claude mcp add fluxmail -- fluxmail stdio
 ```
 
 </details>
@@ -113,7 +112,7 @@ Add to `claude_desktop_config.json` (Settings → Developer → Edit Config):
   "mcpServers": {
     "fluxmail": {
       "command": "fluxmail",
-      "args": ["stdio", "--member", "you@example.com"]
+      "args": ["stdio"]
     }
   }
 }
@@ -129,7 +128,7 @@ Open Settings → Plugins → MCPs → Add server, then enter:
 - Name: `Fluxmail`
 - Type: `STDIO`
 - Command to launch: `fluxmail`
-- Arguments: `stdio`, `--member`, `you@example.com`
+- Arguments: `stdio`
 
 Save, then restart the app so it picks up the change.
 
@@ -139,7 +138,7 @@ Save, then restart the app so it picks up the change.
 <summary>Codex CLI</summary>
 
 ```bash
-codex mcp add fluxmail -- fluxmail stdio --member you@example.com
+codex mcp add fluxmail -- fluxmail stdio
 ```
 
 Or in `~/.codex/config.toml`:
@@ -147,7 +146,7 @@ Or in `~/.codex/config.toml`:
 ```toml
 [mcp_servers.fluxmail]
 command = "fluxmail"
-args = ["stdio", "--member", "you@example.com"]
+args = ["stdio"]
 ```
 
 </details>
@@ -162,7 +161,7 @@ Add to `~/.cursor/mcp.json` (or `.cursor/mcp.json` in a project):
   "mcpServers": {
     "fluxmail": {
       "command": "fluxmail",
-      "args": ["stdio", "--member", "you@example.com"]
+      "args": ["stdio"]
     }
   }
 }
@@ -179,7 +178,7 @@ Add to `~/.hermes/config.yaml`, then run `/reload-mcp` (or use the dashboard at 
 mcp_servers:
   fluxmail:
     command: 'fluxmail'
-    args: ['stdio', '--member', 'you@example.com']
+    args: ['stdio']
 ```
 
 </details>
@@ -194,7 +193,7 @@ Add to `~/.gemini/settings.json`:
   "mcpServers": {
     "fluxmail": {
       "command": "fluxmail",
-      "args": ["stdio", "--member", "you@example.com"]
+      "args": ["stdio"]
     }
   }
 }
@@ -205,7 +204,7 @@ Add to `~/.gemini/settings.json`:
 <details>
 <summary>Other stdio clients</summary>
 
-Register `fluxmail` as the command with `stdio`, `--member`, and the member's email address as its arguments.
+Register `fluxmail` as the command with `stdio` as its argument.
 
 </details>
 
@@ -242,12 +241,12 @@ Fluxmail uses its built-in Google Desktop client for a local Docker setup. If yo
 ```bash
 docker compose up -d
 docker compose exec fluxmail \
-  fluxmail members add --name "Your name" --email you@example.com
+  fluxmail setup --name "Your name" --email you@example.com
 docker compose exec fluxmail \
-  fluxmail accounts add gmail --owner you@example.com
+  fluxmail accounts add gmail
 ```
 
-On local Docker, the command prints a Google consent URL and waits for the callback on `127.0.0.1:8976`. On a remote deployment with `FLUXMAIL_PUBLIC_URL` set, it prints a one-time connection link instead. Open the link in your browser, choose the Google account, and approve access. Hosted links expire after 10 minutes and do not require an API key.
+On local Docker, the command prints a Google consent URL and waits for the callback on `127.0.0.1:8976`. On a remote deployment with `FLUXMAIL_PUBLIC_URL` set, it prints a one-time connection link instead. Open the link in your browser, choose the Google account, and approve access. Hosted links expire after 10 minutes. The CLI must be logged in to create one.
 
 #### Option B: Microsoft 365 or Outlook.com
 
@@ -259,14 +258,14 @@ MICROSOFT_CLIENT_SECRET=<client-secret-value>
 FLUXMAIL_PUBLIC_URL=https://mail.example.com
 ```
 
-Start Fluxmail, create the member, and connect the mailbox:
+Start Fluxmail, initialize the instance, and connect the mailbox:
 
 ```bash
 docker compose up -d
 docker compose exec fluxmail \
-  fluxmail members add --name "Your name" --email you@example.com
+  fluxmail setup --name "Your name" --email you@example.com
 docker compose exec fluxmail \
-  fluxmail accounts add outlook --owner you@example.com
+  fluxmail accounts add outlook
 ```
 
 Open the one-time link, then continue to Microsoft and approve access. The link expires after 10 minutes.
@@ -278,11 +277,10 @@ Find your provider's IMAP and SMTP hostnames. Start the container, then pass the
 ```bash
 docker compose up -d
 docker compose exec fluxmail \
-  fluxmail members add --name "Your name" --email you@example.com
+  fluxmail setup --name "Your name" --email you@example.com
 export IMAP_PASSWORD='your-app-password'
 docker compose exec -e IMAP_PASSWORD fluxmail \
   fluxmail accounts add imap \
-  --owner you@example.com \
   --email you@example.com \
   --imap-host imap.example.com \
   --smtp-host smtp.example.com \
@@ -297,7 +295,7 @@ Create a key for the MCP client. Fluxmail displays the key once, so copy it when
 
 ```bash
 docker compose exec fluxmail \
-  fluxmail apikey create --name laptop --member you@example.com
+  fluxmail apikey create --name laptop
 ```
 
 The key can reach mailboxes available to that member. Add `--account <account-id>` one or more times to narrow it further. New API keys use the `full` profile by default. See [Limit what an MCP client can do](/docs/permissions) to choose a narrower profile or change the key later.
@@ -436,16 +434,14 @@ The ChatGPT / Codex app entry above configures Codex inside the ChatGPT app. Dev
 
 ChatGPT cannot connect directly to `localhost`. For a local Docker server, use OpenAI's [Secure MCP Tunnel](https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt-beta#h_8e76ef4c26) instead of exposing the server to the public internet. You can also deploy Fluxmail at a public HTTPS URL.
 
-ChatGPT connectors support OAuth or no authentication; they cannot send Fluxmail's static bearer API key. Until Fluxmail supports MCP OAuth, run it with `FLUXMAIL_AUTH=none` only behind the secure tunnel or a network boundary you control. Then enable developer mode (Settings → Apps → Advanced Settings) and create an app pointing at your `/mcp` URL.
-
-MCP OAuth support, which would remove this limitation, is on the roadmap.
+ChatGPT connectors currently support OAuth or no authentication, so they cannot send Fluxmail's API key. Fluxmail does not offer an unauthenticated MCP mode. ChatGPT developer-mode apps are not compatible until Fluxmail supports MCP OAuth.
 
 </details>
 
 <details>
 <summary>Other HTTP clients</summary>
 
-Point the client at `http://localhost:8977/mcp` and send `Authorization: Bearer fmk_...`. Clients that cannot set an authorization header are not compatible with API-key mode; use a trusted network with `FLUXMAIL_AUTH=none` instead.
+Point the client at `http://localhost:8977/mcp` and send `Authorization: Bearer fmk_...`. Clients that cannot set an authorization header are not compatible with the HTTP MCP endpoint.
 
 </details>
 
@@ -467,4 +463,5 @@ If it returns the messages, the connection is working.
 - See [Configuration](/docs/configuration) for environment variables.
 - See [CLI reference](/docs/cli) for every `fluxmail` command.
 - See [Teams & plans](/docs/teams-and-plans) for members, shared mailboxes, and paid-plan licensing.
+- See [Authentication and instances](/docs/authentication-and-instances) for login, enrollment, remote profiles, and sessions.
 - See [Architecture](/docs/architecture) for where your data lives and how Fluxmail is built.
