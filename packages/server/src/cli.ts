@@ -47,7 +47,7 @@ import {
 } from './licensing/entitlements.js';
 import { loadInstanceId } from './licensing/refresher.js';
 import { VERSION } from './version.js';
-import type { FluxmailDb } from './storage/db.js';
+import { inspectStoreCompatibility, type FluxmailDb } from './storage/db.js';
 import type { ImapCredentials, ImapSecurity } from '@fluxmail/provider-imap';
 import {
   customPermissionPolicy,
@@ -1161,7 +1161,19 @@ export function createCliProgram(): Command {
     .action(async () => {
       const ctx = createContext();
       warnLicense(ctx.db);
-      console.log(JSON.stringify(await ctx.service.status(), null, 2));
+      console.log(
+        JSON.stringify(
+          {
+            version: VERSION,
+            dataDir: ctx.config.dataDir,
+            databasePath: ctx.config.dbPath,
+            store: inspectStoreCompatibility(ctx.config.dbPath, ctx.config.dataDir),
+            ...(await ctx.service.status()),
+          },
+          null,
+          2,
+        ),
+      );
     });
 
   return program;

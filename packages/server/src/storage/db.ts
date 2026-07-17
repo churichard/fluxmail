@@ -1,6 +1,40 @@
 import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { existsSync, mkdirSync, statSync } from 'node:fs';
+import path from 'node:path';
+import { VERSION } from '../version.js';
+
+export const CURRENT_STORE_FORMAT = 1;
+export const MIN_SUPPORTED_STORE_FORMAT = 1;
+export const MAX_SUPPORTED_STORE_FORMAT = CURRENT_STORE_FORMAT;
+export const LEGACY_STORE_FORMAT = 0;
+
+export interface StoreCompatibility {
+  engineVersion: string;
+  dataDir: string;
+  dbPath: string;
+  storeFormat: number;
+  minimumSupportedFormat: number;
+  maximumSupportedFormat: number;
+  compatible: boolean;
+  requiresMigration: boolean;
+}
+
+export class IncompatibleStoreError extends Error {
+  readonly code = 'incompatible_store';
+
+  constructor(readonly compatibility: StoreCompatibility) {
+    const action =
+      compatibility.storeFormat > compatibility.maximumSupportedFormat
+        ? 'Update this Fluxmail installation'
+        : 'Use a Fluxmail version that supports this store';
+    super(
+      `This Fluxmail data uses store format ${compatibility.storeFormat}, but Fluxmail ${compatibility.engineVersion} supports formats ${compatibility.minimumSupportedFormat} through ${compatibility.maximumSupportedFormat}. ${action} before opening ${compatibility.dataDir}. Your data was not changed.`,
+    );
+    this.name = 'IncompatibleStoreError';
+  }
+}
 
 export const members = sqliteTable(
   'members',
@@ -59,6 +93,7 @@ export const accountCredentials = sqliteTable('account_credentials', {
   /** AES-256-GCM encrypted provider-specific credentials. */
   encryptedCredentials: text('encrypted_credentials').notNull(),
   updatedAt: integer('updated_at').notNull(),
+  revision: integer('revision').notNull().default(1),
 });
 
 export const imapMessages = sqliteTable(
@@ -221,7 +256,8 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
 CREATE TABLE IF NOT EXISTS account_credentials (
   account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
   encrypted_credentials TEXT NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS imap_messages (
   id TEXT PRIMARY KEY,
@@ -328,19 +364,74 @@ function tableColumns(sqlite: Database.Database, table: string): Set<string> {
   );
 }
 
-export function openDb(dbPath: string): FluxmailDb {
-  const sqlite = new Database(dbPath);
-  sqlite.pragma('journal_mode = WAL');
-  sqlite.pragma('foreign_keys = ON');
+function readStoreFormat(sqlite: Database.Database): number {
+  return sqlite.pragma('user_version', { simple: true }) as number;
+}
+
+function compatibilityFor(dbPath: string, dataDir: string, storeFormat: number): StoreCompatibility {
+  return {
+    engineVersion: VERSION,
+    dataDir,
+    dbPath,
+    storeFormat,
+    minimumSupportedFormat: MIN_SUPPORTED_STORE_FORMAT,
+    maximumSupportedFormat: MAX_SUPPORTED_STORE_FORMAT,
+    compatible:
+      storeFormat === LEGACY_STORE_FORMAT ||
+      (storeFormat >= MIN_SUPPORTED_STORE_FORMAT && storeFormat <= MAX_SUPPORTED_STORE_FORMAT),
+    requiresMigration: storeFormat === LEGACY_STORE_FORMAT || storeFormat < CURRENT_STORE_FORMAT,
+  };
+}
+
+export function inspectStoreCompatibility(
+  dbPath: string,
+  dataDir = dbPath === ':memory:' ? ':memory:' : path.dirname(dbPath),
+): StoreCompatibility {
+  if (dbPath === ':memory:' || !existsSync(dbPath) || statSync(dbPath).size === 0) {
+    return compatibilityFor(dbPath, dataDir, LEGACY_STORE_FORMAT);
+  }
+  const sqlite = new Database(dbPath, { readonly: true, fileMustExist: true });
+  try {
+    return compatibilityFor(dbPath, dataDir, readStoreFormat(sqlite));
+  } finally {
+    sqlite.close();
+  }
+}
+
+function assertCompatible(compatibility: StoreCompatibility): void {
+  if (!compatibility.compatible) throw new IncompatibleStoreError(compatibility);
+}
+
+function backupForMigration(
+  sqlite: Database.Database,
+  dbPath: string,
+  fromFormat: number,
+  toFormat: number,
+): string | undefined {
+  if (dbPath === ':memory:' || !existsSync(dbPath) || statSync(dbPath).size === 0) return undefined;
+  const backupDir = path.join(path.dirname(dbPath), 'backups');
+  mkdirSync(backupDir, { recursive: true });
+  const stamp = new Date().toISOString().replaceAll(/[:.]/g, '-');
+  const destination = path.join(backupDir, `fluxmail-format-${fromFormat}-to-${toFormat}-${stamp}-${process.pid}.db`);
+  sqlite.exec(`VACUUM INTO '${destination.replaceAll("'", "''")}'`);
+  return destination;
+}
+
+function migrateToFormatOne(sqlite: Database.Database): void {
   sqlite.exec(BOOTSTRAP_SQL);
+  const credentialCols = tableColumns(sqlite, 'account_credentials');
+  if (!credentialCols.has('revision')) {
+    sqlite.exec('ALTER TABLE account_credentials ADD COLUMN revision INTEGER NOT NULL DEFAULT 1');
+  }
   // Keep the generic credential row in sync if an older binary updated the
   // legacy Gmail token table before this version reopened the database.
   sqlite.exec(`
-    INSERT INTO account_credentials (account_id, encrypted_credentials, updated_at)
-    SELECT account_id, encrypted_tokens, updated_at FROM oauth_tokens WHERE true
+    INSERT INTO account_credentials (account_id, encrypted_credentials, updated_at, revision)
+    SELECT account_id, encrypted_tokens, updated_at, 1 FROM oauth_tokens WHERE true
     ON CONFLICT(account_id) DO UPDATE SET
       encrypted_credentials = excluded.encrypted_credentials,
-      updated_at = excluded.updated_at
+      updated_at = excluded.updated_at,
+      revision = account_credentials.revision + 1
     WHERE excluded.updated_at > account_credentials.updated_at
   `);
   const scheduledCols = tableColumns(sqlite, 'scheduled_sends');
@@ -450,5 +541,43 @@ export function openDb(dbPath: string): FluxmailDb {
   `);
   sqlite.exec('DROP INDEX IF EXISTS accounts_provider_email_unique');
   sqlite.exec('CREATE UNIQUE INDEX IF NOT EXISTS accounts_email_unique_ci ON accounts(lower(email))');
-  return drizzle(sqlite);
+}
+
+const MIGRATIONS = [{ format: 1, run: migrateToFormatOne }] as const;
+
+export function openDb(
+  dbPath: string,
+  options: { dataDir?: string; backupBeforeMigration?: boolean } = {},
+): FluxmailDb {
+  const dataDir = options.dataDir ?? (dbPath === ':memory:' ? ':memory:' : path.dirname(dbPath));
+  const inspected = inspectStoreCompatibility(dbPath, dataDir);
+  assertCompatible(inspected);
+
+  const sqlite = new Database(dbPath);
+  try {
+    sqlite.pragma('busy_timeout = 5000');
+    sqlite.pragma('foreign_keys = ON');
+
+    if (inspected.requiresMigration && options.backupBeforeMigration !== false) {
+      backupForMigration(sqlite, dbPath, inspected.storeFormat, CURRENT_STORE_FORMAT);
+    }
+
+    const migrate = sqlite.transaction(() => {
+      let storeFormat = readStoreFormat(sqlite);
+      assertCompatible(compatibilityFor(dbPath, dataDir, storeFormat));
+      for (const migration of MIGRATIONS) {
+        if (storeFormat >= migration.format) continue;
+        migration.run(sqlite);
+        sqlite.pragma(`user_version = ${migration.format}`);
+        storeFormat = migration.format;
+      }
+      assertCompatible(compatibilityFor(dbPath, dataDir, storeFormat));
+    });
+    migrate.immediate();
+    sqlite.pragma('journal_mode = WAL');
+    return drizzle(sqlite);
+  } catch (error) {
+    sqlite.close();
+    throw error;
+  }
 }

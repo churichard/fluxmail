@@ -1,5 +1,18 @@
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { DEFAULT_LICENSE_SERVER_URL } from './licensing/client.js';
@@ -7,6 +20,8 @@ import { DEFAULT_LICENSE_SERVER_URL } from './licensing/client.js';
 export const DEFAULT_MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 export const HARD_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const BYTES_PER_MEGABYTE = 1024 * 1024;
+const CONFIG_LOCK_TIMEOUT_MS = 5_000;
+const CONFIG_LOCK_STALE_MS = 30_000;
 
 export interface ConfigReferenceEntry {
   defaultValue: string;
@@ -143,6 +158,11 @@ export interface FluxmailConfig {
   };
 }
 
+export interface FluxmailStoreLocation {
+  dataDir: string;
+  dbPath: string;
+}
+
 function unquoteEnvValue(value: string): string {
   if (value.startsWith('"') && value.endsWith('"')) {
     try {
@@ -251,17 +271,21 @@ export function setStoredConfig(dataDir: string, key: string, value: string): vo
   if (key === 'FLUXMAIL_DATA_DIR') {
     throw new Error('FLUXMAIL_DATA_DIR cannot be stored in the data dir itself; set it in your shell or a .env file');
   }
-  const stored = readStoredConfig(dataDir);
-  stored[key] = value;
-  writeStoredConfig(dataDir, stored);
+  withConfigLock(dataDir, () => {
+    const stored = readStoredConfig(dataDir);
+    stored[key] = value;
+    writeStoredConfig(dataDir, stored);
+  });
 }
 
 export function unsetStoredConfig(dataDir: string, key: string): boolean {
-  const stored = readStoredConfig(dataDir);
-  if (!(key in stored)) return false;
-  delete stored[key];
-  writeStoredConfig(dataDir, stored);
-  return true;
+  return withConfigLock(dataDir, () => {
+    const stored = readStoredConfig(dataDir);
+    if (!(key in stored)) return false;
+    delete stored[key];
+    writeStoredConfig(dataDir, stored);
+    return true;
+  });
 }
 
 export function maskStoredConfigValue(key: string, value: string): string {
@@ -271,9 +295,53 @@ export function maskStoredConfigValue(key: string, value: string): string {
 
 function writeStoredConfig(dataDir: string, values: Record<string, string>): void {
   const file = configFilePath(dataDir);
+  const temporary = path.join(dataDir, `.config.env.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
   const lines = Object.entries(values).map(([k, v]) => `${k}=${JSON.stringify(v)}`);
-  writeFileSync(file, lines.join('\n') + (lines.length ? '\n' : ''), { mode: 0o600 });
-  tryRestrictPermissions(file);
+  const descriptor = openSync(temporary, 'wx', 0o600);
+  try {
+    writeSync(descriptor, lines.join('\n') + (lines.length ? '\n' : ''), undefined, 'utf8');
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+  try {
+    renameSync(temporary, file);
+    tryRestrictPermissions(file);
+  } finally {
+    if (existsSync(temporary)) rmSync(temporary, { force: true });
+  }
+}
+
+function withConfigLock<T>(dataDir: string, callback: () => T): T {
+  mkdirSync(dataDir, { recursive: true });
+  const lockPath = path.join(dataDir, '.config.lock');
+  const startedAt = Date.now();
+  while (true) {
+    try {
+      mkdirSync(lockPath, { mode: 0o700 });
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > CONFIG_LOCK_STALE_MS) {
+          rmSync(lockPath, { recursive: true, force: true });
+          continue;
+        }
+      } catch (statError) {
+        if ((statError as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw statError;
+      }
+      if (Date.now() - startedAt >= CONFIG_LOCK_TIMEOUT_MS) {
+        throw new Error(`Timed out waiting to update ${configFilePath(dataDir)}`);
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+  try {
+    return callback();
+  } finally {
+    rmSync(lockPath, { recursive: true, force: true });
+  }
 }
 
 function decodeEncryptionKey(value: string, errorMessage: string): Buffer {
@@ -335,13 +403,28 @@ function loadEncryptionKey(dataDir: string): Buffer {
     return key;
   }
   const key = randomBytes(32);
-  writeFileSync(keyPath, key.toString('hex') + '\n', { mode: 0o600 });
-  return key;
+  try {
+    writeFileSync(keyPath, key.toString('hex') + '\n', { mode: 0o600, flag: 'wx' });
+    return key;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    tryRestrictPermissions(keyPath);
+    return decodeEncryptionKey(readFileSync(keyPath, 'utf8').trim(), `Corrupt encryption key at ${keyPath}`);
+  }
+}
+
+export function resolveStoreLocation(): FluxmailStoreLocation {
+  const dataDir = resolveDataDir();
+  const databasePath = readEnvironment('FLUXMAIL_DB_PATH') ?? readStoredConfig(dataDir).FLUXMAIL_DB_PATH;
+  return {
+    dataDir,
+    dbPath: databasePath ? expandHome(databasePath) : path.join(dataDir, 'fluxmail.db'),
+  };
 }
 
 export function loadConfig(): FluxmailConfig {
   // Precedence: shell env > cwd .env.local > cwd .env > data-dir config.env.
-  const dataDir = resolveDataDir();
+  const { dataDir, dbPath } = resolveStoreLocation();
   const licenseKeyFromEnvironment = readEnvironment('FLUXMAIL_LICENSE_KEY') !== undefined;
   applyStoredConfig(dataDir);
 
@@ -349,7 +432,6 @@ export function loadConfig(): FluxmailConfig {
   const oauthPort = readPort('FLUXMAIL_OAUTH_PORT', 8976);
   const publicUrlConfigured = readEnvironment('FLUXMAIL_PUBLIC_URL') !== undefined;
   const publicUrl = readPublicUrl(port);
-  const databasePath = readEnvironment('FLUXMAIL_DB_PATH');
   const authModeEnv = readEnvironment('FLUXMAIL_AUTH') ?? 'apikey';
   if (authModeEnv !== 'apikey' && authModeEnv !== 'none') {
     throw new Error(`FLUXMAIL_AUTH must be "apikey" or "none", got "${authModeEnv}"`);
@@ -357,7 +439,7 @@ export function loadConfig(): FluxmailConfig {
 
   const config: FluxmailConfig = {
     dataDir,
-    dbPath: databasePath ? expandHome(databasePath) : path.join(dataDir, 'fluxmail.db'),
+    dbPath,
     encryptionKey: loadEncryptionKey(dataDir),
     port,
     publicUrl,

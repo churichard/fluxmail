@@ -9,7 +9,7 @@ import { ImapProvider } from '@fluxmail/provider-imap';
 import { AccountRegistry } from '../src/accounts/registry.js';
 import { accountCredentials, accounts, members, oauthTokens, openDb } from '../src/storage/db.js';
 import { addMember } from '../src/storage/members.js';
-import { decryptString } from '../src/storage/crypto.js';
+import { decryptString, encryptString } from '../src/storage/crypto.js';
 import type { FluxmailConfig } from '../src/config.js';
 
 function testConfig(): FluxmailConfig {
@@ -67,7 +67,10 @@ describe('AccountRegistry', () => {
     const row = db.select().from(accountCredentials).get();
     expect(row?.encryptedCredentials).not.toContain('rt_secret');
     expect(JSON.parse(decryptString(config.encryptionKey, row!.encryptedCredentials)).refresh_token).toBe('rt_secret');
-    expect(db.select().from(oauthTokens).get()?.encryptedTokens).toBe(row?.encryptedCredentials);
+    expect(db.select().from(oauthTokens).get()).toMatchObject({
+      encryptedTokens: row?.encryptedCredentials,
+      updatedAt: row?.updatedAt,
+    });
   });
 
   it('enforces the Personal-plan mailbox limit', () => {
@@ -171,6 +174,37 @@ describe('AccountRegistry', () => {
       decryptString(config.encryptionKey, db.select().from(accountCredentials).get()!.encryptedCredentials),
     );
     expect(stored).toMatchObject({ accessToken: 'fresh-access', refreshToken: 'fresh-refresh' });
+  });
+
+  it('does not let a stale token refresh overwrite newer credentials', () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), 'fluxmail-refresh-race-'));
+    const config = {
+      ...testConfig(),
+      dataDir,
+      dbPath: path.join(dataDir, 'fluxmail.db'),
+    };
+    const firstDb = openDb(config.dbPath);
+    const firstRegistry = new AccountRegistry(firstDb, config);
+    const owner = addMember(firstDb, { name: 'Owner' });
+    const account = firstRegistry.addGmailAccount('me@example.com', tokens, undefined, owner.id);
+    const secondDb = openDb(config.dbPath);
+    const secondRegistry = new AccountRegistry(secondDb, config);
+    const firstProvider = firstRegistry.getProvider(account.id) as unknown as {
+      auth: { emit(event: string, credentials: object): void };
+    };
+    const secondProvider = secondRegistry.getProvider(account.id) as unknown as {
+      auth: { emit(event: string, credentials: object): void };
+    };
+
+    firstProvider.auth.emit('tokens', { access_token: 'fresh-access-1', refresh_token: 'fresh-refresh-1' });
+    secondProvider.auth.emit('tokens', { access_token: 'fresh-access-2', refresh_token: 'fresh-refresh-2' });
+
+    const row = firstDb.select().from(accountCredentials).get()!;
+    expect(row.revision).toBe(2);
+    expect(JSON.parse(decryptString(config.encryptionKey, row.encryptedCredentials))).toMatchObject({
+      access_token: 'fresh-access-1',
+      refresh_token: 'fresh-refresh-1',
+    });
   });
 
   it('updates IMAP folder configuration and evicts the cached provider', () => {
@@ -438,6 +472,23 @@ describe('AccountRegistry', () => {
     secondRegistry.addGmailAccount('me@example.com', { ...tokens, refresh_token: 'rt_new' });
 
     expect(firstRegistry.getProvider(account.id)).not.toBe(cachedProvider);
+  });
+
+  it('reloads credentials written by a CLI version without revisions', () => {
+    const config = testConfig();
+    const db = openDb(':memory:');
+    const registry = new AccountRegistry(db, config);
+    const owner = addMember(db, { name: 'Owner' });
+    const account = registry.addGmailAccount('me@example.com', tokens, undefined, owner.id);
+    const cachedProvider = registry.getProvider(account.id);
+    const legacyCredentials = encryptString(
+      config.encryptionKey,
+      JSON.stringify({ ...tokens, refresh_token: 'legacy-refresh' }),
+    );
+
+    db.update(accountCredentials).set({ encryptedCredentials: legacyCredentials, updatedAt: Date.now() }).run();
+
+    expect(registry.getProvider(account.id)).not.toBe(cachedProvider);
   });
 
   it('resolveAccountId defaults to the sole account and errors when ambiguous or empty', () => {

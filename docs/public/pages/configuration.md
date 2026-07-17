@@ -14,6 +14,12 @@ Every setting is an environment variable, and there are three places to put one.
 
 For a personal setup, `fluxmail config set` is the simplest way to save OAuth application settings. Gmail needs `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. A local Outlook connection needs `MICROSOFT_CLIENT_ID`; hosted Outlook connections also need `MICROSOFT_CLIENT_SECRET`. IMAP accounts do not use these settings. Use `fluxmail config list` to review stored settings (secret values are masked) and `fluxmail config unset <KEY>` to remove one.
 
+Fluxmail Desktop and the npm CLI both use `~/.fluxmail` by default. They share accounts, encrypted credentials, server configuration, members, API keys, licensing, and the telemetry setting. They do not need matching release numbers, but both versions must support the store format in that directory. An incompatible version exits before changing the store.
+
+Store format 1 is the compatibility baseline. CLI releases that predate the format check can still use format 1, but you must update them before a later Fluxmail release moves the store to a newer format.
+
+Set `FLUXMAIL_DATA_DIR` to use a separate installation. `FLUXMAIL_DB_PATH` changes only the database path, so the encryption key and saved configuration still come from the data directory. Shell variables and working-directory `.env` files can also make one CLI session behave differently from Desktop.
+
 <!-- BEGIN GENERATED:configuration -->
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
