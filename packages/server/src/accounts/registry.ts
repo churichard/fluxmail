@@ -221,27 +221,28 @@ export class AccountRegistry {
     const encryptedCredentials = encryptString(this.config.encryptionKey, JSON.stringify(tokens));
     const updatedAt = Date.now();
     const revision = expected.revision + 1;
-    const result = this.db
-      .update(accountCredentials)
-      .set({ encryptedCredentials, updatedAt, revision })
-      .where(
-        and(
-          eq(accountCredentials.accountId, accountId),
-          eq(accountCredentials.revision, expected.revision),
-          eq(accountCredentials.encryptedCredentials, expected.encryptedCredentials),
-        ),
-      )
-      .run();
-    if (result.changes === 0) return undefined;
-    this.db
-      .insert(oauthTokens)
-      .values({ accountId, encryptedTokens: encryptedCredentials, updatedAt })
-      .onConflictDoUpdate({
-        target: oauthTokens.accountId,
-        set: { encryptedTokens: encryptedCredentials, updatedAt },
-      })
-      .run();
-    return { encryptedCredentials, revision, updatedAt };
+    return this.db.transaction((tx) => {
+      const result = tx
+        .update(accountCredentials)
+        .set({ encryptedCredentials, updatedAt, revision })
+        .where(
+          and(
+            eq(accountCredentials.accountId, accountId),
+            eq(accountCredentials.revision, expected.revision),
+            eq(accountCredentials.encryptedCredentials, expected.encryptedCredentials),
+          ),
+        )
+        .run();
+      if (result.changes === 0) return undefined;
+      tx.insert(oauthTokens)
+        .values({ accountId, encryptedTokens: encryptedCredentials, updatedAt })
+        .onConflictDoUpdate({
+          target: oauthTokens.accountId,
+          set: { encryptedTokens: encryptedCredentials, updatedAt },
+        })
+        .run();
+      return { encryptedCredentials, revision, updatedAt };
+    });
   }
 
   private buildGmailProvider(

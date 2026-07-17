@@ -207,6 +207,39 @@ describe('AccountRegistry', () => {
     });
   });
 
+  it('rolls back refreshed credentials when the legacy token mirror cannot be updated', () => {
+    const config = testConfig();
+    const db = openDb(':memory:');
+    const registry = new AccountRegistry(db, config);
+    const owner = addMember(db, { name: 'Owner' });
+    const account = registry.addGmailAccount('me@example.com', tokens, undefined, owner.id);
+    const provider = registry.getProvider(account.id) as unknown as {
+      auth: { emit(event: string, credentials: object): void };
+    };
+    const before = db.select().from(accountCredentials).get()!;
+    const sqlite = (db as unknown as { $client: { exec(sql: string): void } }).$client;
+    sqlite.exec(`
+      CREATE TRIGGER reject_legacy_token_update
+      BEFORE UPDATE ON oauth_tokens
+      BEGIN
+        SELECT RAISE(ABORT, 'legacy token write failed');
+      END;
+    `);
+
+    expect(() =>
+      provider.auth.emit('tokens', {
+        access_token: 'fresh-access',
+        refresh_token: 'fresh-refresh',
+      }),
+    ).toThrow(/legacy token write failed/);
+
+    expect(db.select().from(accountCredentials).get()).toEqual(before);
+    expect(db.select().from(oauthTokens).get()).toMatchObject({
+      encryptedTokens: before.encryptedCredentials,
+      updatedAt: before.updatedAt,
+    });
+  });
+
   it('updates IMAP folder configuration and evicts the cached provider', () => {
     const config = testConfig();
     const db = openDb(':memory:');
