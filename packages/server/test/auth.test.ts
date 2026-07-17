@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { EmailError } from '@fluxmail/core';
 import type { FluxmailConfig } from '../src/config.js';
 import { AccountRegistry } from '../src/accounts/registry.js';
 import { EmailService } from '../src/service/emailService.js';
@@ -556,5 +557,57 @@ describe('member authentication', () => {
     });
     expect(folders.status).toBe(200);
     expect(registry.loadImapCredentials(account.id).folderOverrides).toEqual({ sent: 'Sent Items' });
+  });
+
+  it('returns 503 for provider failures on member-managed IMAP routes', async () => {
+    const { app, db, registry } = fixture();
+    const setup = await setupInitialAdmin(db, {
+      name: 'Mailbox Owner',
+      email: 'owner@example.com',
+      password: strongPassword,
+    });
+    const headers = { authorization: `Bearer ${setup.session.token}`, 'content-type': 'application/json' };
+    vi.spyOn(registry, 'testImapCredentials').mockRejectedValueOnce(
+      new EmailError('provider_unavailable', 'The IMAP server is unavailable.'),
+    );
+
+    const connection = await app.request('/api/v1/accounts/connections', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        provider: 'imap',
+        email: 'new@example.com',
+        imap: { host: 'imap.example.com', port: 993, security: 'tls', user: 'new', password: 'secret' },
+        smtp: { host: 'smtp.example.com', port: 587, security: 'starttls', user: 'new', password: 'secret' },
+      }),
+    });
+    expect(connection.status).toBe(503);
+    await expect(connection.json()).resolves.toEqual({
+      error: { code: 'provider_unavailable', message: 'The IMAP server is unavailable.' },
+    });
+
+    const account = registry.addImapAccount(
+      'owner@example.com',
+      {
+        imap: { host: 'imap.example.com', port: 993, security: 'tls', user: 'owner', password: 'secret' },
+        smtp: { host: 'smtp.example.com', port: 587, security: 'starttls', user: 'owner', password: 'secret' },
+        saveSent: true,
+        folderOverrides: {},
+      },
+      undefined,
+      setup.member.id,
+    );
+    vi.spyOn(registry, 'testImapFolderOverrides').mockRejectedValueOnce(
+      new EmailError('provider_unavailable', 'The IMAP server is unavailable.'),
+    );
+    const folders = await app.request(`/api/v1/accounts/${account.id}/imap/folders`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ sent: 'Sent Items' }),
+    });
+    expect(folders.status).toBe(503);
+    await expect(folders.json()).resolves.toEqual({
+      error: { code: 'provider_unavailable', message: 'The IMAP server is unavailable.' },
+    });
   });
 });

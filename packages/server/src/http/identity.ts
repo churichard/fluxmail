@@ -85,6 +85,10 @@ const responses = {
   413: { content: { 'application/json': { schema: genericError } }, description: 'Request body too large' },
   429: { content: { 'application/json': { schema: genericError } }, description: 'Too many attempts' },
 } as const;
+const providerResponses = {
+  422: { content: { 'application/json': { schema: genericError } }, description: 'Unsupported capability' },
+  503: { content: { 'application/json': { schema: genericError } }, description: 'Provider unavailable' },
+} as const;
 
 const loginBody = z
   .object({ email: z.string().email(), password: z.string(), deviceName: z.string().trim().min(1).max(200) })
@@ -157,7 +161,9 @@ function jsonError(c: any, error: unknown): Response {
       entitlement_exceeded: 403,
       not_found: 404,
       auth_expired: 409,
+      unsupported_capability: 422,
       rate_limited: 429,
+      provider_unavailable: 503,
     };
     return c.json({ error: { code: error.code, message: error.message } }, statuses[error.code] ?? 500);
   }
@@ -511,7 +517,7 @@ export function registerIdentityRoutes(typedApp: OpenAPIHono<any>, deps: RestApi
       },
     },
     ...sessionRoute,
-    responses: { ...responses, 201: responses[200] },
+    responses: { ...responses, ...providerResponses, 201: responses[200] },
   });
   app.openapi(connectionRoute, async (c) => {
     const principal = c.get('restAuth') as Principal;
@@ -617,7 +623,7 @@ export function registerIdentityRoutes(typedApp: OpenAPIHono<any>, deps: RestApi
       body: { required: true, content: { 'application/json': { schema: folderPatch } } },
     },
     ...sessionRoute,
-    responses,
+    responses: { ...responses, ...providerResponses },
   });
   app.openapi(configureOwnFoldersRoute, async (c) => {
     const principal = c.get('restAuth') as Principal;

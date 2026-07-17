@@ -223,9 +223,7 @@ If it returns the messages, the connection is working.
 Create an API key and start the local HTTP server:
 
 ```bash
-fluxmail apikey create \
-  --name local-app \
-  --member you@example.com
+fluxmail apikey create --name local-app
 
 fluxmail serve
 ```

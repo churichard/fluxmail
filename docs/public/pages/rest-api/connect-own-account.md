@@ -191,7 +191,9 @@ Content type: `application/json`
 | `404` | Not found | `application/json` |
 | `409` | Conflict | `application/json` |
 | `413` | Request body too large | `application/json` |
+| `422` | Unsupported capability | `application/json` |
 | `429` | Too many attempts | `application/json` |
+| `503` | Provider unavailable | `application/json` |
 
 ### 200 response
 
