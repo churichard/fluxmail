@@ -10,6 +10,7 @@ import { accountCredentials, accountMemberGrants, accounts, oauthTokens, type Fl
 import { decryptString, encryptString } from '../storage/crypto.js';
 import { assertAccountLimit, getEntitlements } from '../licensing/entitlements.js';
 import { getMember } from '../storage/members.js';
+import { DEFAULT_GOOGLE_CLIENT_ID } from './defaultGoogleOAuth.js';
 import { requireGoogleConfig } from './googleAuth.js';
 import { SqliteImapStateStore } from '../storage/imapState.js';
 import { refreshMicrosoftCredentials, requireMicrosoftConfig, type MicrosoftCredentials } from './microsoftAuth.js';
@@ -159,13 +160,7 @@ export class AccountRegistry {
     const cached = this.providers.get(accountId);
     if (cached?.encryptedCredentials === credentialRow.encryptedCredentials) return cached.provider;
 
-    let encryptedCredentials = credentialRow.encryptedCredentials;
-    let stored = JSON.parse(decryptString(this.config.encryptionKey, encryptedCredentials)) as unknown;
-    if (account.provider === 'gmail') {
-      const migrated = this.ensureGmailOAuthClient(accountId, stored as StoredGmailCredentials);
-      stored = migrated.credentials;
-      encryptedCredentials = migrated.encryptedCredentials;
-    }
+    const stored = JSON.parse(decryptString(this.config.encryptionKey, credentialRow.encryptedCredentials)) as unknown;
     const provider =
       account.provider === 'gmail'
         ? this.buildGmailProvider(accountId, account.email, stored as StoredGmailCredentials, account.displayName)
@@ -182,7 +177,7 @@ export class AccountRegistry {
             : undefined;
     if (!provider)
       throw new EmailError('unsupported_capability', `Provider "${account.provider}" is not supported yet`);
-    this.providers.set(accountId, { provider, encryptedCredentials });
+    this.providers.set(accountId, { provider, encryptedCredentials: credentialRow.encryptedCredentials });
     return provider;
   }
 
@@ -218,20 +213,6 @@ export class AccountRegistry {
     return { ...tokens, fluxmailOAuthClient: { clientId, clientSecret } };
   }
 
-  private ensureGmailOAuthClient(
-    accountId: string,
-    stored: StoredGmailCredentials,
-  ): { credentials: StoredGmailCredentials; encryptedCredentials: string } {
-    if (stored.fluxmailOAuthClient?.clientId && stored.fluxmailOAuthClient.clientSecret) {
-      return {
-        credentials: stored,
-        encryptedCredentials: this.loadCredentialRow(accountId).encryptedCredentials,
-      };
-    }
-    const credentials = this.gmailCredentials(stored);
-    return { credentials, encryptedCredentials: this.writeTokens(this.db, accountId, credentials) };
-  }
-
   private writeTokens(db: Pick<FluxmailDb, 'insert'>, accountId: string, tokens: unknown): string {
     const encrypted = this.writeCredentials(db, accountId, tokens);
     const updatedAt = Date.now();
@@ -251,7 +232,15 @@ export class AccountRegistry {
     stored: StoredGmailCredentials,
     displayName?: string,
   ): EmailProvider {
-    const { clientId, clientSecret } = stored.fluxmailOAuthClient ?? requireGoogleConfig(this.config);
+    const storedClient = stored.fluxmailOAuthClient;
+    const configuredClient = storedClient ?? requireGoogleConfig(this.config);
+    if (!storedClient && configuredClient.clientId === DEFAULT_GOOGLE_CLIENT_ID) {
+      throw new EmailError(
+        'auth_expired',
+        'This Gmail account was connected with a custom Google OAuth app. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to the app that connected it, or reconnect the account.',
+      );
+    }
+    const { clientId, clientSecret } = configuredClient;
     const auth = new OAuth2Client({ clientId, clientSecret });
     const tokens = { ...stored };
     delete tokens.fluxmailOAuthClient;
