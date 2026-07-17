@@ -47,7 +47,7 @@ import {
 } from './licensing/entitlements.js';
 import { loadInstanceId } from './licensing/refresher.js';
 import { VERSION } from './version.js';
-import type { FluxmailDb } from './storage/db.js';
+import { inspectStoreCompatibility, type FluxmailDb } from './storage/db.js';
 import type { ImapCredentials, ImapSecurity } from '@fluxmail/provider-imap';
 import {
   customPermissionPolicy,
@@ -1213,11 +1213,24 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
 
   program
     .command('status')
-    .description('Show accounts, members, entitlements, and provider availability')
+    .description('Show engine, store, account, member, entitlement, and provider status')
     .action(async () => {
       const ctx = createContext();
       warnLicense(ctx.db);
-      console.log(JSON.stringify(await ctx.service.status(), null, 2));
+      const serviceStatus = await ctx.service.status();
+      console.log(
+        JSON.stringify(
+          {
+            ...serviceStatus,
+            version: VERSION,
+            dataDir: ctx.config.dataDir,
+            databasePath: ctx.config.dbPath,
+            store: inspectStoreCompatibility(ctx.config.dbPath, ctx.config.dataDir),
+          },
+          null,
+          2,
+        ),
+      );
     });
 
   return program;

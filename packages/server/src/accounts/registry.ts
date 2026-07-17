@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { OAuth2Client, type Credentials } from 'google-auth-library';
 import { EmailError, type Account, type AccountSharingMode, type EmailProvider, type Provider } from '@fluxmail/core';
 import { GmailProvider, GMAIL_CAPABILITIES } from '@fluxmail/provider-gmail';
@@ -26,8 +26,14 @@ interface StoredGmailCredentials extends Credentials {
   };
 }
 
+interface CredentialState {
+  encryptedCredentials: string;
+  revision: number;
+  updatedAt: number;
+}
+
 export class AccountRegistry {
-  private readonly providers = new Map<string, { provider: EmailProvider; encryptedCredentials: string }>();
+  private readonly providers = new Map<string, { provider: EmailProvider } & CredentialState>();
 
   constructor(
     private readonly db: FluxmailDb,
@@ -148,22 +154,26 @@ export class AccountRegistry {
 
   getProvider(accountId: string): EmailProvider {
     const account = this.getAccount(accountId);
-    const credentialRow = this.loadCredentialRow(accountId);
+    let credentialState = this.loadCredentialRow(accountId);
     const cached = this.providers.get(accountId);
-    if (cached?.encryptedCredentials === credentialRow.encryptedCredentials) return cached.provider;
+    if (
+      cached?.revision === credentialState.revision &&
+      cached.encryptedCredentials === credentialState.encryptedCredentials
+    ) {
+      return cached.provider;
+    }
 
-    let encryptedCredentials = credentialRow.encryptedCredentials;
-    let stored = JSON.parse(decryptString(this.config.encryptionKey, encryptedCredentials)) as unknown;
+    let stored = this.decryptCredentials(credentialState) as unknown;
     if (account.provider === 'gmail') {
-      const migrated = this.ensureGmailOAuthClient(accountId, stored as StoredGmailCredentials);
+      const migrated = this.ensureGmailOAuthClient(accountId, credentialState, stored as StoredGmailCredentials);
       stored = migrated.credentials;
-      encryptedCredentials = migrated.encryptedCredentials;
+      credentialState = migrated.state;
     }
     const provider =
       account.provider === 'gmail'
-        ? this.buildGmailProvider(accountId, account.email, stored as StoredGmailCredentials, account.displayName)
+        ? this.buildGmailProvider(accountId, account.email, credentialState, account.displayName)
         : account.provider === 'outlook'
-          ? this.buildOutlookProvider(accountId, stored as MicrosoftCredentials)
+          ? this.buildOutlookProvider(accountId, credentialState)
           : account.provider === 'imap'
             ? new ImapProvider({
                 accountId,
@@ -175,35 +185,41 @@ export class AccountRegistry {
             : undefined;
     if (!provider)
       throw new EmailError('unsupported_capability', `Provider "${account.provider}" is not supported yet`);
-    this.providers.set(accountId, { provider, encryptedCredentials });
+    this.providers.set(accountId, { provider, ...credentialState });
     return provider;
   }
 
-  private loadCredentialRow(accountId: string): { encryptedCredentials: string } {
+  private loadCredentialRow(accountId: string): CredentialState {
     const row = this.db.select().from(accountCredentials).where(eq(accountCredentials.accountId, accountId)).get();
     if (!row) throw new EmailError('auth_expired', `No stored credentials for account ${accountId}`);
     return row;
   }
 
-  private loadTokens(accountId: string): Credentials {
-    const row = this.loadCredentialRow(accountId);
-    return JSON.parse(decryptString(this.config.encryptionKey, row.encryptedCredentials)) as Credentials;
+  private decryptCredentials(state: CredentialState): unknown {
+    return JSON.parse(decryptString(this.config.encryptionKey, state.encryptedCredentials)) as unknown;
   }
 
-  private writeCredentials(db: Pick<FluxmailDb, 'insert'>, accountId: string, credentials: unknown): string {
-    const encrypted = encryptString(this.config.encryptionKey, JSON.stringify(credentials));
-    db.insert(accountCredentials)
-      .values({ accountId, encryptedCredentials: encrypted, updatedAt: Date.now() })
+  private writeCredentials(db: Pick<FluxmailDb, 'insert'>, accountId: string, credentials: unknown): CredentialState {
+    const encryptedCredentials = encryptString(this.config.encryptionKey, JSON.stringify(credentials));
+    const updatedAt = Date.now();
+    const row = db
+      .insert(accountCredentials)
+      .values({ accountId, encryptedCredentials, updatedAt, revision: 1 })
       .onConflictDoUpdate({
         target: accountCredentials.accountId,
-        set: { encryptedCredentials: encrypted, updatedAt: Date.now() },
+        set: {
+          encryptedCredentials,
+          updatedAt,
+          revision: sql`${accountCredentials.revision} + 1`,
+        },
       })
-      .run();
-    return encrypted;
-  }
-
-  private saveTokens(accountId: string, tokens: Credentials): string {
-    return this.writeTokens(this.db, accountId, tokens);
+      .returning({
+        encryptedCredentials: accountCredentials.encryptedCredentials,
+        revision: accountCredentials.revision,
+        updatedAt: accountCredentials.updatedAt,
+      })
+      .get();
+    return row;
   }
 
   private gmailCredentials(tokens: Credentials): StoredGmailCredentials {
@@ -213,42 +229,93 @@ export class AccountRegistry {
 
   private ensureGmailOAuthClient(
     accountId: string,
+    initialState: CredentialState,
     stored: StoredGmailCredentials,
-  ): { credentials: StoredGmailCredentials; encryptedCredentials: string } {
-    if (stored.fluxmailOAuthClient?.clientId && stored.fluxmailOAuthClient.clientSecret) {
-      return {
-        credentials: stored,
-        encryptedCredentials: this.loadCredentialRow(accountId).encryptedCredentials,
-      };
+  ): { credentials: StoredGmailCredentials; state: CredentialState } {
+    let credentials = stored;
+    let state = initialState;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      if (credentials.fluxmailOAuthClient?.clientId && credentials.fluxmailOAuthClient.clientSecret) {
+        return { credentials, state };
+      }
+      const migrated = this.gmailCredentials(credentials);
+      const saved = this.writeTokensIfCurrent(accountId, migrated, state);
+      if (saved) return { credentials: migrated, state: saved };
+      state = this.loadCredentialRow(accountId);
+      credentials = this.decryptCredentials(state) as StoredGmailCredentials;
     }
-    const credentials = this.gmailCredentials(stored);
-    return { credentials, encryptedCredentials: this.writeTokens(this.db, accountId, credentials) };
+    throw new Error(`Credentials for account ${accountId} changed too often to add OAuth client settings`);
   }
 
-  private writeTokens(db: Pick<FluxmailDb, 'insert'>, accountId: string, tokens: unknown): string {
-    const encrypted = this.writeCredentials(db, accountId, tokens);
-    const updatedAt = Date.now();
+  private writeTokenRows(db: Pick<FluxmailDb, 'insert'>, accountId: string, tokens: unknown): CredentialState {
+    const state = this.writeCredentials(db, accountId, tokens);
     db.insert(oauthTokens)
-      .values({ accountId, encryptedTokens: encrypted, updatedAt })
+      .values({ accountId, encryptedTokens: state.encryptedCredentials, updatedAt: state.updatedAt })
       .onConflictDoUpdate({
         target: oauthTokens.accountId,
-        set: { encryptedTokens: encrypted, updatedAt },
+        set: { encryptedTokens: state.encryptedCredentials, updatedAt: state.updatedAt },
       })
       .run();
-    return encrypted;
+    return state;
+  }
+
+  private writeTokensIfCurrent(
+    accountId: string,
+    tokens: unknown,
+    expected: CredentialState,
+  ): CredentialState | undefined {
+    const encryptedCredentials = encryptString(this.config.encryptionKey, JSON.stringify(tokens));
+    const updatedAt = Date.now();
+    const revision = expected.revision + 1;
+    return this.db.transaction((tx) => {
+      const result = tx
+        .update(accountCredentials)
+        .set({ encryptedCredentials, updatedAt, revision })
+        .where(
+          and(
+            eq(accountCredentials.accountId, accountId),
+            eq(accountCredentials.revision, expected.revision),
+            eq(accountCredentials.encryptedCredentials, expected.encryptedCredentials),
+          ),
+        )
+        .run();
+      if (result.changes === 0) return undefined;
+      tx.insert(oauthTokens)
+        .values({ accountId, encryptedTokens: encryptedCredentials, updatedAt })
+        .onConflictDoUpdate({
+          target: oauthTokens.accountId,
+          set: { encryptedTokens: encryptedCredentials, updatedAt },
+        })
+        .run();
+      return { encryptedCredentials, revision, updatedAt };
+    });
+  }
+
+  private updateCachedProvider(accountId: string, provider: EmailProvider, state: CredentialState): void {
+    const cached = this.providers.get(accountId);
+    if (!cached || cached.provider !== provider) return;
+    cached.encryptedCredentials = state.encryptedCredentials;
+    cached.revision = state.revision;
+    cached.updatedAt = state.updatedAt;
+  }
+
+  private gmailTokens(credentials: StoredGmailCredentials): Credentials {
+    const tokens = { ...credentials };
+    delete tokens.fluxmailOAuthClient;
+    return tokens;
   }
 
   private buildGmailProvider(
     accountId: string,
     email: string,
-    stored: StoredGmailCredentials,
+    initialState: CredentialState,
     displayName?: string,
   ): EmailProvider {
+    let credentialState = initialState;
+    const stored = this.decryptCredentials(credentialState) as StoredGmailCredentials;
     const { clientId, clientSecret } = stored.fluxmailOAuthClient ?? requireGoogleConfig(this.config);
     const auth = new OAuth2Client({ clientId, clientSecret });
-    const tokens = { ...stored };
-    delete tokens.fluxmailOAuthClient;
-    auth.setCredentials(tokens);
+    auth.setCredentials(this.gmailTokens(stored));
     const provider = new GmailProvider({
       accountId,
       email,
@@ -258,19 +325,32 @@ export class AccountRegistry {
     // google-auth-library refreshes access tokens transparently; persist them so
     // restarts don't need a refresh round-trip (and rotated refresh tokens survive).
     auth.on('tokens', (fresh) => {
-      const encryptedCredentials = this.saveTokens(accountId, {
-        ...(this.loadTokens(accountId) as StoredGmailCredentials),
-        ...fresh,
-      });
-      const cached = this.providers.get(accountId);
-      if (cached?.provider === provider) cached.encryptedCredentials = encryptedCredentials;
+      const current = this.decryptCredentials(credentialState) as StoredGmailCredentials;
+      const saved = this.writeTokensIfCurrent(accountId, { ...current, ...fresh }, credentialState);
+      if (saved) {
+        credentialState = saved;
+        this.updateCachedProvider(accountId, provider, credentialState);
+        return;
+      }
+
+      const latestState = this.loadCredentialRow(accountId);
+      const latest = this.decryptCredentials(latestState) as StoredGmailCredentials;
+      const latestClient = latest.fluxmailOAuthClient ?? requireGoogleConfig(this.config);
+      if (latestClient.clientId !== clientId || latestClient.clientSecret !== clientSecret) {
+        if (this.providers.get(accountId)?.provider === provider) this.providers.delete(accountId);
+        return;
+      }
+      credentialState = latestState;
+      auth.setCredentials(this.gmailTokens(latest));
+      this.updateCachedProvider(accountId, provider, credentialState);
     });
     return provider;
   }
 
-  private buildOutlookProvider(accountId: string, stored: MicrosoftCredentials): EmailProvider {
+  private buildOutlookProvider(accountId: string, initialState: CredentialState): EmailProvider {
     requireMicrosoftConfig(this.config);
-    let credentials = stored;
+    let credentialState = initialState;
+    let credentials = this.decryptCredentials(credentialState) as MicrosoftCredentials;
     let refresh: Promise<string> | undefined;
     const provider = new OutlookProvider({
       accountId,
@@ -281,10 +361,11 @@ export class AccountRegistry {
           refresh = refreshMicrosoftCredentials(this.config, credentials)
             .then((fresh) => {
               credentials = fresh;
-              const encryptedCredentials = this.writeTokens(this.db, accountId, fresh);
-              const cached = this.providers.get(accountId);
-              if (cached?.provider === provider) cached.encryptedCredentials = encryptedCredentials;
-              return fresh.accessToken;
+              const saved = this.writeTokensIfCurrent(accountId, fresh, credentialState);
+              credentialState = saved ?? this.loadCredentialRow(accountId);
+              if (!saved) credentials = this.decryptCredentials(credentialState) as MicrosoftCredentials;
+              this.updateCachedProvider(accountId, provider, credentialState);
+              return credentials.accessToken;
             })
             .finally(() => {
               refresh = undefined;
@@ -317,7 +398,7 @@ export class AccountRegistry {
       // Re-authenticating an existing account: refresh tokens, clear error
       // state. Ownership is untouched; reassign with assignAccountMember.
       this.db.transaction((tx) => {
-        this.writeTokens(tx, duplicate.id, this.gmailCredentials(tokens));
+        this.writeTokenRows(tx, duplicate.id, this.gmailCredentials(tokens));
         tx.update(accounts)
           .set({ status: 'active', ...(displayName ? { displayName } : {}) })
           .where(eq(accounts.id, duplicate.id))
@@ -346,7 +427,7 @@ export class AccountRegistry {
           sharingMode: this.normalizeAccess(memberId, access).sharingMode,
         })
         .run();
-      this.writeTokens(tx, id, this.gmailCredentials(tokens));
+      this.writeTokenRows(tx, id, this.gmailCredentials(tokens));
       this.writeAccess(tx, id, memberId, access);
     });
     return this.getAccount(id);
@@ -376,7 +457,7 @@ export class AccountRegistry {
         throw new EmailError('invalid_request', `Account ${duplicate.id} does not match Outlook mailbox ${email}.`);
       }
       this.db.transaction((tx) => {
-        this.writeTokens(tx, duplicate.id, credentials);
+        this.writeTokenRows(tx, duplicate.id, credentials);
         tx.update(accounts)
           .set({ status: 'active', ...(displayName ? { displayName } : {}) })
           .where(eq(accounts.id, duplicate.id))
@@ -403,7 +484,7 @@ export class AccountRegistry {
           sharingMode: this.normalizeAccess(memberId, access).sharingMode,
         })
         .run();
-      this.writeTokens(tx, id, credentials);
+      this.writeTokenRows(tx, id, credentials);
       this.writeAccess(tx, id, memberId, access);
     });
     return this.getAccount(id);

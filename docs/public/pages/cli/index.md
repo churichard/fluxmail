@@ -60,7 +60,7 @@ docker compose exec fluxmail fluxmail accounts list
 | [`fluxmail telemetry disable`](/docs/cli/telemetry-disable) | Stop sending anonymous usage telemetry |
 | [`fluxmail telemetry enable`](/docs/cli/telemetry-enable) | Allow anonymous usage telemetry |
 | [`fluxmail telemetry status`](/docs/cli/telemetry-status) | Show whether anonymous usage telemetry is enabled |
-| [`fluxmail status`](/docs/cli/status) | Show accounts, members, entitlements, and provider availability |
+| [`fluxmail status`](/docs/cli/status) | Show engine, store, account, member, entitlement, and provider status |
 <!-- END GENERATED:cli-command-reference -->
 
 Add `--help` to a command to view its usage in the terminal. For example, run `fluxmail accounts add --help`.
