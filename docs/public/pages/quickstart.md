@@ -47,7 +47,7 @@ docker compose exec fluxmail \
   fluxmail setup --name "Your name" --email you@example.com
 ```
 
-Commands in the rest of this guide use the local `fluxmail` form. For Docker, prefix each command with `docker compose exec fluxmail`. For example:
+Commands in the rest of this guide use the local `fluxmail` form. With Docker, run mailbox and status commands through `docker compose exec fluxmail`. For example:
 
 ```bash
 docker compose exec fluxmail fluxmail status
@@ -73,11 +73,25 @@ Local connections use Fluxmail's built-in Google Desktop OAuth client. A remote 
 
 ### Microsoft 365 or Outlook.com
 
-Microsoft mail requires an Entra app registration. Complete the local or hosted setup in [Connect Outlook / Exchange](/docs/connect-outlook-to-mcp), then store the client ID and connect the mailbox:
+Microsoft mail requires an Entra app registration. Complete the local or hosted app setup in [Connect Outlook / Exchange](/docs/connect-outlook-to-mcp).
+
+For a local installation, store the client ID and connect the mailbox:
 
 ```bash
 fluxmail config set MICROSOFT_CLIENT_ID <application-client-id>
 fluxmail accounts add outlook
+```
+
+For Docker, put the client ID in `.env` instead. The Outlook guide lists the client secret and public URL required for a remote server. Recreate the container, then connect the mailbox:
+
+```dotenv
+MICROSOFT_CLIENT_ID=<application-client-id>
+```
+
+```bash
+docker compose up -d
+docker compose exec fluxmail \
+  fluxmail accounts add outlook
 ```
 
 ### IMAP and SMTP
