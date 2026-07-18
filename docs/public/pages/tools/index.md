@@ -8,7 +8,7 @@ Fluxmail exposes MCP tools over Streamable HTTP and stdio. Both transports use t
 
 ## Start locally
 
-Complete the [quickstart](/docs/quickstart), then create an API key and start the HTTP server:
+Complete the [Quickstart](/docs/quickstart), then create an API key and start the HTTP server:
 
 ```bash
 fluxmail apikey create \
@@ -25,7 +25,7 @@ For a local stdio connection, select a local instance where the CLI is logged in
 fluxmail stdio --profile full
 ```
 
-See [Configuration](/docs/configuration) for HTTP client examples and environment variables.
+See [Connect an MCP client](/docs/connect-an-mcp-client) for client-specific stdio and HTTP configuration.
 
 ## Tool permissions
 

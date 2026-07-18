@@ -12,7 +12,7 @@ Every setting is an environment variable, and there are three places to put one.
 2. `.env.local`, then `.env`, read from the working directory
 3. `fluxmail config set <KEY> <value>`, stored in `<data dir>/config.env` and available no matter where you run the CLI from
 
-Fluxmail includes a Google Desktop OAuth client for local Gmail connections. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` to use another Google OAuth client. Hosted Gmail connections need a custom Web client. A local Outlook connection needs `MICROSOFT_CLIENT_ID`; hosted Outlook connections also need `MICROSOFT_CLIENT_SECRET`. IMAP accounts do not use these settings. Use `fluxmail config list` to review stored settings (secret values are masked) and `fluxmail config unset <KEY>` to remove one.
+Fluxmail includes a Google Desktop OAuth client for local Gmail connections. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` to use another Google OAuth client. Hosted Gmail connections need a custom Web client. A local Outlook connection needs `MICROSOFT_CLIENT_ID`; hosted Outlook connections also need `MICROSOFT_CLIENT_SECRET`. IMAP mailboxes do not use these settings. Use `fluxmail config list` to review stored settings (secret values are masked) and `fluxmail config unset <KEY>` to remove one.
 
 By default, Fluxmail processes that use the same data directory also open the same SQLite database. They share encrypted credentials, saved configuration, members, API keys, license state, and the telemetry setting. The processes can run different Fluxmail releases as long as each release supports the store format in that directory. Fluxmail exits without changing the database when the store format is not supported.
 
@@ -50,7 +50,7 @@ For the full command set, see the [CLI reference](/docs/cli).
 
 Fluxmail sends anonymous usage events to its PostHog project by default. Events record the CLI command, MCP tool, or REST operation used, along with transport, outcome, duration, selected feature modes, a random installation ID, and basic runtime information such as the Fluxmail version, Node.js version, operating system, and CPU architecture. PostHog person profiles and GeoIP lookup are disabled.
 
-Fluxmail never sends command arguments, email or account data, message identifiers, search queries, labels, attachment details, file paths, credentials, configuration values, or error text. Telemetry runs in the background and cannot interrupt commands or email operations.
+Fluxmail never sends command arguments, email or mailbox data, message identifiers, search queries, labels, attachment details, file paths, credentials, configuration values, or error text. Telemetry runs in the background and cannot interrupt commands or email operations.
 
 Turn it off for the installation:
 

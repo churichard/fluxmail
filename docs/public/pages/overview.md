@@ -4,7 +4,9 @@ description: 'How Fluxmail connects agents and apps to Gmail, Outlook, and IMAP 
 updated: '2026-07-17'
 ---
 
-Fluxmail is self-hosted email infrastructure for agents and apps. It connects to Gmail, Microsoft 365, Outlook.com, and IMAP/SMTP mailboxes, then provides one service for working with every connected account.
+Fluxmail is self-hosted email infrastructure for agents and apps. It connects to Gmail, Microsoft 365, Outlook.com, and IMAP/SMTP mailboxes, then provides one service for working with them.
+
+These guides use **mailbox** for a connected email address. The CLI and API call the same resource an **account**, so commands such as `fluxmail accounts list` and fields such as `accountId` keep that name.
 
 ## Choose an interface
 
@@ -37,7 +39,7 @@ Fluxmail stores its SQLite database and encrypted provider credentials on the ma
 | Microsoft 365 and Outlook.com | Microsoft Graph with OAuth | You create and control the Microsoft Entra app registration. |
 | Other email providers | IMAP for reading and SMTP for sending | The provider must allow IMAP and SMTP access. Some providers require an app password. |
 
-You can connect several mailboxes to one Fluxmail instance. Members and account access rules decide which mailboxes each person can reach. Permission profiles separately control whether a client can only read mail, manage drafts and folders, or send and permanently delete messages.
+You can connect several mailboxes to one Fluxmail instance. Members and mailbox access rules decide which mailboxes each person can reach. Permission profiles separately control whether a client can only read mail, manage drafts and folders, or send and permanently delete messages.
 
 ## Choose where to run it
 
@@ -47,13 +49,15 @@ You can connect several mailboxes to one Fluxmail instance. Members and account 
 | Local HTTP server | Local apps, scripts, or MCP clients that connect by URL | REST API, MCP over Streamable HTTP, plus the CLI |
 | Docker server | Remote access, shared instances, or several clients | REST API, MCP over Streamable HTTP, plus the CLI |
 
-The [Quickstart](/docs/quickstart) walks through both setups. [Authentication and instances](/docs/authentication-and-instances) explains member sessions, remote CLI profiles, and API keys. For provider-specific steps, see [Connect Gmail / Google Workspace](/docs/connect-gmail-to-mcp), [Connect Outlook / Exchange](/docs/connect-outlook-to-mcp), or [Connect IMAP/SMTP](/docs/connect-an-imap-mailbox).
+The [Quickstart](/docs/quickstart) installs Fluxmail and connects the first mailbox. See [Deploy with Docker](/docs/deploy-with-docker) for a remote or shared server. [Authentication and instances](/docs/authentication-and-instances) explains member sessions, remote CLI profiles, and API keys. For provider-specific steps, see [Connect Gmail / Google Workspace](/docs/connect-gmail-to-mcp), [Connect Outlook / Exchange](/docs/connect-outlook-to-mcp), or [Connect IMAP/SMTP](/docs/connect-an-imap-mailbox).
 
 ## Read next
 
+- [Connect an MCP client](/docs/connect-an-mcp-client) covers stdio and Streamable HTTP setup for supported clients.
 - [MCP tools](/docs/tools) lists the email operations available to agents.
 - [Build with REST](/docs/build-with-rest) walks through common app and backend requests.
-- [CLI reference](/docs/cli) covers installation, account setup, access, and server commands.
+- [Use the CLI](/docs/use-the-cli) covers common administrative workflows.
+- [CLI reference](/docs/cli) lists every command and option.
 - [Permissions](/docs/permissions) explains profiles, custom policies, and mailbox scope.
 - [Configuration](/docs/configuration) covers server settings, storage paths, and telemetry.
 - [Teams and plans](/docs/teams-and-plans) covers members, shared mailboxes, and plan limits.

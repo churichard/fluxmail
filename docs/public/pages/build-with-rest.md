@@ -1,79 +1,91 @@
 ---
 title: 'Build with REST'
-description: 'Start the Fluxmail REST API and use it from an app, script, or backend workflow.'
+description: 'Connect an app or script to the Fluxmail REST API and make your first requests.'
 updated: '2026-07-17'
 ---
 
-Fluxmail provides one JSON API for Gmail, Outlook, and IMAP/SMTP mailboxes. Your app uses the same routes and response shapes for every provider.
+Fluxmail provides the same REST API for Gmail, Outlook, and IMAP/SMTP mailboxes. This guide follows a common workflow: find a mailbox, list its messages, fetch one message, and mark it as read.
 
 ## Start the API
 
-Complete the [Quickstart](/docs/quickstart) through mailbox setup, then create an API key for your app:
+Complete the [Quickstart](/docs/quickstart), then create an API key for your app and start the server:
 
 ```bash
-fluxmail apikey create --name support-backend
+fluxmail apikey create --name local-app
 
 fluxmail serve
 ```
 
-Fluxmail displays the key once. Store it as a secret, then set it in the shell where you will make requests:
+Fluxmail displays the key once. Store it as a secret, then set the API key and base URL in the shell where you will make requests:
 
 ```bash
 export FLUXMAIL_API_KEY='fmk_...'
 export FLUXMAIL_API_URL='http://localhost:8977/api/v1'
 ```
 
-Use HTTPS if the server runs on another machine.
+Use HTTPS when the server runs on another machine.
+
+If Fluxmail runs in Docker, create the key inside the container. Docker Compose already runs the server:
+
+```bash
+docker compose exec fluxmail \
+  fluxmail apikey create --name local-app
+```
+
+Set `FLUXMAIL_API_URL` to the public URL from [Deploy with Docker](/docs/deploy-with-docker), followed by `/api/v1`.
 
 ## Find the mailbox
 
-List the accounts available to the API key:
+List the mailboxes available to the API key:
 
 ```bash
 curl "$FLUXMAIL_API_URL/accounts" \
   -H "Authorization: Bearer $FLUXMAIL_API_KEY"
 ```
 
-Copy the account ID from the response. API keys can be limited to selected mailboxes and permission profiles. See [Permissions](/docs/permissions) before issuing a key to a production app.
+Copy the account ID from `data`. You will use it in mailbox requests. API keys can be limited to selected mailboxes and permission profiles through [Permissions](/docs/permissions).
 
-## Read messages
+## List messages
 
-This request returns unread messages in the inbox:
+Get the 10 most recent inbox messages:
 
 ```bash
-curl "$FLUXMAIL_API_URL/accounts/<account-id>/messages?folder=inbox&unreadOnly=true" \
+curl "$FLUXMAIL_API_URL/accounts/<account-id>/messages?folder=inbox&pageSize=10" \
   -H "Authorization: Bearer $FLUXMAIL_API_KEY"
 ```
 
-You can also filter by sender, recipient, subject, date, attachment presence, or provider query. See [List messages](/docs/rest-api/list-messages) for every parameter.
+List responses contain message metadata and snippets. Add filters such as `unreadOnly=true`, `from=person@example.com`, or `text=invoice` when needed. If the response includes `meta.nextPageToken`, pass it as `pageToken` to fetch the next page. See [List messages](/docs/rest-api/list-messages) for all filters.
 
-## Send from a backend workflow
+## Get the complete message
 
-Send and forward requests require an idempotency key. Reuse the same key when retrying one intended delivery so a network retry does not send the message twice.
+Use an ID from the list response to fetch the message body and attachment metadata:
 
 ```bash
-curl "$FLUXMAIL_API_URL/accounts/<account-id>/send" \
+curl "$FLUXMAIL_API_URL/accounts/<account-id>/messages/<message-id>" \
+  -H "Authorization: Bearer $FLUXMAIL_API_KEY"
+```
+
+Use [Get a thread](/docs/rest-api/get-thread) instead when you need the complete conversation.
+
+## Mark the message as read
+
+After your app processes a message, it can mark that message as read:
+
+```bash
+curl "$FLUXMAIL_API_URL/accounts/<account-id>/messages/actions" \
   -X POST \
   -H "Authorization: Bearer $FLUXMAIL_API_KEY" \
-  -H "Idempotency-Key: $(uuidgen)" \
   -H "Content-Type: application/json" \
   --data '{
-    "to": [{"email": "customer@example.com"}],
-    "subject": "Payment received",
-    "body": {"text": "We received your payment. Thank you."}
+    "messageIds": ["<message-id>"],
+    "action": "markRead"
   }'
 ```
 
-The same endpoint can schedule a delivery with `sendAt`. See [Send or schedule a message](/docs/rest-api/send-message) for the complete request body.
+The same endpoint can archive, star, move, label, trash, or permanently delete messages. See [Modify messages](/docs/rest-api/modify-messages) before using those actions.
 
-## Work with attachments
+## Continue building
 
-Message responses include attachment metadata. Download an attachment as raw bytes when you need to send a receipt, invoice, or uploaded file to another system:
-
-```bash
-curl "$FLUXMAIL_API_URL/accounts/<account-id>/messages/<message-id>/attachments/<attachment-id>" \
-  -H "Authorization: Bearer $FLUXMAIL_API_KEY" \
-  --output attachment.bin
-```
-
-For all mail and administrative routes, see the [REST API reference](/docs/rest-api). The OpenAPI 3.1 document is available at `/api/v1/openapi.json` without authentication.
+- [Create a draft](/docs/rest-api/create-draft) or [send and reply](/docs/rest-api/send-message).
+- [Download an attachment](/docs/rest-api/download-attachment).
+- Browse the complete [REST API reference](/docs/rest-api), or load the OpenAPI 3.1 document from `/api/v1/openapi.json`.

@@ -52,7 +52,7 @@ fluxmail apikey accounts <key-id> --account <account-id>
 fluxmail apikey accounts <key-id> --all-accounts
 ```
 
-Member and account scope control which mailboxes a connection can reach. Its [permission profile](/docs/permissions) separately controls which email actions the client can take. Use one key per client so you can change its scope, change its permissions, or revoke it without interrupting other connections.
+Member and mailbox scope control which mailboxes a connection can reach. Its [permission profile](/docs/permissions) separately controls which email actions the client can take. Use one key per client so you can change its scope, change its permissions, or revoke it without interrupting other connections.
 
 ## Plans and licensing
 
@@ -71,7 +71,7 @@ fluxmail license status
 
 An administrative REST client can read the same status from `GET /api/v1/admin/license`, activate a key with `POST /api/v1/admin/license/activate`, and deactivate it with `DELETE /api/v1/admin/license`. An API key needs `admin.license`; an administrator's member session can call the routes directly. The status response never includes the configured license key. REST cannot replace or remove a key supplied through `FLUXMAIL_LICENSE_KEY`.
 
-One license activates one instance, and enforcement keeps working offline. If you schedule a cancellation, the paid plan works until the end of the billing period. After the subscription ends or a payment fails, the instance drops back to Personal limits. Deactivating, downgrading, or lapsing never deletes accounts or data.
+One license activates one instance, and enforcement keeps working offline. If you schedule a cancellation, the paid plan works until the end of the billing period. After the subscription ends or a payment fails, the instance drops back to Personal limits. Deactivating, downgrading, or lapsing never deletes mailboxes or data.
 
 ## Software license
 
