@@ -37,8 +37,9 @@ export const GENERATED_MARKERS = [
   'cli-command-reference',
 ] as const;
 
-const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const PAGE_PATH_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)*$/;
+const SLUG_PATTERN = /^(?:[a-z0-9]+(?:-[a-z0-9]+)*|[0-9]+(?:\.[0-9]+){2})$/;
+const PAGE_PATH_PATTERN =
+  /^(?:[a-z0-9]+(?:-[a-z0-9]+)*|[0-9]+(?:\.[0-9]+){2})(?:\/(?:[a-z0-9]+(?:-[a-z0-9]+)*|[0-9]+(?:\.[0-9]+){2}))*$/;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 function isValidDate(value: string): boolean {

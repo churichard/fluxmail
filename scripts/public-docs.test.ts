@@ -24,6 +24,7 @@ describe('public docs bundle validation', () => {
     expect(parseMeta({ title: 'REST API', pagesIndex: 'index', defaultOpen: false, pages: ['list-accounts'] })).toEqual(
       { title: 'REST API', pagesIndex: 'index', defaultOpen: false, pages: ['list-accounts'] },
     );
+    expect(parseMeta({ title: 'Upgrade guides', pages: ['0.5.0'] }).pages).toEqual(['0.5.0']);
   });
 
   it('derives the compatibility manifest from Fumadocs metadata', () => {
@@ -41,6 +42,7 @@ describe('public docs bundle validation', () => {
       'rest-api',
       'rest-api/list-accounts',
     ]);
+    expect(parseManifest({ ...manifest, pages: ['upgrades/0.5.0'] }).pages).toEqual(['upgrades/0.5.0']);
   });
 
   it('rejects unsafe paths and duplicate slugs', () => {

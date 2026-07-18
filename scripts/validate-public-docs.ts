@@ -39,6 +39,8 @@ const RESERVED_MAIL_SLUGS = new Set([
   'insights',
   'privacy-and-security',
 ]);
+const DOC_PATH_SEGMENT = String.raw`(?:[a-z0-9]+(?:-[a-z0-9]+)*|[0-9]+(?:\.[0-9]+){2})`;
+const DOC_LINK_PATTERN = new RegExp(String.raw`\]\(/docs/(${DOC_PATH_SEGMENT}(?:/${DOC_PATH_SEGMENT})*)(?:[)#?])`, 'g');
 
 for (const slug of meta.pages) {
   if (RESERVED_MAIL_SLUGS.has(slug)) {
@@ -67,9 +69,9 @@ for (const [slug, source] of sources) {
   if (/\]\(\/docs\/mcp(?:\/|[)#?])/.test(source)) {
     throw new Error(`${slug}.md contains a nested /docs/mcp link. Use /docs/.`);
   }
-  for (const match of source.matchAll(/\]\(\/docs\/([a-z0-9-]+(?:\/[a-z0-9-]+)*)(?:[)#?])/g)) {
+  for (const match of source.matchAll(DOC_LINK_PATTERN)) {
     const target = match[1];
-    if (target && !pages.some((page) => page.slug === target) && !RESERVED_MAIL_SLUGS.has(target)) {
+    if (target && !sources.has(target) && !RESERVED_MAIL_SLUGS.has(target)) {
       throw new Error(`${slug}.md links to unknown documentation page /docs/${target}.`);
     }
   }
