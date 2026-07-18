@@ -4,6 +4,27 @@ Fluxmail records user-facing changes in this file. The format follows [Common Ch
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-18
+
+### Changed
+
+- **Breaking:** require member authentication for every instance, remove `FLUXMAIL_AUTH=none`, revoke legacy API keys during migration, and require a backup to return to an older version; [back up the data directory and claim the instance](https://fluxmail.ai/docs/authentication-migration/) before reconnecting clients ([#58](https://github.com/churichard/fluxmail/pull/58))
+- **Breaking:** replace the `Account` fields `ownerId`, `sharingMode`, `sharedMemberIds`, and `memberId` with `ownerMemberId`, `sharedWithAll`, and `grantedMemberIds`; update API clients to use the new fields ([#58](https://github.com/churichard/fluxmail/pull/58))
+- **Breaking:** make the CLI use named local or remote instances for administration, and require a logged-in local session before starting stdio MCP ([#58](https://github.com/churichard/fluxmail/pull/58))
+- Record CLI, MCP, and REST operations with one anonymous telemetry schema that excludes arguments, request data, identifiers, and error messages ([#55](https://github.com/churichard/fluxmail/pull/55))
+
+### Added
+
+- Add password login, member sessions, enrollment and reset flows, member status controls, scoped API keys, mailbox access grants, and append-only security audits ([#58](https://github.com/churichard/fluxmail/pull/58))
+- Add instance setup, login, logout, instance switching, session management, and member administration commands to the CLI ([#58](https://github.com/churichard/fluxmail/pull/58))
+- Add member and session authentication, self-service mailbox and API key management, and administrative member and audit operations to the REST API ([#58](https://github.com/churichard/fluxmail/pull/58))
+- Use Fluxmail's built-in Desktop Google OAuth app for local Gmail connections while keeping custom clients available for local and hosted setups ([#56](https://github.com/churichard/fluxmail/pull/56))
+
+### Fixed
+
+- Keep the Google OAuth client that issued each stored Gmail refresh token so existing accounts continue to refresh after an app configuration change ([#60](https://github.com/churichard/fluxmail/pull/60))
+- Serialize shared database migrations, stored configuration writes, and encryption key creation to protect concurrent Fluxmail processes ([#59](https://github.com/churichard/fluxmail/pull/59))
+
 ## [0.4.1] - 2026-07-17
 
 ### Changed
@@ -36,6 +57,7 @@ Fluxmail records user-facing changes in this file. The format follows [Common Ch
 - Prevent hosted Microsoft OAuth responses from forwarding connection credentials through the HTTP referrer ([#43](https://github.com/churichard/fluxmail/pull/43))
 - Stop a pending IMAP connection immediately when its provider closes during setup ([#49](https://github.com/churichard/fluxmail/pull/49))
 
-[Unreleased]: https://github.com/churichard/fluxmail/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/churichard/fluxmail/compare/v0.5.0...HEAD
 [0.4.0]: https://github.com/churichard/fluxmail/compare/v0.3.0...v0.4.0
 [0.4.1]: https://github.com/churichard/fluxmail/compare/v0.4.0...v0.4.1
+[0.5.0]: https://github.com/churichard/fluxmail/compare/v0.4.1...v0.5.0
