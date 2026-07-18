@@ -10,7 +10,7 @@ Fluxmail keeps its SQLite database on the machine where it runs. Google and Micr
 
 ## How requests flow
 
-Agents connect through MCP, while apps and backend workflows use REST. Both interfaces send email requests through the same service. Fluxmail selects the mailbox, checks access and plan limits, then passes the operation to Gmail, Microsoft Graph, or an IMAP/SMTP server. Account routing, replies, forwards, and provider capabilities stay consistent across MCP and REST.
+Agents connect through MCP, while apps and backend workflows use REST. Both interfaces send email requests through the same service. Fluxmail selects the mailbox, checks access and plan limits, then passes the operation to Gmail, Microsoft Graph, or an IMAP/SMTP server. Mailbox routing, replies, forwards, and provider capabilities stay consistent across MCP and REST.
 
 The CLI is Fluxmail's control interface. It connects mailboxes, manages members and API keys, changes configuration, and starts the MCP and REST services. Local management commands call the control-plane route handlers in the Fluxmail process. Remote CLI profiles call those handlers over HTTPS. Each route resolves the member session or API key, applies the centralized access policy, and then calls the account, member, license, or mail service.
 

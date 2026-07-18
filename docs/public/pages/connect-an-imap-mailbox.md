@@ -1,16 +1,16 @@
 ---
 title: 'Connect IMAP/SMTP'
 description: 'Connect any mailbox with IMAP and SMTP access, set its security options, and correct special-folder mappings.'
-updated: '2026-07-15'
+updated: '2026-07-17'
 ---
 
 Fluxmail can connect to email providers that offer IMAP for reading mail and SMTP for sending it.
 
 ## 1. Find your provider settings
 
-Before you start, find the IMAP and SMTP settings from your email provider. Some providers require an app password instead of your usual account password.
+Before you start, find the IMAP and SMTP settings from your email provider. Some providers require an app password instead of your usual email password.
 
-Fluxmail defaults to IMAP over TLS on port 993 and SMTP with STARTTLS on port 587. It uses the mailbox address as the username for both connections. You can override each of these settings when you connect the account.
+Fluxmail defaults to IMAP over TLS on port 993 and SMTP with STARTTLS on port 587. It uses the mailbox address as the username for both connections. You can override each of these settings when you connect the mailbox.
 
 ## 2. Connect the mailbox
 
@@ -51,7 +51,7 @@ fluxmail accounts add imap \
   --smtp-user your-username
 ```
 
-Both security options accept `tls` or `starttls`. Fluxmail checks both connections before saving the account. Mailbox passwords are encrypted at rest with AES-256-GCM in Fluxmail's local SQLite database.
+Both security options accept `tls` or `starttls`. Fluxmail checks both connections before saving the mailbox. Mailbox passwords are encrypted at rest with AES-256-GCM in Fluxmail's local SQLite database.
 
 ### Connect through REST
 
@@ -84,7 +84,7 @@ curl "$FLUXMAIL_PUBLIC_URL/api/v1/admin/connections" \
   }'
 ```
 
-Fluxmail tests IMAP and SMTP within 30 seconds before it writes the account. The response does not echo either password. Reauthorization keeps the existing `saveSent` value and folder overrides when those fields are omitted.
+Fluxmail tests IMAP and SMTP within 30 seconds before it saves the mailbox. The response does not echo either password. Reauthorization keeps the existing `saveSent` value and folder overrides when those fields are omitted.
 
 Mailbox owners can update folder mappings with `PATCH /api/v1/accounts/:accountId/imap/folders`. Administrators can use `PATCH /api/v1/admin/accounts/:accountId/imap/folders` for any mailbox. A string sets a folder path. `null` removes an override and restores automatic detection. Fluxmail validates every requested path before saving any of them.
 
@@ -117,7 +117,7 @@ docker compose exec -e IMAP_PASSWORD fluxmail \
 
 ## If a special folder is missing or incorrect
 
-Fluxmail looks for Sent, Drafts, Trash, Archive, and Spam folders using the server's special-use flags first, then common folder names such as `Sent Items` and `Junk Mail`. It prints a warning when a folder is missing or ambiguous, but still connects the account.
+Fluxmail looks for Sent, Drafts, Trash, Archive, and Spam folders using the server's special-use flags first, then common folder names such as `Sent Items` and `Junk Mail`. It prints a warning when a folder is missing or ambiguous, but still connects the mailbox.
 
 Fluxmail does not create a missing folder or guess when several folders match. An action that needs an unresolved folder returns an error. This prevents an archive or trash command from moving mail to the wrong place.
 
@@ -136,7 +136,7 @@ fluxmail accounts configure <account-id> --trash-folder auto
 
 ## Optional: avoid duplicate Sent messages
 
-Fluxmail normally saves an SMTP submission in the resolved Sent folder. Some mail services already save SMTP submissions themselves. If yours does, add `--no-save-sent` when you connect the account so each message appears only once:
+Fluxmail normally saves an SMTP submission in the resolved Sent folder. Some mail services already save SMTP submissions themselves. If yours does, add `--no-save-sent` when you connect the mailbox so each message appears only once:
 
 ```bash
 fluxmail accounts add imap \
@@ -150,8 +150,10 @@ fluxmail accounts add imap \
 
 Fluxmail uses IMAP to read and organize the mailbox, and SMTP to send messages. The available behavior depends partly on the mail server:
 
-- Each message lives in a folder. Fluxmail can move messages between folders, but IMAP accounts do not support label actions.
+- Each message lives in a folder. Fluxmail can move messages between folders, but IMAP mailboxes do not support label actions.
 - Fluxmail builds threads from the standard `References`, `In-Reply-To`, and `Message-ID` headers.
 - Searches run through the IMAP server, so results depend on what that server can index.
 
 Through MCP or REST, Fluxmail can read and search mail, work with attachments and drafts, send or schedule messages, reply, forward, and organize messages into folders.
+
+Continue with [Connect an MCP client](/docs/connect-an-mcp-client), [Build with REST](/docs/build-with-rest), or [Use the CLI](/docs/use-the-cli).

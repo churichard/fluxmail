@@ -1,6 +1,6 @@
 # Fluxmail
 
-Fluxmail is self-hosted email infrastructure for agents and apps. It connects to Gmail, Microsoft 365, Outlook.com, and IMAP/SMTP mailboxes. Agents use MCP, apps and backend workflows use the versioned REST API, and operators use the CLI to connect accounts, manage access, and run the service.
+Fluxmail is self-hosted email infrastructure for agents and apps. It connects to Gmail, Microsoft 365, Outlook.com, and IMAP/SMTP mailboxes. Agents use MCP, apps and backend workflows use the versioned REST API, and operators use the CLI to connect mailboxes, manage access, and run the service.
 
 ## Install
 

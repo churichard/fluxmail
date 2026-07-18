@@ -1,7 +1,7 @@
 ---
 title: 'Connect Outlook / Exchange'
-description: 'Register a Microsoft Entra application and connect Microsoft 365 or Outlook.com to Fluxmail.'
-updated: '2026-07-15'
+description: 'Register a Microsoft Entra application for Microsoft 365 or Outlook.com.'
+updated: '2026-07-17'
 ---
 
 Fluxmail connects to Microsoft 365 and Outlook.com through Microsoft Graph. You create the Microsoft Entra app registration, and Fluxmail stores its OAuth tokens on the server you run.
@@ -81,7 +81,7 @@ MICROSOFT_CLIENT_ID=<application-client-id>
 # MICROSOFT_TENANT_ID=common
 ```
 
-Start Fluxmail and run the account command inside the container:
+Start Fluxmail and run the mailbox command inside the container:
 
 ```bash
 docker compose up -d
@@ -104,7 +104,7 @@ MICROSOFT_CLIENT_SECRET=<client-secret-value>
 FLUXMAIL_PUBLIC_URL=https://mail.example.com
 ```
 
-Recreate the container and start the account command:
+Recreate the container and start the mailbox command:
 
 ```bash
 docker compose up -d
@@ -143,4 +143,4 @@ fluxmail accounts add outlook --reauthorize <account-id>
 
 For Docker, prefix the command with `docker compose exec fluxmail`. Choose the Microsoft account that matches the mailbox you are reconnecting. Reauthorization updates the stored tokens without changing the mailbox owner or access rules.
 
-Return to the [Quickstart](/docs/quickstart) to use the mailbox through MCP, REST API, or CLI.
+Continue with [Connect an MCP client](/docs/connect-an-mcp-client), [Build with REST](/docs/build-with-rest), or [Use the CLI](/docs/use-the-cli).

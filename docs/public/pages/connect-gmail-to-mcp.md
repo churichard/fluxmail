@@ -1,12 +1,12 @@
 ---
 title: 'Connect Gmail / Google Workspace'
-description: 'Connect Gmail or Google Workspace with Fluxmail, optionally use your own Google OAuth app, and reconnect an expired token.'
+description: 'Connect a Gmail or Google Workspace mailbox, configure Google OAuth, and reconnect expired tokens.'
 updated: '2026-07-17'
 ---
 
 Fluxmail includes a Google Desktop OAuth client, so you can connect Gmail locally without creating Google Cloud credentials. The local flow uses PKCE, and your OAuth tokens stay with the Fluxmail server you run.
 
-This setup works with personal Gmail accounts and Google Workspace accounts.
+This setup works with personal Gmail and Google Workspace mailboxes.
 
 Fluxmail's built-in app requests Google's `gmail.modify` permission. You can read, draft, send, and organize mail, including moving messages to Trash. Gmail does not allow immediate permanent deletion with this permission.
 
@@ -40,7 +40,7 @@ FLUXMAIL_PUBLIC_URL=https://mail.example.com
 
 The value must match the public HTTPS address whose callback URI you registered in Google Cloud.
 
-Start or recreate the container, then run the same account command inside it:
+Start or recreate the container, then run the same mailbox command inside it:
 
 ```bash
 docker compose up -d
@@ -129,7 +129,7 @@ If Google revokes or expires the token, list the accounts to find the account ID
 fluxmail accounts list
 ```
 
-Reconnect a local account:
+Reconnect a local mailbox:
 
 ```bash
 fluxmail accounts add gmail --reauthorize <account-id>
@@ -144,6 +144,6 @@ docker compose exec fluxmail \
 
 Open the printed link and choose the Google account that matches the mailbox you are reconnecting.
 
-Reauthorization updates the stored token for the same mailbox. It does not add another account or change the mailbox owner.
+Reauthorization updates the stored token for the same mailbox. It does not add another mailbox or change the mailbox owner.
 
-Return to the [Quickstart](/docs/quickstart) to use the mailbox through MCP, REST API, or CLI.
+Continue with [Connect an MCP client](/docs/connect-an-mcp-client), [Build with REST](/docs/build-with-rest), or [Use the CLI](/docs/use-the-cli).

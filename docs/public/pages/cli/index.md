@@ -6,6 +6,8 @@ updated: '2026-07-15'
 
 The Fluxmail CLI starts local MCP and REST servers and manages a selected local or remote instance. Run `fluxmail setup` for a new local instance, or use `fluxmail login` to add an existing instance. See [Authentication and instances](/docs/authentication-and-instances) for profiles, sessions, and remote URL rules.
 
+See [Use the CLI](/docs/use-the-cli) for common setup and administration workflows. This page is the complete command reference.
+
 ## Install the CLI
 
 Install Fluxmail globally:
