@@ -1,6 +1,6 @@
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { EmailError } from '@fluxmail/core';
+import { EmailError, type EmailErrorCode } from '@fluxmail/core';
 import { resolveDataDir } from './config.js';
 import { createContext } from './context.js';
 import { createApp } from './http/app.js';
@@ -19,6 +19,68 @@ export type InstanceProfile = LocalInstanceProfile | RemoteInstanceProfile;
 export interface CliInstanceConfig {
   active?: string;
   instances: Record<string, InstanceProfile>;
+}
+
+export interface ApiEnvelope<T> {
+  data: T;
+  meta?: Record<string, unknown>;
+  warnings?: string[];
+}
+
+const EMAIL_ERROR_CODES = new Set<EmailErrorCode>([
+  'auth_expired',
+  'rate_limited',
+  'not_found',
+  'invalid_request',
+  'provider_unavailable',
+  'entitlement_exceeded',
+  'permission_denied',
+  'unsupported_capability',
+]);
+
+const SAFE_INSTANCE_API_TELEMETRY_CODES = new Set([
+  'https_required',
+  'idempotency_conflict',
+  'idempotency_in_progress',
+  'internal',
+  'invalid_response',
+  'request_failed',
+  'request_too_large',
+  'setup_required',
+  'unauthorized',
+  'unsupported_media_type',
+]);
+
+export class InstanceApiError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly status: number,
+    readonly data?: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = 'InstanceApiError';
+  }
+}
+
+export function instanceResponseError(
+  code: string,
+  message: string,
+  status: number,
+  data?: Record<string, unknown>,
+): Error {
+  if (EMAIL_ERROR_CODES.has(code as EmailErrorCode)) {
+    return new EmailError(code as EmailErrorCode, message, data);
+  }
+  return new InstanceApiError(code, message, status, data);
+}
+
+export function apiErrorCode(error: unknown): string {
+  if (error instanceof EmailError) return error.code;
+  if (error instanceof InstanceApiError) {
+    return SAFE_INSTANCE_API_TELEMETRY_CODES.has(error.code) ? error.code : 'request_failed';
+  }
+  return 'internal';
 }
 
 interface CliCredentials {
@@ -190,11 +252,39 @@ export class InstanceClient {
   }
 
   async json<T>(pathname: string, init: RequestInit = {}, authenticated = true): Promise<T> {
+    return (await this.jsonEnvelope<T>(pathname, init, authenticated)).data;
+  }
+
+  async jsonEnvelope<T>(pathname: string, init: RequestInit = {}, authenticated = true): Promise<ApiEnvelope<T>> {
     const response = await this.request(pathname, init, authenticated);
-    const body = (await response.json()) as { data?: T; error?: { message?: string } };
-    if (!response.ok)
-      throw new EmailError('invalid_request', body.error?.message ?? `Request failed with HTTP ${response.status}.`);
-    return body.data as T;
+    let body: {
+      data?: T;
+      meta?: Record<string, unknown>;
+      warnings?: string[];
+      error?: { code?: string; message?: string; data?: Record<string, unknown> };
+    };
+    try {
+      body = (await response.json()) as typeof body;
+    } catch {
+      throw new InstanceApiError(
+        'invalid_response',
+        `Instance ${this.name} returned invalid JSON with HTTP ${response.status}.`,
+        response.status,
+      );
+    }
+    if (!response.ok) {
+      const code = body.error?.code ?? 'request_failed';
+      const message = body.error?.message ?? `Request failed with HTTP ${response.status}.`;
+      throw instanceResponseError(code, message, response.status, body.error?.data);
+    }
+    if (!('data' in body)) {
+      throw new InstanceApiError('invalid_response', `Instance ${this.name} returned no data.`, response.status);
+    }
+    return {
+      data: body.data as T,
+      ...(body.meta ? { meta: body.meta } : {}),
+      ...(body.warnings ? { warnings: body.warnings } : {}),
+    };
   }
 }
 

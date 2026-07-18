@@ -65,10 +65,11 @@ import {
   saveSessionToken,
   useInstance,
 } from './cliInstances.js';
-import { authenticateBearer, recoverAdminPassword, setupInitialAdmin } from './auth.js';
+import { authenticateBearer, normalizeAndValidatePassword, recoverAdminPassword, setupInitialAdmin } from './auth.js';
 import { recordAdminAuditEvent } from './storage/adminAudit.js';
 import { canManageOwnedAccount } from './authorization.js';
 import { createCliUpdateNotifier, type CliUpdateNotifier, type CliUpdateNotifierFactory } from './updateNotifier.js';
+import { registerMailCommands } from './cliMail.js';
 
 interface AddAccountOptions {
   reauthorize?: string;
@@ -166,9 +167,9 @@ async function hiddenPrompt(label: string): Promise<string> {
   if (!process.stdin.isTTY || !process.stdin.setRawMode) {
     throw new EmailError('invalid_request', `${label} must be supplied through a password environment variable.`);
   }
+  const wasFlowing = process.stdin.readableFlowing === true;
   emitKeypressEvents(process.stdin);
   const wasRaw = process.stdin.isRaw;
-  const wasPaused = process.stdin.isPaused();
   process.stdout.write(`${label}: `);
   process.stdin.setRawMode(true);
   process.stdin.resume();
@@ -177,7 +178,7 @@ async function hiddenPrompt(label: string): Promise<string> {
     const finish = (error?: Error) => {
       process.stdin.off('keypress', onKeypress);
       process.stdin.setRawMode(wasRaw);
-      if (wasPaused) process.stdin.pause();
+      if (!wasFlowing) process.stdin.pause();
       process.stdout.write('\n');
       if (error) reject(error);
       else resolve(value);
@@ -214,6 +215,33 @@ async function loginPassword(label = 'Password'): Promise<string> {
   return process.env.FLUXMAIL_PASSWORD ?? hiddenPrompt(label);
 }
 
+async function newPassword(
+  label: string,
+  member: Parameters<typeof normalizeAndValidatePassword>[1],
+  prompt: (label: string) => Promise<string>,
+): Promise<string> {
+  return withNewPassword(label, member, prompt, async (password) => password);
+}
+
+async function withNewPassword<T>(
+  label: string,
+  member: Parameters<typeof normalizeAndValidatePassword>[1],
+  prompt: (label: string) => Promise<string>,
+  submit: (password: string) => Promise<T>,
+): Promise<T> {
+  const configured = process.env.FLUXMAIL_PASSWORD;
+  if (configured !== undefined) return submit(normalizeAndValidatePassword(configured, member));
+  for (;;) {
+    const password = await prompt(label);
+    try {
+      return await submit(normalizeAndValidatePassword(password, member));
+    } catch (error) {
+      if (!(error instanceof EmailError) || error.code !== 'invalid_request') throw error;
+      console.error(`Error: ${error.message}`);
+    }
+  }
+}
+
 async function accountSecret(envName: string | undefined, label: string): Promise<string> {
   if (!envName) return hiddenPrompt(label);
   const value = process.env[envName];
@@ -235,6 +263,7 @@ function warnLicense(db: FluxmailDb, log: (line: string) => void = console.error
 export interface CliProgramOptions {
   telemetry?: Telemetry;
   updateNotifierFactory?: CliUpdateNotifierFactory;
+  passwordPrompt?: (label: string) => Promise<string>;
 }
 
 interface ActiveCliOperation {
@@ -280,12 +309,14 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
   const program = new Command();
   program
     .name('fluxmail')
-    .description('Fluxmail, a self-hosted MCP server for your email')
+    .description('Fluxmail, a self-hosted email API with MCP, REST, and CLI access')
     .option('--instance <name>', 'Use a named local or remote instance')
+    .option('-a, --mail-account <id-or-email>', 'Use an email account by ID or address')
     .option('--no-update-notifier', 'Skip the automatic update check for this command')
     .version(VERSION, '-v, --version');
 
   const selectedInstance = (): string | undefined => program.opts<{ instance?: string }>().instance;
+  const selectedAccount = (): string | undefined => program.opts<{ mailAccount?: string }>().mailAccount;
 
   function commandPath(command: Command): string {
     const names: string[] = [];
@@ -381,8 +412,11 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
       try {
         const name = opts.name ?? (opts.existingAdmin ? undefined : await textPrompt('Administrator name'));
         const email = opts.email ?? (await textPrompt('Administrator email'));
-        const password = await loginPassword('New password');
         const context = createContext();
+        const passwordMember = opts.existingAdmin
+          ? { ...findMember(context.db, opts.existingAdmin), email }
+          : { name: name ?? '', email };
+        const password = await newPassword('New password', passwordMember, options.passwordPrompt ?? hiddenPrompt);
         const result = await setupInitialAdmin(context.db, {
           ...(name ? { name } : {}),
           email,
@@ -427,21 +461,22 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         const deviceName = `CLI on ${hostname()}`;
         const result =
           opts.enroll || opts.reset
-            ? await client.json<{ token: string; member: { name: string } }>(
-                opts.reset ? '/api/v1/auth/password-reset' : '/api/v1/auth/enroll',
-                {
-                  method: 'POST',
-                  headers: { 'content-type': 'application/json' },
-                  body: JSON.stringify({
-                    token:
-                      (opts.reset ? process.env.FLUXMAIL_RESET_CODE : process.env.FLUXMAIL_INVITE_CODE) ??
-                      (await hiddenPrompt(opts.reset ? 'Password reset code' : 'Enrollment code')),
-                    password: await loginPassword('New password'),
-                    deviceName,
-                  }),
-                },
-                false,
-              )
+            ? await (async () => {
+                const token =
+                  (opts.reset ? process.env.FLUXMAIL_RESET_CODE : process.env.FLUXMAIL_INVITE_CODE) ??
+                  (await hiddenPrompt(opts.reset ? 'Password reset code' : 'Enrollment code'));
+                return withNewPassword('New password', undefined, options.passwordPrompt ?? hiddenPrompt, (password) =>
+                  client.json<{ token: string; member: { name: string } }>(
+                    opts.reset ? '/api/v1/auth/password-reset' : '/api/v1/auth/enroll',
+                    {
+                      method: 'POST',
+                      headers: { 'content-type': 'application/json' },
+                      body: JSON.stringify({ token, password, deviceName }),
+                    },
+                    false,
+                  ),
+                );
+              })()
             : await client.json<{ token: string; member: { name: string } }>(
                 '/api/v1/auth/login',
                 {
@@ -535,8 +570,9 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
             'Administrator recovery is only available on the local instance host.',
           );
         }
-        const password = await loginPassword('New password');
         const context = createContext();
+        const target = findMember(context.db, memberRef);
+        const password = await newPassword('New password', target, options.passwordPrompt ?? hiddenPrompt);
         const member = await recoverAdminPassword(context.db, memberRef, password);
         recordAdminAuditEvent(context.db, {
           operation: 'auth.recover_admin',
@@ -1634,6 +1670,16 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
       const dataDir = resolveDataDir();
       console.log(`Telemetry is ${isTelemetryEnabled(dataDir) ? 'enabled' : 'disabled'}.`);
     });
+
+  registerMailCommands(program, {
+    selectedInstance,
+    selectedAccount,
+    reportError: (error, code) => {
+      finishCliOperation(program, 'error', code);
+      console.error(`Error [${code}]: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+    },
+  });
 
   program
     .command('status')

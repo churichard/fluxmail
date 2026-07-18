@@ -101,6 +101,21 @@ const FolderSchema = z
   })
   .strict()
   .openapi('Folder');
+const LabelSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    color: z
+      .object({
+        background: z.string().optional(),
+        text: z.string().optional(),
+        preset: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .openapi('Label');
 const MessageSchema = z
   .object({
     id: z.string(),
@@ -286,7 +301,9 @@ const ModifyRequestSchema = z
       .array(z.string().min(1))
       .max(100)
       .optional()
-      .describe('Required when action is addLabels or removeLabels. Change system labels with dedicated actions.'),
+      .describe(
+        'Required when action is addLabels or removeLabels. Change Gmail system labels with dedicated actions.',
+      ),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -344,8 +361,6 @@ const MODIFY_CAPABILITIES: Record<ModifyActionName, McpCapability> = {
   removeLabels: 'mail.organize',
 };
 const PROTECTED_MOVE_DESTINATIONS = new Set(['archive', 'trash']);
-const SYSTEM_LABELS = new Set(['inbox', 'sent', 'draft', 'drafts', 'trash', 'spam', 'starred', 'unread', 'important']);
-
 interface ApiFailure {
   status: number;
   payload: { error: { code: string; message: string; data?: Record<string, unknown> } };
@@ -709,9 +724,6 @@ function modifyAction(input: z.infer<typeof ModifyRequestSchema>): ModifyAction 
   }
   if (input.action === 'addLabels' || input.action === 'removeLabels') {
     const labels = input.labels!;
-    if (labels.some((label) => SYSTEM_LABELS.has(label.trim().toLowerCase()))) {
-      throw new EmailError('invalid_request', 'System labels must be changed with their dedicated message action.');
-    }
     return input.action === 'addLabels' ? { addLabels: labels } : { removeLabels: labels };
   }
   return input.action;
@@ -994,6 +1006,26 @@ export function createRestApi(deps: RestApiDeps): OpenAPIHono<RestEnv> {
     const { accountId } = c.req.valid('param');
     return runJson(c, deps, { operation: 'listFolders', capabilities: ['mail.read'] }, async () => ({
       data: await c.get('restService').listFolders(accountId),
+    }));
+  });
+
+  const labelsRoute = createRoute({
+    method: 'get',
+    path: '/api/v1/accounts/{accountId}/labels',
+    operationId: 'listLabels',
+    summary: 'List labels',
+    description: 'List Gmail user labels or Outlook categories in an email account.',
+    request: { params: accountParams },
+    ...protectedRoute,
+    responses: {
+      200: { content: { 'application/json': { schema: dataEnvelope(z.array(LabelSchema)) } }, description: 'Labels' },
+      ...errorResponses,
+    },
+  });
+  app.openapi(labelsRoute, (c) => {
+    const { accountId } = c.req.valid('param');
+    return runJson(c, deps, { operation: 'listLabels', capabilities: ['mail.read'] }, async () => ({
+      data: await c.get('restService').listLabels(accountId),
     }));
   });
 

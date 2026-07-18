@@ -317,8 +317,6 @@ const MODIFY_CAPABILITIES: Record<ModifyActionName, McpCapability> = {
 };
 
 const PROTECTED_MOVE_DESTINATIONS = new Set(['archive', 'trash']);
-const SYSTEM_LABELS = new Set(['inbox', 'sent', 'draft', 'drafts', 'trash', 'spam', 'starred', 'unread', 'important']);
-
 export function buildMcpServer(service: EmailService, options: BuildMcpServerOptions = {}): McpServer {
   const permissions = normalizePermissionPolicy(options.permissions ?? FULL_PERMISSION_POLICY);
   const maxAttachmentBytes = options.maxAttachmentBytes ?? DEFAULT_MAX_ATTACHMENT_BYTES;
@@ -412,11 +410,22 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
     server.registerTool(
       'list_folders',
       {
-        description: 'List folders/labels for an account, with roles (inbox, sent, drafts, trash, spam, starred).',
+        description: 'List navigable folders for an account, with roles (inbox, sent, drafts, trash, spam, starred).',
         inputSchema: { accountId: accountIdParam },
         annotations: { readOnlyHint: true },
       },
       gated('list_folders', 'mail.read', async (args: { accountId?: string }) => service.listFolders(args.accountId)),
+    );
+
+  if (can('mail.read'))
+    server.registerTool(
+      'list_labels',
+      {
+        description: 'List Gmail user labels or Outlook categories for an account.',
+        inputSchema: { accountId: accountIdParam },
+        annotations: { readOnlyHint: true },
+      },
+      gated('list_labels', 'mail.read', async (args: { accountId?: string }) => service.listLabels(args.accountId)),
     );
 
   if (can('mail.read'))
@@ -687,12 +696,6 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
           } else if (args.action === 'addLabels' || args.action === 'removeLabels') {
             if (!args.labels?.length) {
               throw new EmailError('invalid_request', `action=${args.action} requires "labels"`);
-            }
-            if (args.labels.some((label) => SYSTEM_LABELS.has(label.trim().toLowerCase()))) {
-              throw new EmailError(
-                'invalid_request',
-                'System labels must be changed with their dedicated message action',
-              );
             }
             action = args.action === 'addLabels' ? { addLabels: args.labels } : { removeLabels: args.labels };
           } else {
