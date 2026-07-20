@@ -74,6 +74,7 @@ docker compose exec fluxmail fluxmail accounts list
 | [`fluxmail config set`](/docs/cli/config-set) | Store a setting (shell env vars and local .env files still take precedence) |
 | [`fluxmail config unset`](/docs/cli/config-unset) | Remove a stored setting |
 | [`fluxmail config list`](/docs/cli/config-list) | Show stored settings (secret values are masked) |
+| [`fluxmail logs`](/docs/cli/logs) | Show recent local log entries |
 | [`fluxmail telemetry`](/docs/cli/telemetry) | Manage anonymous usage telemetry |
 | [`fluxmail telemetry disable`](/docs/cli/telemetry-disable) | Stop sending anonymous usage telemetry |
 | [`fluxmail telemetry enable`](/docs/cli/telemetry-enable) | Allow anonymous usage telemetry |

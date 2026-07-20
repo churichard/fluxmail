@@ -1,7 +1,7 @@
 ---
 title: 'Configuration'
-description: 'Environment variables and telemetry controls for the self-hosted Fluxmail server.'
-updated: '2026-07-17'
+description: 'Environment variables, local logging, and telemetry controls for the self-hosted Fluxmail server.'
+updated: '2026-07-19'
 ---
 
 ## Environment variables
@@ -40,11 +40,17 @@ Set `FLUXMAIL_DATA_DIR` to create a separate installation. `FLUXMAIL_DB_PATH` ch
 | `FLUXMAIL_LICENSE_KEY` | `none` | Paid-plan license key, normally stored with fluxmail license activate. |
 | `FLUXMAIL_TELEMETRY` | `1` | Set to 0 to turn off anonymous CLI, MCP, and REST usage telemetry. |
 | `DO_NOT_TRACK` | `unset` | Set to 1 to turn off anonymous usage telemetry. |
+| `FLUXMAIL_LOG_LEVEL` | `info` | Local log level: info, warn, error, or off. |
+| `FLUXMAIL_LOG_DESTINATION` | `both` | Write local logs to both the rotating file and console, or choose file or console. |
 <!-- END GENERATED:configuration -->
 
 HTTP MCP requests require an API key. REST requests accept an active member session or API key. Each API key has its own permission profile and optional mailbox allowlist. See [Permissions](/docs/permissions) for profiles and custom policies, and [Authentication and instances](/docs/authentication-and-instances) for login and session storage.
 
 For the full command set, see the [CLI reference](/docs/cli).
+
+## Local logs
+
+Fluxmail writes bounded local logs for failures and low volume service events. Successful MCP, REST, and CLI operations are not logged. See [Local logs](/docs/logging) for the file location, the 20 MiB disk limit, viewing commands, and privacy notes.
 
 ## Telemetry
 

@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { FluxmailConfig } from '../config.js';
 import { readStoredConfig } from '../config.js';
 import type { FluxmailDb } from '../storage/db.js';
+import { logFailure, type Logger } from '../logging.js';
 import { validateLicense } from './client.js';
 import { licensePublicKeys, verifyLease, type LeasePayload } from './lease.js';
 import { getEntitlements, readLeaseRow, saveLeaseToken } from './entitlements.js';
@@ -48,6 +49,7 @@ export interface LicenseControllerOptions {
   db: FluxmailDb;
   config: FluxmailConfig;
   log?: (line: string) => void;
+  logger?: Logger;
   onRefreshed?: () => void;
   fetchImpl?: typeof fetch;
 }
@@ -173,15 +175,22 @@ export class LicenseController {
         ...(this.deps.fetchImpl ? { fetchImpl: this.deps.fetchImpl } : {}),
       });
     } catch (err) {
+      logFailure(this.deps.logger, 'license.refresh_failed', err);
       this.deps.log?.(`License refresh failed: ${err instanceof Error ? err.message : String(err)}`);
       this.schedule(OUTAGE_RETRY_MS);
       return undefined;
     }
     if (result.outcome === 'refreshed') {
+      this.deps.logger?.info('license.refreshed', 'License lease renewed', {
+        details: { expires_at: result.lease.expiresAt },
+      });
       this.deps.log?.(`License validated; lease renewed until ${result.lease.expiresAt}`);
       this.deps.onRefreshed?.();
       this.schedule(VALIDATE_INTERVAL_MS);
     } else {
+      this.deps.logger?.warn('license.refresh_failed', result.message, undefined, {
+        details: { outcome: result.outcome, cached_lease_active: result.cachedLeaseActive },
+      });
       this.deps.log?.(
         `License validation: ${result.message}` +
           (result.cachedLeaseActive

@@ -19,6 +19,7 @@ import {
   expandHome,
   loadConfig,
   maskStoredConfigValue,
+  readLoggingSettings,
   readStoredConfig,
   setStoredConfig,
   unsetStoredConfig,
@@ -43,6 +44,9 @@ const ENV_KEYS = [
   'MICROSOFT_CLIENT_SECRET',
   'MICROSOFT_TENANT_ID',
   'FLUXMAIL_TELEMETRY',
+  'FLUXMAIL_LICENSE_KEY',
+  'FLUXMAIL_LOG_LEVEL',
+  'FLUXMAIL_LOG_DESTINATION',
   'FM_STORED_TEST',
 ];
 const saved: Record<string, string | undefined> = {};
@@ -245,6 +249,36 @@ describe('stored config', () => {
     expect(loadConfig().trustProxy).toBe(false);
     process.env.FLUXMAIL_TRUST_PROXY = 'sometimes';
     expect(() => loadConfig()).toThrow(/FLUXMAIL_TRUST_PROXY/);
+  });
+
+  it('uses and validates local logging configuration', () => {
+    process.env.FLUXMAIL_DATA_DIR = tempDataDir();
+    expect(loadConfig()).toMatchObject({ logLevel: 'info', logDestination: 'both' });
+
+    process.env.FLUXMAIL_LOG_LEVEL = 'error';
+    process.env.FLUXMAIL_LOG_DESTINATION = 'file';
+    expect(loadConfig()).toMatchObject({ logLevel: 'error', logDestination: 'file' });
+
+    process.env.FLUXMAIL_LOG_LEVEL = 'debug';
+    expect(() => loadConfig()).toThrow(/FLUXMAIL_LOG_LEVEL/);
+    process.env.FLUXMAIL_LOG_LEVEL = 'info';
+    process.env.FLUXMAIL_LOG_DESTINATION = 'network';
+    expect(() => loadConfig()).toThrow(/FLUXMAIL_LOG_DESTINATION/);
+  });
+
+  it('reads stored logging settings without changing the source of unrelated settings', () => {
+    const dir = tempDataDir();
+    process.env.FLUXMAIL_DATA_DIR = dir;
+    delete process.env.FLUXMAIL_LOG_LEVEL;
+    delete process.env.FLUXMAIL_LOG_DESTINATION;
+    delete process.env.FLUXMAIL_LICENSE_KEY;
+    setStoredConfig(dir, 'FLUXMAIL_LOG_LEVEL', 'error');
+    setStoredConfig(dir, 'FLUXMAIL_LOG_DESTINATION', 'file');
+    setStoredConfig(dir, 'FLUXMAIL_LICENSE_KEY', 'stored-license');
+
+    expect(readLoggingSettings(dir)).toEqual({ level: 'error', destination: 'file' });
+    expect(process.env.FLUXMAIL_LICENSE_KEY).toBeUndefined();
+    expect(loadConfig().licenseKeyFromEnvironment).toBe(false);
   });
 
   it('uses and validates the attachment size limit', () => {

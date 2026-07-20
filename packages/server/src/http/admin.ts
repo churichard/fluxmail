@@ -24,6 +24,7 @@ import { findMember } from '../storage/members.js';
 import type { Principal } from '../auth.js';
 import { canAdminister, canSeeAccountMetadata } from '../authorization.js';
 import { operationIdForRequest } from './operationRoutes.js';
+import { logCodedFailure, logFailure, type Logger } from '../logging.js';
 
 export const ADMIN_BODY_LIMIT = 64 * 1024;
 export const ADMIN_CONNECTION_TIMEOUT_MS = 30_000;
@@ -196,6 +197,7 @@ export interface AdminApiDeps {
   db: FluxmailDb;
   registry?: AccountRegistry;
   licenseController?: LicenseController;
+  logger?: Logger;
 }
 
 const identifier = z.string().trim().min(1).max(200);
@@ -467,10 +469,19 @@ function serializeApiKey(key: ReturnType<typeof listApiKeys>[number]) {
   };
 }
 
-async function run<T extends Response>(fn: () => Promise<T> | T): Promise<any> {
+async function run<T extends Response>(deps: AdminApiDeps, fn: () => Promise<T> | T): Promise<any> {
   try {
     return await fn();
   } catch (error) {
+    const context = {
+      productSurface: 'rest',
+      operation: 'administrative_request',
+    } as const;
+    if (error instanceof AdminFailure) {
+      logCodedFailure(deps.logger, 'rest.operation_failed', error.code, error.message, context);
+    } else {
+      logFailure(deps.logger, 'rest.operation_failed', error, context);
+    }
     return failureResponse(error);
   }
 }
@@ -491,7 +502,7 @@ export function registerAdminRoutes(app: OpenAPIHono<any>, deps: AdminApiDeps): 
     },
   });
   app.openapi(connectionsRoute, (c) =>
-    run(async () => {
+    run(deps, async () => {
       const auth = c.get('restAuth') as Principal;
       requireAdmin(auth, 'admin.accounts');
       const input = c.req.valid('json');
@@ -572,7 +583,7 @@ export function registerAdminRoutes(app: OpenAPIHono<any>, deps: AdminApiDeps): 
     },
   });
   app.openapi(imapTestRoute, (c) =>
-    run(async () => {
+    run(deps, async () => {
       requireAdmin(c.get('restAuth'), 'admin.accounts');
       const input = c.req.valid('json');
       const warnings = await registry(deps).testImapCredentials(
@@ -605,7 +616,7 @@ export function registerAdminRoutes(app: OpenAPIHono<any>, deps: AdminApiDeps): 
     },
   });
   app.openapi(folderRoute, (c) =>
-    run(async () => {
+    run(deps, async () => {
       const auth = c.get('restAuth') as Principal;
       requireAdmin(auth, 'admin.accounts');
       const { accountId } = c.req.valid('param');
@@ -650,7 +661,7 @@ export function registerAdminRoutes(app: OpenAPIHono<any>, deps: AdminApiDeps): 
     },
   });
   app.openapi(listKeysRoute, (c) =>
-    run(() => {
+    run(deps, () => {
       requireAdmin(c.get('restAuth'), 'admin.api_keys');
       return json({ data: listApiKeys(deps.db).map(serializeApiKey) });
     }),
@@ -671,7 +682,7 @@ export function registerAdminRoutes(app: OpenAPIHono<any>, deps: AdminApiDeps): 
     },
   });
   app.openapi(createKeyRoute, (c) =>
-    run(() => {
+    run(deps, () => {
       requireAdmin(c.get('restAuth'), 'admin.api_keys');
       const input = c.req.valid('json');
       const member = findMember(deps.db, input.member);
@@ -704,7 +715,7 @@ export function registerAdminRoutes(app: OpenAPIHono<any>, deps: AdminApiDeps): 
     },
   });
   app.openapi(patchKeyRoute, (c) =>
-    run(() => {
+    run(deps, () => {
       requireAdmin(c.get('restAuth'), 'admin.api_keys');
       const { keyId } = c.req.valid('param');
       const input = c.req.valid('json');
@@ -740,7 +751,7 @@ export function registerAdminRoutes(app: OpenAPIHono<any>, deps: AdminApiDeps): 
     },
   });
   app.openapi(deleteKeyRoute, (c) =>
-    run(() => {
+    run(deps, () => {
       requireAdmin(c.get('restAuth'), 'admin.api_keys');
       const { keyId } = c.req.valid('param');
       if (!revokeApiKey(deps.db, keyId)) throw new EmailError('not_found', `No API key with id "${keyId}".`);
@@ -762,7 +773,7 @@ export function registerAdminRoutes(app: OpenAPIHono<any>, deps: AdminApiDeps): 
     },
   });
   app.openapi(licenseRoute, (c) =>
-    run(() => {
+    run(deps, () => {
       requireAdmin(c.get('restAuth'), 'admin.license');
       const state = checkLicenseState(deps.db);
       const row = readLeaseRow(deps.db);
@@ -796,7 +807,7 @@ export function registerAdminRoutes(app: OpenAPIHono<any>, deps: AdminApiDeps): 
     },
   });
   app.openapi(activateRoute, (c) =>
-    run(async () => {
+    run(deps, async () => {
       requireAdmin(c.get('restAuth'), 'admin.license');
       const { licenseKey } = c.req.valid('json');
       if (!LICENSE_KEY_PATTERN.test(licenseKey)) {
@@ -843,7 +854,7 @@ export function registerAdminRoutes(app: OpenAPIHono<any>, deps: AdminApiDeps): 
     },
   });
   app.openapi(deactivateRoute, (c) =>
-    run(async () => {
+    run(deps, async () => {
       requireAdmin(c.get('restAuth'), 'admin.license');
       if (deps.config.licenseKeyFromEnvironment) {
         throw new AdminFailure(
