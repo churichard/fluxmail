@@ -15,6 +15,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { DEFAULT_GOOGLE_CLIENT_ID, DEFAULT_GOOGLE_CLIENT_SECRET } from './accounts/defaultGoogleOAuth.js';
 import { DEFAULT_LICENSE_SERVER_URL } from './licensing/client.js';
+import type { LogDestination, LogLevel } from './logging.js';
 import { withFileLock } from './storage/fileLock.js';
 
 export const DEFAULT_MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
@@ -108,6 +109,14 @@ export const CONFIG_REFERENCE = {
     defaultValue: 'unset',
     description: 'Set to 1 to turn off anonymous usage telemetry.',
   },
+  FLUXMAIL_LOG_LEVEL: {
+    defaultValue: 'info',
+    description: 'Local log level: info, warn, error, or off.',
+  },
+  FLUXMAIL_LOG_DESTINATION: {
+    defaultValue: 'both',
+    description: 'Write local logs to both the rotating file and console, or choose file or console.',
+  },
   FLUXMAIL_LICENSE_SERVER_URL: {
     defaultValue: DEFAULT_LICENSE_SERVER_URL,
     description: 'License validation service override used for development and testing.',
@@ -139,6 +148,10 @@ export interface FluxmailConfig {
   oauthHost: string;
   /** Largest attachment Fluxmail will return through MCP or REST. */
   maxAttachmentBytes: number;
+  /** Minimum severity retained by the bounded local logger. */
+  logLevel: LogLevel;
+  /** Local log output destination. */
+  logDestination: LogDestination;
   /** Paid-tier license key (fluxmail_lic_…); absent means free tier. */
   licenseKey?: string;
   /** True when the license key came from the environment or a cwd dotenv file. */
@@ -373,6 +386,21 @@ function readTrustProxy(): boolean {
   throw new Error(`FLUXMAIL_TRUST_PROXY must be 0, 1, false, or true, got "${raw}"`);
 }
 
+export function readLoggingSettings(dataDir?: string): { level: LogLevel; destination: LogDestination } {
+  const stored = dataDir ? readStoredConfig(dataDir) : undefined;
+  const level = (readEnvironment('FLUXMAIL_LOG_LEVEL') ?? stored?.FLUXMAIL_LOG_LEVEL ?? 'info').trim().toLowerCase();
+  if (!['info', 'warn', 'error', 'off'].includes(level)) {
+    throw new Error(`FLUXMAIL_LOG_LEVEL must be info, warn, error, or off, got "${level}"`);
+  }
+  const destination = (readEnvironment('FLUXMAIL_LOG_DESTINATION') ?? stored?.FLUXMAIL_LOG_DESTINATION ?? 'both')
+    .trim()
+    .toLowerCase();
+  if (!['both', 'file', 'console'].includes(destination)) {
+    throw new Error(`FLUXMAIL_LOG_DESTINATION must be both, file, or console, got "${destination}"`);
+  }
+  return { level: level as LogLevel, destination: destination as LogDestination };
+}
+
 function readPublicUrl(port: number): string {
   const value = (readEnvironment('FLUXMAIL_PUBLIC_URL') ?? `http://localhost:${port}`).replace(/\/+$/, '');
   let parsed: URL;
@@ -456,6 +484,7 @@ export function loadConfig(storeLocation: FluxmailStoreLocation = resolveStoreLo
   const oauthPort = readPort('FLUXMAIL_OAUTH_PORT', 8976);
   const publicUrlConfigured = readEnvironment('FLUXMAIL_PUBLIC_URL') !== undefined;
   const publicUrl = readPublicUrl(port);
+  const logging = readLoggingSettings();
   const config: FluxmailConfig = {
     dataDir,
     dbPath,
@@ -467,6 +496,8 @@ export function loadConfig(storeLocation: FluxmailStoreLocation = resolveStoreLo
     oauthPort,
     oauthHost: readEnvironment('FLUXMAIL_OAUTH_HOST') ?? '127.0.0.1',
     maxAttachmentBytes: readMaxAttachmentBytes(),
+    logLevel: logging.level,
+    logDestination: logging.destination,
     licenseServerUrl: (readEnvironment('FLUXMAIL_LICENSE_SERVER_URL') ?? DEFAULT_LICENSE_SERVER_URL).replace(
       /\/+$/,
       '',

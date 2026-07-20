@@ -48,6 +48,7 @@
     "config-set",
     "config-unset",
     "config-list",
+    "logs",
     "telemetry",
     "telemetry-disable",
     "telemetry-enable",

@@ -35,6 +35,7 @@ import { canAdminister, canSeeAccountMetadata } from '../authorization.js';
 import type { LicenseController } from '../licensing/refresher.js';
 import { administrationUsesHttps as administrationRequestUsesHttps, requestBodyExceedsLimit } from './admin.js';
 import { recordAdminAuditEvent } from '../storage/adminAudit.js';
+import { logCodedFailure, logFailure, type Logger } from '../logging.js';
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
@@ -44,11 +45,12 @@ export interface AppDeps {
   registry: AccountRegistry;
   service: EmailService;
   telemetry?: Telemetry;
+  logger?: Logger;
   licenseController?: LicenseController;
 }
 
 export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
-  const { config, db, registry, service, telemetry, licenseController } = deps;
+  const { config, db, registry, service, telemetry, logger, licenseController } = deps;
   const app = new Hono<{ Bindings: HttpBindings }>();
   const googleOauthStates = new Map<string, { expiresAt: number; intent?: GmailConnectionIntent }>();
   const microsoftOauthStates = new Map<
@@ -299,6 +301,10 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
         201,
       );
     } catch (err) {
+      logFailure(logger, 'rest.operation_failed', err, {
+        productSurface: 'rest',
+        operation: 'createLegacyConnection',
+      });
       if (isEmailError(err)) {
         audit('error', err.code);
         return c.json({ error: err.message }, 400);
@@ -314,6 +320,10 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
   app.post('/mcp', async (c) => {
     const auth = authForRequest(c);
     if (!auth) {
+      logCodedFailure(logger, 'mcp.request_rejected', 'unauthorized', 'MCP request was not authorized', {
+        productSurface: 'mcp',
+        operation: 'request',
+      });
       return c.json(
         {
           jsonrpc: '2.0',
@@ -327,6 +337,10 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
     try {
       body = await c.req.json();
     } catch {
+      logCodedFailure(logger, 'mcp.request_rejected', 'invalid_request', 'MCP request body was not valid JSON', {
+        productSurface: 'mcp',
+        operation: 'request',
+      });
       return c.json({ jsonrpc: '2.0', error: { code: -32700, message: 'Parse error' }, id: null }, 400);
     }
     const server = buildMcpServer(service.withPrincipal(auth), {
@@ -334,6 +348,7 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
       maxAttachmentBytes: config.maxAttachmentBytes,
       telemetry,
       transport: 'http',
+      logger,
     });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
@@ -380,6 +395,7 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
       const owner = findMember(db, ownerRef);
       return c.redirect(beginGoogleOAuth({ ownerMemberId: owner.id, sharedWithAll: false }));
     } catch (err) {
+      logFailure(logger, 'oauth.google_start_failed', err);
       return c.text(err instanceof Error ? err.message : String(err), 400);
     }
   });
@@ -472,6 +488,7 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
           `<p>Account id: <code>${escapeHtml(account.id)}</code>. You can close this tab.</p></body></html>`,
       );
     } catch (err) {
+      logFailure(logger, 'oauth.google_callback_failed', err);
       // Surface why connecting failed (expired code, missing refresh token,
       // account limit) instead of a blank 500 the user cannot act on.
       if (isEmailError(err)) return c.text(`Could not connect the account: ${err.message}`, 400);
@@ -498,6 +515,7 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
       const owner = findMember(db, ownerRef);
       return c.redirect(beginMicrosoftOAuth({ ownerMemberId: owner.id, sharedWithAll: false }));
     } catch (err) {
+      logFailure(logger, 'oauth.microsoft_start_failed', err);
       return c.text(err instanceof Error ? err.message : String(err), 400);
     }
   });
@@ -602,12 +620,13 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
           `<p>Account id: <code>${escapeHtml(account.id)}</code>. You can close this tab.</p></body></html>`,
       );
     } catch (err) {
+      logFailure(logger, 'oauth.microsoft_callback_failed', err);
       if (isEmailError(err)) return c.text(`Could not connect the account: ${err.message}`, 400);
       return c.text('Could not connect the account; check the server logs.', 500);
     }
   });
 
-  app.route('/', createRestApi({ config, db, service, telemetry, registry, licenseController }));
+  app.route('/', createRestApi({ config, db, service, telemetry, logger, registry, licenseController }));
 
   return app;
 }
