@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { emitKeypressEvents } from 'node:readline';
 import { createInterface } from 'node:readline/promises';
 import { hostname } from 'node:os';
@@ -11,14 +11,15 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { EmailError, isEmailError } from '@fluxmail/core';
 import { createContext } from './context.js';
 import {
-  configFilePath,
-  maskStoredConfigValue,
-  readStoredConfig,
+  configTomlPath,
+  createConfigurationService,
+  deploymentToml,
   readLoggingSettings,
   resolveDataDir,
-  setStoredConfig,
-  unsetStoredConfig,
+  resolveStoreLocation,
+  writeDeploymentConfig,
 } from './config.js';
+import { migrateConfigurationFile, parseEnvContent, recognizedMigrationSettings } from './configMigration.js';
 import { createApp } from './http/app.js';
 import { buildMcpServer } from './mcp/buildServer.js';
 import { runLoopbackFlow } from './accounts/googleAuth.js';
@@ -34,7 +35,13 @@ import { findMember } from './storage/members.js';
 import { LICENSE_KEY_PATTERN } from './licensing/client.js';
 import { checkLicenseState, getEntitlements, type Entitlements } from './licensing/entitlements.js';
 import { VERSION } from './version.js';
-import type { FluxmailDb } from './storage/db.js';
+import {
+  inspectStoreCompatibility,
+  MIN_SUPPORTED_STORE_FORMAT,
+  openDb,
+  openReadonlyDb,
+  type FluxmailDb,
+} from './storage/db.js';
 import type { ImapSecurity } from '@fluxmail/provider-imap';
 import {
   customPermissionPolicy,
@@ -53,6 +60,7 @@ import {
   isTelemetryEnabled,
   setTelemetryEnabled,
   shutdownTelemetry,
+  telemetryDisabledInAnyEnvironment,
   type Telemetry,
 } from './telemetry.js';
 import {
@@ -177,7 +185,10 @@ function connectionSecurity(value: string, option: string): ImapSecurity {
 
 async function hiddenPrompt(label: string): Promise<string> {
   if (!process.stdin.isTTY || !process.stdin.setRawMode) {
-    throw new EmailError('invalid_request', `${label} must be supplied through a password environment variable.`);
+    throw new EmailError(
+      'invalid_request',
+      `${label} requires an interactive terminal or an explicit non-interactive input.`,
+    );
   }
   const wasFlowing = process.stdin.readableFlowing === true;
   emitKeypressEvents(process.stdin);
@@ -259,6 +270,16 @@ async function accountSecret(envName: string | undefined, label: string): Promis
   const value = process.env[envName];
   if (!value) throw new EmailError('invalid_request', `${envName} is not set or is empty.`);
   return value;
+}
+
+function readSecretFile(file: string): string {
+  const value = readFileSync(file === '-' ? 0 : file, 'utf8').replace(/\r?\n$/, '');
+  if (!value) throw new EmailError('invalid_request', 'The secret input is empty.');
+  return value;
+}
+
+async function secretInput(file: string | undefined, label: string): Promise<string> {
+  return file === undefined ? hiddenPrompt(label) : readSecretFile(file);
 }
 
 function planLine(ent: Entitlements): string {
@@ -434,17 +455,37 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
     }
     // Respect the opt-out before creating a telemetry client or recording this command.
     if (command === 'telemetry disable') return;
-    const dataDir = resolveDataDir();
+    let telemetryEnvironment: NodeJS.ProcessEnv | undefined;
+    let telemetryDataDir: string | undefined;
+    if (command === 'config migrate') {
+      const migration = actionCommand.opts<{ from?: string }>();
+      if (migration.from) {
+        try {
+          const values = parseEnvContent(readFileSync(path.resolve(migration.from), 'utf8'));
+          if (values.FLUXMAIL_DATA_DIR !== undefined) {
+            telemetryDataDir = resolveDataDir({
+              env: { ...process.env, FLUXMAIL_DATA_DIR: values.FLUXMAIL_DATA_DIR },
+            });
+          }
+          if (telemetryDisabledInAnyEnvironment(process.env, values)) {
+            telemetryEnvironment = { ...process.env, FLUXMAIL_TELEMETRY: '0' };
+          }
+        } catch {
+          // The command action reports file and parsing errors.
+        }
+      }
+    }
+    const dataDir = telemetryDataDir ?? resolveDataDir();
     let logging: ReturnType<typeof readLoggingSettings>;
     try {
       logging = readLoggingSettings(dataDir);
     } catch {
-      // Keep recovery and remote commands available when a stored logging value is invalid.
+      // Keep recovery and remote commands available when logging configuration is invalid.
       logging = { level: 'info', destination: 'both' };
     }
     const mode = actionCommand.name() === 'serve' ? 'serve' : actionCommand.name() === 'stdio' ? 'stdio' : 'cli';
     activeCliOperations.set(program, {
-      telemetry: options.telemetry ?? getTelemetry(dataDir),
+      telemetry: options.telemetry ?? getTelemetry(dataDir, telemetryEnvironment),
       operation: command,
       startedAt: performance.now(),
       initialExitCode: process.exitCode,
@@ -1050,7 +1091,14 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
                   'Try again and choose the matching Google account.',
               );
             }
-            return ctx.registry.addGmailAccount(result.email, result.tokens, result.displayName, owner.id, access);
+            return ctx.registry.addGmailAccount(
+              result.email,
+              result.tokens,
+              result.displayName,
+              owner.id,
+              access,
+              result.oauthClient,
+            );
           },
         );
         auditConnection('account.connection.complete', account.id);
@@ -1618,9 +1666,19 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
 
   license
     .command('activate')
-    .argument('<key>', 'License key (fluxmail_lic_…), shown once at purchase')
+    .argument('[key]', 'Deprecated: license key shown once at purchase')
+    .option('--key-file <path>', 'Read the license key from a file, or use - for stdin')
     .description('Store a license key and validate it with the license server')
-    .action(async (key: string) => {
+    .action(async (deprecatedKey: string | undefined, options: { keyFile?: string }) => {
+      if (deprecatedKey && options.keyFile) {
+        console.error('Error: The deprecated positional key cannot be combined with --key-file.');
+        process.exitCode = 1;
+        return;
+      }
+      if (deprecatedKey) {
+        console.error('Warning: Passing a license key as an argument is deprecated. Use --key-file or hidden input.');
+      }
+      const key = deprecatedKey ?? (await secretInput(options.keyFile, 'License key'));
       if (!LICENSE_KEY_PATTERN.test(key)) {
         console.error(
           'That does not look like a Fluxmail license key (expected "fluxmail_lic_" followed by 40 hex characters).',
@@ -1664,7 +1722,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
       try {
         const status = await instanceClient(selectedInstance()).json<{
           configured: boolean;
-          source: 'environment' | 'stored' | null;
+          source: 'environment' | 'environment-file' | 'stored' | null;
           entitlements: Entitlements;
           usage: { accounts: number; members: number; overQuota: boolean };
           lastValidatedAt: string | null;
@@ -1673,7 +1731,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         console.log(
           status.configured
             ? `License configured from ${status.source}.`
-            : 'No license key configured. Run "fluxmail license activate <key>" after purchasing one.',
+            : 'No license key configured. Run "fluxmail license activate" after purchasing one.',
         );
         console.log(`Current plan: ${planLine(status.entitlements)}`);
         console.log(
@@ -1711,20 +1769,17 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
       }
     });
 
-  const configCmd = program
-    .command('config')
-    .description('Persistent settings stored in the data dir, usable from any directory');
+  const configCmd = program.command('config').description('Inspect and initialize deployment configuration');
 
   configCmd
-    .command('set')
-    .argument('<key>', 'Setting name, e.g. GOOGLE_CLIENT_ID')
-    .argument('<value>')
-    .description('Store a setting (shell env vars and local .env files still take precedence)')
-    .action((key: string, value: string) => {
+    .command('init')
+    .description('Create config.toml in the Fluxmail data directory')
+    .action(() => {
       try {
         const dataDir = resolveDataDir();
-        setStoredConfig(dataDir, key, value);
-        console.log(`Set ${key} in ${configFilePath(dataDir)}`);
+        const file = configTomlPath(dataDir);
+        writeDeploymentConfig(file, deploymentToml(), { exclusive: true });
+        console.log(`Created ${file}`);
       } catch (err) {
         logActiveCliError(program, err);
         console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
@@ -1733,29 +1788,134 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
     });
 
   configCmd
-    .command('unset')
-    .argument('<key>')
-    .description('Remove a stored setting')
-    .action((key: string) => {
-      const dataDir = resolveDataDir();
-      console.log(unsetStoredConfig(dataDir, key) ? `Removed ${key}` : `${key} is not set`);
+    .command('show')
+    .description('Show effective configuration, sources, paths, and restart requirements')
+    .action(() => {
+      const deployment = resolveStoreLocation().deployment!;
+      const compatibility = inspectStoreCompatibility(deployment.dbPath, deployment.dataDir);
+      const canReadInstanceSettings =
+        compatibility.storeFormat >= MIN_SUPPORTED_STORE_FORMAT &&
+        compatibility.storeFormat <= compatibility.maximumSupportedFormat;
+      const db =
+        canReadInstanceSettings && deployment.dbPath !== ':memory:'
+          ? openReadonlyDb(deployment.dbPath)
+          : openDb(':memory:', { backupBeforeMigration: false });
+      try {
+        const configuration = createConfigurationService(deployment, db);
+        const config = configuration.config;
+        console.log(`Data directory: ${deployment.dataDir} [${deployment.sources.dataDir}]`);
+        console.log(
+          `Configuration file: ${deployment.configFile}${existsSync(deployment.configFile) ? '' : ' (not created)'}`,
+        );
+        console.log(`Database: ${deployment.dbPath} [${deployment.sources.dbPath}] restart required`);
+        console.log(`Server port: ${deployment.port} [${deployment.sources.port}] restart required`);
+        console.log(`Public URL: ${deployment.publicUrl} [${deployment.sources.publicUrl}] restart required`);
+        console.log(`Trust proxy: ${deployment.trustProxy} [${deployment.sources.trustProxy}] restart required`);
+        console.log(`Local OAuth host: ${deployment.oauthHost} [${deployment.sources.oauthHost}] restart required`);
+        console.log(`Local OAuth port: ${deployment.oauthPort} [${deployment.sources.oauthPort}] restart required`);
+        console.log(
+          `Maximum attachment: ${deployment.maxAttachmentBytes / (1024 * 1024)} MB [${deployment.sources.maxAttachmentBytes}] restart required`,
+        );
+        console.log(
+          `Encryption key: ${deployment.encryptionKey.length === 32 ? 'configured' : 'not configured'} [${deployment.sources.encryptionKey}]`,
+        );
+        const oauth = configuration.oauthStatus();
+        console.log(`Google OAuth: configured [${oauth.google.source}]`);
+        console.log(
+          `Outlook OAuth: ${oauth.outlook.clientId ? 'configured' : 'not configured'} [${oauth.outlook.source ?? 'none'}]`,
+        );
+        console.log(
+          `License: ${config.licenseKey ? 'configured' : 'not configured'} [${configuration.licenseSource() ?? 'none'}]`,
+        );
+      } finally {
+        (db as unknown as { $client: { close(): void } }).$client.close();
+      }
     });
 
   configCmd
-    .command('list')
-    .description('Show stored settings (secret values are masked)')
-    .action(() => {
-      const dataDir = resolveDataDir();
-      const stored = readStoredConfig(dataDir);
-      const keys = Object.keys(stored);
-      if (!keys.length) {
-        console.log(`No stored settings. Run "fluxmail config set <KEY> <value>" (file: ${configFilePath(dataDir)}).`);
+    .command('migrate')
+    .requiredOption('--from <env-file>', 'Read recognized settings from this env file')
+    .option('--dry-run', 'Show recognized setting names without changing Fluxmail')
+    .description('Import settings from an env file without deleting it')
+    .action((options: { from: string; dryRun?: boolean }) => {
+      const source = path.resolve(options.from);
+      if (options.dryRun) {
+        const recognized = recognizedMigrationSettings(parseEnvContent(readFileSync(source, 'utf8')));
+        console.log(recognized.length ? recognized.join('\n') : 'No recognized settings found.');
         return;
       }
-      for (const key of keys) {
-        const value = stored[key] ?? '';
-        console.log(`${key}=${maskStoredConfigValue(key, value)}`);
+      const result = migrateConfigurationFile(source);
+      console.log(
+        `Imported ${result.recognized.length} recognized setting${result.recognized.length === 1 ? '' : 's'} from ${result.source}.`,
+      );
+      console.log('Restart Fluxmail to apply deployment configuration changes.');
+    });
+
+  const oauth = program.command('oauth').description('Manage OAuth applications');
+
+  oauth
+    .command('status')
+    .description('Show OAuth application status without secrets')
+    .action(async () => {
+      const status = await instanceClient(selectedInstance()).json('/api/v1/admin/oauth-apps');
+      console.log(JSON.stringify(status, null, 2));
+    });
+
+  const oauthConfigure = oauth.command('configure').description('Configure an OAuth application');
+  oauthConfigure
+    .command('google')
+    .requiredOption('--client-id <id>', 'Google OAuth client ID')
+    .option('--client-secret-file <path>', 'Read the client secret from a file, or use - for stdin')
+    .description('Configure a custom Google OAuth application')
+    .action(async (options: { clientId: string; clientSecretFile?: string }) => {
+      const clientSecret = await secretInput(options.clientSecretFile, 'Google client secret');
+      await instanceClient(selectedInstance()).json('/api/v1/admin/oauth-apps/google', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ clientId: options.clientId, clientSecret }),
+      });
+      console.log('Google OAuth application configured.');
+    });
+
+  oauthConfigure
+    .command('outlook')
+    .requiredOption('--client-id <id>', 'Microsoft OAuth client ID')
+    .option('--tenant-id <tenant>', 'Microsoft tenant ID', 'common')
+    .option('--public-client', 'Configure a public client without a secret')
+    .option('--client-secret-file <path>', 'Read the client secret from a file, or use - for stdin')
+    .description('Configure a custom Microsoft OAuth application')
+    .action(
+      async (options: { clientId: string; tenantId: string; publicClient?: boolean; clientSecretFile?: string }) => {
+        if (options.publicClient && options.clientSecretFile) {
+          throw new EmailError('invalid_request', '--public-client cannot be combined with --client-secret-file.');
+        }
+        const clientSecret = options.publicClient
+          ? undefined
+          : await secretInput(options.clientSecretFile, 'Microsoft client secret');
+        await instanceClient(selectedInstance()).json('/api/v1/admin/oauth-apps/outlook', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            clientId: options.clientId,
+            tenantId: options.tenantId,
+            publicClient: Boolean(options.publicClient),
+            ...(clientSecret ? { clientSecret } : {}),
+          }),
+        });
+        console.log('Microsoft OAuth application configured.');
+      },
+    );
+
+  oauth
+    .command('reset')
+    .argument('<provider>', 'google or outlook')
+    .description('Remove a stored OAuth application')
+    .action(async (provider: string) => {
+      if (provider !== 'google' && provider !== 'outlook') {
+        throw new EmailError('invalid_request', 'Provider must be google or outlook.');
       }
+      await instanceClient(selectedInstance()).json(`/api/v1/admin/oauth-apps/${provider}`, { method: 'DELETE' });
+      console.log(`${provider === 'google' ? 'Google' : 'Microsoft'} OAuth application reset.`);
     });
 
   program
@@ -1818,7 +1978,6 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
     .action(() => {
       const dataDir = resolveDataDir();
       setTelemetryEnabled(dataDir, true);
-      unsetStoredConfig(dataDir, 'FLUXMAIL_TELEMETRY');
       console.log('Telemetry enabled. FLUXMAIL_TELEMETRY=0 or DO_NOT_TRACK=1 can still turn it off.');
     });
 

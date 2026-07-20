@@ -1,4 +1,10 @@
-import { loadConfig, resolveStoreLocation, type FluxmailConfig } from './config.js';
+import {
+  createConfigurationService,
+  ensureDeploymentEncryptionKey,
+  resolveStoreLocation,
+  type ConfigurationService,
+  type FluxmailConfig,
+} from './config.js';
 import { IncompatibleStoreError, inspectStoreCompatibility, openDb, type FluxmailDb } from './storage/db.js';
 import { AccountRegistry } from './accounts/registry.js';
 import { EmailService } from './service/emailService.js';
@@ -9,6 +15,7 @@ import { getLogger, type Logger, type ProcessMode } from './logging.js';
 
 export interface AppContext {
   config: FluxmailConfig;
+  configuration: ConfigurationService;
   db: FluxmailDb;
   registry: AccountRegistry;
   service: EmailService;
@@ -23,24 +30,33 @@ export function createContext(options: { logger?: Logger; processMode?: ProcessM
   const storeLocation = resolveStoreLocation();
   const compatibility = inspectStoreCompatibility(storeLocation.dbPath, storeLocation.dataDir);
   if (!compatibility.compatible) throw new IncompatibleStoreError(compatibility);
-  const config = loadConfig(storeLocation);
+  const deployment = ensureDeploymentEncryptionKey(storeLocation.deployment!);
   const logger =
     options.logger ??
-    getLogger(config.dataDir, options.processMode ?? 'library', {
-      level: config.logLevel,
-      destination: config.logDestination,
+    getLogger(deployment.dataDir, options.processMode ?? 'library', {
+      level: deployment.logLevel,
+      destination: deployment.logDestination,
     });
-  const db = openDb(config.dbPath, { dataDir: config.dataDir });
+  const db = openDb(deployment.dbPath, { dataDir: deployment.dataDir });
+  let configuration: ConfigurationService;
+  try {
+    configuration = createConfigurationService(deployment, db);
+  } catch (error) {
+    (db as unknown as { $client: { close(): void } }).$client.close();
+    throw error;
+  }
+  const config = configuration.config;
   const registry = new AccountRegistry(db, config);
   const service = new EmailService(registry, db);
   const scheduler = new SendScheduler(db, service, logger);
-  const telemetry = getTelemetry(config.dataDir);
+  const telemetry = getTelemetry(config.dataDir, deployment.environment);
   const licenseController = new LicenseController({
     db,
     config,
+    configuration,
     logger,
     onRefreshed: () => scheduler.wake(),
   });
   service.onScheduleChanged = () => scheduler.wake();
-  return { config, db, registry, service, scheduler, telemetry, logger, licenseController };
+  return { config, configuration, db, registry, service, scheduler, telemetry, logger, licenseController };
 }

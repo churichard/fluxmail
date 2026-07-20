@@ -51,12 +51,13 @@ The supplied Docker Compose file also limits container console logs to three 5 M
 
 For example, keep errors in the rotating file without writing structured events to the console:
 
-```bash
-fluxmail config set FLUXMAIL_LOG_LEVEL error
-fluxmail config set FLUXMAIL_LOG_DESTINATION file
+```toml
+[logging]
+level = "error"
+destination = "file"
 ```
 
-Restart long running Fluxmail processes after changing either setting.
+Environment variables take precedence over `config.toml`. Restart Fluxmail after changing either setting.
 
 ## Private information
 
