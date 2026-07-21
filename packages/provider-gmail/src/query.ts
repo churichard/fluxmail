@@ -41,7 +41,12 @@ function compileExpression(
       .filter(Boolean)
       .join(' ');
   if (expression.type === 'or') {
-    const operands = expression.operands.map((operand) => compileExpression(operand, resolveLabelId)).filter(Boolean);
+    const operands = expression.operands
+      .map((operand) => {
+        const compiled = compileExpression(operand, resolveLabelId);
+        return compiled && operand.type === 'and' ? `(${compiled})` : compiled;
+      })
+      .filter(Boolean);
     return operands.length ? `{${operands.join(' ')}}` : '';
   }
   if (expression.type === 'not') {

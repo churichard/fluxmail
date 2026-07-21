@@ -89,6 +89,32 @@ describe('toGmailQuery', () => {
     ).toBe('{from:amy@example.com from:david@example.com} -subject:"status report" filename:plan.pdf');
   });
 
+  it('preserves conjunctions nested inside disjunctions', () => {
+    expect(
+      toGmailQuery(
+        {
+          expression: {
+            type: 'or',
+            operands: [
+              { type: 'field', field: 'from', value: 'amy' },
+              {
+                type: 'and',
+                operands: [
+                  { type: 'field', field: 'to', value: 'david' },
+                  {
+                    type: 'not',
+                    operand: { type: 'field', field: 'subject', value: 'status' },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        noLabels,
+      ).q,
+    ).toBe('{from:amy (to:david -subject:status)}');
+  });
+
   it('resolves structured labels without leaking desktop folder ids', () => {
     expect(
       toGmailQuery({ expression: { type: 'field', field: 'label', value: 'Projects' } }, (value) =>
