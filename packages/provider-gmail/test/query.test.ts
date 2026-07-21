@@ -61,4 +61,75 @@ describe('toGmailQuery', () => {
   it('rejects invalid date filters before calling Gmail', () => {
     expect(() => toGmailQuery({ after: 'not-a-date' }, noLabels)).toThrow(/valid ISO date/);
   });
+
+  it('compiles structured boolean expressions without flattening them', () => {
+    expect(
+      toGmailQuery(
+        {
+          expression: {
+            type: 'and',
+            operands: [
+              {
+                type: 'or',
+                operands: [
+                  { type: 'field', field: 'from', value: 'amy@example.com' },
+                  { type: 'field', field: 'from', value: 'david@example.com' },
+                ],
+              },
+              {
+                type: 'not',
+                operand: { type: 'field', field: 'subject', value: 'status report' },
+              },
+              { type: 'field', field: 'filename', value: 'plan.pdf' },
+            ],
+          },
+        },
+        noLabels,
+      ).q,
+    ).toBe('{from:amy@example.com from:david@example.com} -subject:"status report" filename:plan.pdf');
+  });
+
+  it('resolves structured labels without leaking desktop folder ids', () => {
+    expect(
+      toGmailQuery({ expression: { type: 'field', field: 'label', value: 'Projects' } }, (value) =>
+        value === 'Projects' ? 'Label_42' : null,
+      ).q,
+    ).toBe('label:Label_42');
+  });
+
+  it('preserves exact text and quotes Gmail grouping characters in field values', () => {
+    expect(toGmailQuery({ expression: { type: 'text', value: 'foo(bar)', exact: true } }, noLabels).q).toBe(
+      '"foo(bar)"',
+    );
+    expect(toGmailQuery({ expression: { type: 'field', field: 'label', value: 'Ops(Q3)' } }, noLabels).q).toBe(
+      'label:"Ops(Q3)"',
+    );
+  });
+
+  it('compiles folder aliases and widens the API scope for positive spam/trash expressions', () => {
+    expect(
+      toGmailQuery(
+        {
+          expression: {
+            type: 'or',
+            operands: [
+              { type: 'field', field: 'folder', value: 'trash' },
+              { type: 'field', field: 'folder', value: 'starred' },
+              { type: 'field', field: 'folder', value: 'archive' },
+            ],
+          },
+        },
+        noLabels,
+      ),
+    ).toEqual({
+      q: '{in:trash is:starred in:archive}',
+      includeSpamTrash: true,
+    });
+    expect(
+      toGmailQuery(
+        { expression: { type: 'not', operand: { type: 'field', field: 'folder', value: 'spam' } } },
+        noLabels,
+      ).includeSpamTrash,
+    ).toBeUndefined();
+  });
 });

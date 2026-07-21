@@ -1,7 +1,7 @@
 ---
 title: 'Architecture'
 description: 'Where Fluxmail keeps your data and how MCP, REST, and CLI requests reach each email provider.'
-updated: '2026-07-18'
+updated: '2026-07-21'
 ---
 
 ## Where your data lives
@@ -23,6 +23,8 @@ HTTP MCP with an API key ------/
 CLI commands use the same REST operations, database, and provider connections as the running server. The CLI only handles terminal concerns such as flags, JSON input, local attachment files, and formatted output.
 
 Provider differences still affect the available behavior. Folders are places you can navigate, such as Inbox or Archive. Labels are tags that a message can have alongside its folder. Gmail user labels work as both navigable views and tags, so they appear in folder and label listings. Outlook folders appear as folders, while Outlook categories appear as labels. IMAP has folders but does not support label actions. It also uses the mail server's basic search and has no server-side thread model. Fluxmail reconstructs IMAP threads from standard email headers.
+
+Search filters use a provider-neutral expression tree. Gmail receives Gmail query syntax, Outlook receives Microsoft Graph KQL and OData filters, and IMAP receives server search keys. Fluxmail returns `unsupported_capability` when a provider cannot represent a grouped filter without changing its meaning. Gmail-compatible IMAP servers can handle label, filename, and nested attachment filters through `X-GM-EXT-1`. Precise dates inside grouped IMAP expressions require the `WITHIN` extension.
 
 ## How permissions are enforced
 

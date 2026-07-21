@@ -623,7 +623,11 @@ describe('ImapProvider connection and pagination state', () => {
     expect(factory).toHaveBeenCalledOnce();
   });
 
-  function paginationProvider(initialUids: number[], listedFolders = [folder('INBOX'), folder('Sent')]) {
+  function paginationProvider(
+    initialUids: number[],
+    listedFolders = [folder('INBOX'), folder('Sent')],
+    dateForUid: (uid: number) => Date = () => new Date('2026-01-01T00:00:00Z'),
+  ) {
     const store = new MemoryStore();
     let selected = 'INBOX';
     let uids = initialUids;
@@ -646,7 +650,7 @@ describe('ImapProvider connection and pagination state', () => {
         envelope: { subject: `${selected}-${uid}`, messageId: `<${selected}-${uid}@example.com>` },
         headers: Buffer.from(`Message-ID: <${selected}-${uid}@example.com>\r\n`),
         flags: new Set<string>(),
-        internalDate: new Date('2026-01-01T00:00:00Z'),
+        internalDate: dateForUid(uid),
       })),
     };
     return {
@@ -686,6 +690,22 @@ describe('ImapProvider connection and pagination state', () => {
     const { provider } = paginationProvider([2, 1]);
     const page = await provider.listMessages({ folder: 'INBOX' }, { pageSize: 2 });
     expect(page.nextPageToken).toBeUndefined();
+  });
+
+  it('filters top-level date searches at the requested timestamp without WITHIN', async () => {
+    const dates = new Map([
+      [3, new Date('2026-07-20T12:00:00Z')],
+      [2, new Date('2026-07-20T09:00:00Z')],
+      [1, new Date('2026-07-20T11:00:00Z')],
+    ]);
+    const { provider } = paginationProvider([3, 2, 1], undefined, (uid) => dates.get(uid)!);
+
+    const page = await provider.listMessages({
+      folder: 'INBOX',
+      after: '2026-07-20T10:00:00.000Z',
+    });
+
+    expect(page.items.map((message) => message.subject)).toEqual(['INBOX-3', 'INBOX-1']);
   });
 
   it('excludes resolved Spam and Trash folders when the server has no All mailbox', async () => {

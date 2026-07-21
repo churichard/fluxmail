@@ -188,6 +188,14 @@ function isoDate(value: Date | string | undefined): string {
   return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
 }
 
+function matchesExactDate(query: EmailQuery, fetched: FetchMessageObject): boolean {
+  if (!query.after && !query.before) return true;
+  const timestamp = new Date(fetched.envelope?.date ?? fetched.internalDate ?? Date.now()).getTime();
+  if (query.after && timestamp < new Date(query.after).getTime()) return false;
+  if (query.before && timestamp >= new Date(query.before).getTime()) return false;
+  return true;
+}
+
 export function smtpTransportOptions(config: ImapCredentials['smtp']) {
   return {
     host: config.host,
@@ -434,9 +442,10 @@ export class ImapProvider implements EmailProvider {
     searchFolders: for (; folderIndex < paths.length; folderIndex++, upperUid = undefined) {
       const path = paths[folderIndex]!;
       await this.withMailbox(path, async (client, uidValidity) => {
-        const found = await client.search(toImapSearch(normalizedQuery, client.capabilities.has('X-GM-EXT-1')), {
-          uid: true,
-        });
+        const found = await client.search(
+          toImapSearch(normalizedQuery, client.capabilities.has('X-GM-EXT-1'), client.capabilities.has('WITHIN')),
+          { uid: true },
+        );
         const uids = (found || []).sort((a, b) => b - a).filter((uid) => upperUid === undefined || uid <= upperUid);
         for (const uid of uids) {
           const fetched = await client.fetchOne(
@@ -445,7 +454,12 @@ export class ImapProvider implements EmailProvider {
             { uid: true },
           );
           if (!fetched) continue;
-          if (query.hasAttachment && !inspectStructure(fetched.bodyStructure).attachments.length) continue;
+          if (!matchesExactDate(query, fetched)) continue;
+          if (
+            query.hasAttachment !== undefined &&
+            Boolean(inspectStructure(fetched.bodyStructure).attachments.length) !== query.hasAttachment
+          )
+            continue;
           if (items.length === pageSize) {
             nextCursor = { v: 2, hash, folder: folderIndex, upperUid: uid };
             return;

@@ -295,12 +295,20 @@ describe('OutlookProvider', () => {
     expect(first.items.map((message) => message.id)).toEqual(['message-inbox']);
     expect(first.nextPageToken).toBeTruthy();
     expect(JSON.parse(Buffer.from(first.nextPageToken!, 'base64url').toString('utf8'))).toMatchObject({
-      localFilter: { unreadOnly: true, allMailScope: true },
+      localFilter: { read: false, allMailScope: true },
     });
     expect(Buffer.from(first.nextPageToken!, 'base64url').toString('utf8')).not.toContain('folder-trash');
 
     const second = await outlook.listMessages({}, { pageToken: first.nextPageToken });
     expect(second.items).toEqual([]);
+
+    const legacyPageToken = Buffer.from(
+      JSON.stringify({
+        url: nextLink,
+        localFilter: { unreadOnly: true, allMailScope: true },
+      }),
+    ).toString('base64url');
+    await expect(outlook.listMessages({}, { pageToken: legacyPageToken })).resolves.toMatchObject({ items: [] });
   });
 
   it('refreshes once after a 401 response', async () => {

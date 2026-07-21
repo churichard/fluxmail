@@ -17,7 +17,7 @@ describe('Microsoft Graph query translation', () => {
       }),
     ).toEqual({
       search:
-        '"quarterly \\"report\\" AND from:\\"alex@example.com\\" AND to:\\"me@example.com\\" AND subject:\\"quarterly forecast\\" AND received>=2026-01-02 AND received<2026-02-03"',
+        '"quarterly \\"report\\" AND from:\\"alex@example.com\\" AND to:\\"me@example.com\\" AND subject:\\"quarterly forecast\\" AND received>=2026-01-02T00:00:00.000Z AND received<2026-02-03T00:00:00.000Z"',
       filter: "isRead eq false and flag/flagStatus eq 'flagged' and hasAttachments eq true",
     });
   });
@@ -37,5 +37,39 @@ describe('Microsoft Graph query translation', () => {
 
   it('rejects invalid dates', () => {
     expect(() => toGraphQuery({ after: 'not-a-date' })).toThrow(/after must be a valid ISO date/);
+  });
+
+  it('preserves time precision in KQL date filters', () => {
+    expect(toGraphQuery({ after: '2026-07-20T10:00:00.000Z' })).toEqual({
+      search: '"received>=2026-07-20T10:00:00.000Z"',
+    });
+  });
+
+  it('compiles structured KQL with boolean precedence and attachment fields', () => {
+    expect(
+      toGraphQuery({
+        expression: {
+          type: 'and',
+          operands: [
+            {
+              type: 'or',
+              operands: [
+                { type: 'field', field: 'from', value: 'amy@example.com' },
+                { type: 'field', field: 'to', value: 'david@example.com' },
+              ],
+            },
+            { type: 'not', operand: { type: 'field', field: 'filename', value: 'draft.docx' } },
+          ],
+        },
+      }),
+    ).toEqual({
+      search: '"((from:\\"amy@example.com\\" OR to:\\"david@example.com\\") AND NOT (attachment:\\"draft.docx\\"))"',
+    });
+  });
+
+  it('supports both positive and negative top-level flags', () => {
+    expect(toGraphQuery({ read: true, starred: false, hasAttachment: false })).toEqual({
+      filter: "isRead eq true and flag/flagStatus ne 'flagged' and hasAttachments eq false",
+    });
   });
 });

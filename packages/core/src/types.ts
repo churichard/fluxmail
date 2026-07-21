@@ -157,6 +157,33 @@ export type ModifyAction =
   | { addLabels: string[] }
   | { removeLabels: string[] };
 
+export type EmailSearchField =
+  | 'from'
+  | 'to'
+  | 'cc'
+  | 'bcc'
+  | 'subject'
+  | 'label'
+  | 'folder'
+  | 'has_attachment'
+  | 'read'
+  | 'starred'
+  | 'after'
+  | 'before'
+  | 'filename'
+  | 'filetype'
+  | 'account';
+
+/** Provider-neutral search tree. Boolean nodes preserve the user's grouping and precedence. */
+export type EmailSearchExpression =
+  | { type: 'text'; value: string; exact: boolean }
+  | { type: 'field'; field: EmailSearchField; value: string | boolean }
+  | { type: 'and'; operands: EmailSearchExpression[] }
+  | { type: 'or'; operands: EmailSearchExpression[] }
+  | { type: 'not'; operand: EmailSearchExpression }
+  | { type: 'all' }
+  | { type: 'none' };
+
 export interface EmailQuery {
   /** Folder id or role. An omitted folder uses All Mail, excluding Spam and Trash. */
   folder?: string;
@@ -165,8 +192,13 @@ export interface EmailQuery {
   from?: string;
   to?: string;
   subject?: string;
+  /** Read state. Prefer this over unreadOnly for new callers. */
+  read?: boolean;
+  /** Starred/flagged state. Prefer this over starredOnly for new callers. */
+  starred?: boolean;
   unreadOnly?: boolean;
   starredOnly?: boolean;
+  /** Attachment presence. Both true and false are meaningful. */
   hasAttachment?: boolean;
   /** ISO date (inclusive). */
   after?: string;
@@ -174,6 +206,8 @@ export interface EmailQuery {
   before?: string;
   /** Escape hatch: passed to the provider verbatim (e.g. Gmail q=). */
   rawProviderQuery?: string;
+  /** Structured provider-neutral search. Combined with the legacy fields above using AND. */
+  expression?: EmailSearchExpression;
 }
 
 export interface PageOpts {

@@ -98,9 +98,9 @@ interface RequestOptions {
 }
 
 interface LocalMessageFilter {
-  unreadOnly?: true;
-  starredOnly?: true;
-  hasAttachment?: true;
+  read?: boolean;
+  starred?: boolean;
+  hasAttachment?: boolean;
   allMailScope?: true;
 }
 
@@ -153,12 +153,31 @@ function decodePageToken(token: string): PageTokenPayload {
       if (!payload.localFilter || typeof payload.localFilter !== 'object' || Array.isArray(payload.localFilter)) {
         throw new Error();
       }
-      const entries = Object.entries(payload.localFilter);
-      const booleanKeys = new Set(['unreadOnly', 'starredOnly', 'hasAttachment', 'allMailScope']);
-      if (entries.some(([key, value]) => !booleanKeys.has(key) || value !== true)) {
+      const normalized: LocalMessageFilter = {};
+      for (const [key, value] of Object.entries(payload.localFilter)) {
+        if (key === 'read' || key === 'starred' || key === 'hasAttachment') {
+          if (typeof value !== 'boolean') throw new Error();
+          normalized[key] = value;
+          continue;
+        }
+        if (key === 'unreadOnly') {
+          if (value !== true || normalized.read === true) throw new Error();
+          normalized.read = false;
+          continue;
+        }
+        if (key === 'starredOnly') {
+          if (value !== true || normalized.starred === false) throw new Error();
+          normalized.starred = true;
+          continue;
+        }
+        if (key === 'allMailScope') {
+          if (value !== true) throw new Error();
+          normalized.allMailScope = true;
+          continue;
+        }
         throw new Error();
       }
-      localFilter = payload.localFilter as LocalMessageFilter;
+      localFilter = normalized;
     }
     return { url: url.toString(), ...(localFilter ? { localFilter } : {}) };
   } catch {
@@ -168,9 +187,9 @@ function decodePageToken(token: string): PageTokenPayload {
 
 function localMessageFilter(query: EmailQuery, allMailScope = false): LocalMessageFilter | undefined {
   const filter: LocalMessageFilter = {
-    ...(query.unreadOnly ? { unreadOnly: true } : {}),
-    ...(query.starredOnly ? { starredOnly: true } : {}),
-    ...(query.hasAttachment ? { hasAttachment: true } : {}),
+    ...(query.read !== undefined ? { read: query.read } : query.unreadOnly ? { read: false } : {}),
+    ...(query.starred !== undefined ? { starred: query.starred } : query.starredOnly ? { starred: true } : {}),
+    ...(query.hasAttachment !== undefined ? { hasAttachment: query.hasAttachment } : {}),
     ...(allMailScope ? { allMailScope: true } : {}),
   };
   return Object.keys(filter).length ? filter : undefined;
@@ -182,9 +201,9 @@ function matchesLocalMessageFilter(
   allMailExcludedFolderIds: ReadonlySet<string>,
 ): boolean {
   if (!filter) return true;
-  if (filter.unreadOnly && message.isRead !== false) return false;
-  if (filter.starredOnly && message.flag?.flagStatus !== 'flagged') return false;
-  if (filter.hasAttachment && message.hasAttachments !== true) return false;
+  if (filter.read !== undefined && message.isRead !== filter.read) return false;
+  if (filter.starred !== undefined && (message.flag?.flagStatus === 'flagged') !== filter.starred) return false;
+  if (filter.hasAttachment !== undefined && (message.hasAttachments === true) !== filter.hasAttachment) return false;
   if (filter.allMailScope && message.parentFolderId && allMailExcludedFolderIds.has(message.parentFolderId))
     return false;
   return true;
