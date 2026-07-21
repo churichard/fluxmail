@@ -11,7 +11,7 @@ Fluxmail records user-facing changes in this file. The format follows [Common Ch
 - **Breaking:** replace `config.env` and automatic working-directory dotenv loading with typed `config.toml` deployment settings and encrypted OAuth and license records in SQLite; [back up the data directory and migrate existing configuration](https://fluxmail.ai/docs/upgrades/0.6.0/) before starting Fluxmail 0.6.0 ([#69](https://github.com/churichard/fluxmail/pull/69))
 - **Breaking:** replace `fluxmail config set`, `unset`, and `list` with `config init`, `config show`, `config migrate`, and focused `oauth` commands; update scripts and integrations before upgrading ([#69](https://github.com/churichard/fluxmail/pull/69))
 - **Breaking:** advance shared stores to format 2 and remove the public `config.env` and dotenv mutation helpers; do not open an upgraded store with an older release, and migrate package consumers to the typed configuration APIs ([#69](https://github.com/churichard/fluxmail/pull/69))
-- **Breaking:** require `EmailProvider` implementations to provide `listLabels`; implement the new method before upgrading provider packages ([#66](https://github.com/churichard/fluxmail/pull/66))
+- **Breaking:** add the required `listLabels` method to the public `EmailProvider` interface; custom provider implementations must add the method before upgrading to `@fluxmail/core` 0.6.0 ([#66](https://github.com/churichard/fluxmail/pull/66))
 - Reduce the paid license grace period after lease expiration from 21 days to 7 days ([#67](https://github.com/churichard/fluxmail/pull/67))
 
 ### Added
