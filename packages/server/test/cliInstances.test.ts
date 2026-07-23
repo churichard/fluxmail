@@ -2,6 +2,7 @@ import { mkdtempSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AccountRegistry } from '../src/accounts/registry.js';
 import {
   InstanceClient,
   credentialPath,
@@ -20,6 +21,7 @@ function privateMode(filePath: string): number {
 
 describe('CLI instance profiles', () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   });
@@ -85,6 +87,20 @@ describe('CLI instance profiles', () => {
       expect.objectContaining({ redirect: 'manual' }),
     );
     await expect(client.request('/https://other.example.com/steal')).rejects.toMatchObject({ code: 'invalid_request' });
+  });
+
+  it('closes the provider registry after an in-process request', async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), 'fluxmail-cli-local-'));
+    vi.stubEnv('FLUXMAIL_DATA_DIR', dataDir);
+    vi.stubEnv('FLUXMAIL_ENCRYPTION_KEY', '11'.repeat(32));
+    vi.stubEnv('FLUXMAIL_TELEMETRY', '0');
+    const close = vi.spyOn(AccountRegistry.prototype, 'close');
+    const client = new InstanceClient('local', { kind: 'local' });
+
+    const response = await client.request('/healthz', {}, false);
+
+    expect(response.status).toBe(200);
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it('can retain REST metadata and safe error codes', async () => {

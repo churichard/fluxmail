@@ -656,4 +656,17 @@ describe('AccountRegistry', () => {
     registry.removeAccount(account.id);
     expect(registry.listAccounts()).toHaveLength(0);
   });
+
+  it('closes every cached provider', async () => {
+    const db = openDb(':memory:');
+    const registry = new AccountRegistry(db, testConfig());
+    const owner = addMember(db, { name: 'Owner' });
+    const account = registry.addGmailAccount('me@example.com', tokens, undefined, owner.id);
+    const provider = registry.getProvider(account.id) as unknown as { close: ReturnType<typeof vi.fn> };
+    provider.close = vi.fn(async () => undefined);
+
+    await registry.close();
+
+    expect(provider.close).toHaveBeenCalledOnce();
+  });
 });

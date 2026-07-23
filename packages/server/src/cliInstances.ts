@@ -234,7 +234,11 @@ export class InstanceClient {
     }
     if (this.profile.kind === 'local') {
       const context = createContext();
-      return createApp(context).request(pathname, { ...init, headers });
+      try {
+        return await createApp(context).request(pathname, { ...init, headers });
+      } finally {
+        await context.registry.close();
+      }
     }
     const baseUrl = new URL(`${this.profile.serverUrl}/`);
     const url = new URL(pathname.replace(/^\/+/, ''), baseUrl);

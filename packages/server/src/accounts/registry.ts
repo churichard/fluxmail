@@ -47,6 +47,14 @@ export class AccountRegistry {
     void cached?.close?.();
   }
 
+  async close(): Promise<void> {
+    const cached = [...this.providers.values()].map(
+      ({ provider }) => provider as EmailProvider & { close?: () => Promise<void> },
+    );
+    this.providers.clear();
+    await Promise.all(cached.map((provider) => provider.close?.()));
+  }
+
   listAccounts(): Account[] {
     const grants = new Map<string, string[]>();
     for (const row of this.db.select().from(accountMemberGrants).all()) {
