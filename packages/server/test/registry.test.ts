@@ -186,6 +186,20 @@ describe('AccountRegistry', () => {
     expect(JSON.parse(decryptString(config.encryptionKey, row!.encryptedCredentials))).toEqual(imapCredentials);
   });
 
+  it('closes every cached provider during shutdown', async () => {
+    const db = openDb(':memory:');
+    const registry = new AccountRegistry(db, testConfig());
+    const owner = addMember(db, { name: 'Owner' });
+    const account = registry.addImapAccount('me@example.com', imapCredentials, undefined, owner.id);
+    registry.getProvider(account.id);
+    const close = vi.spyOn(ImapProvider.prototype, 'close').mockResolvedValue();
+
+    await registry.close();
+    await registry.close();
+
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it('adds an Outlook account with encrypted Graph credentials and Outlook capabilities', () => {
     const config = testConfig();
     const db = openDb(':memory:');

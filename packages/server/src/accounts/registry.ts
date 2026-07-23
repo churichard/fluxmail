@@ -39,6 +39,14 @@ export class AccountRegistry {
     private readonly config: FluxmailConfig,
   ) {}
 
+  async close(): Promise<void> {
+    const providers = [...this.providers.values()].map(
+      ({ provider }) => provider as EmailProvider & { close?: () => Promise<void> },
+    );
+    this.providers.clear();
+    await Promise.all(providers.map((provider) => provider.close?.()));
+  }
+
   private evictProvider(accountId: string): void {
     const cached = this.providers.get(accountId)?.provider as EmailProvider & { close?: () => Promise<void> };
     this.providers.delete(accountId);
