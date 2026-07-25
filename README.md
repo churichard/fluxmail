@@ -48,4 +48,6 @@ Then follow the [quickstart](https://fluxmail.ai/docs/quickstart) to connect a m
 
 The Personal plan supports three mailboxes and one member. Paid plans raise those limits for teams that share an instance. See [Fluxmail pricing](https://fluxmail.ai/pricing) for current details.
 
-Fluxmail is proprietary, source-available software. You may inspect, test, and privately modify the source, but production use is limited to your Fluxmail entitlement. Redistribution, hosted resale, competing use, and bypassing license controls are not permitted. See [LICENSE.md](LICENSE.md) for the full terms.
+Fluxmail is source available under the [Elastic License 2.0](LICENSE.md). You may use, modify, create derivative works, and redistribute Fluxmail subject to that license. Running a fork does not by itself require a paid Fluxmail subscription, and the built-in Personal plan supports three mailboxes and one member without a paid key.
+
+Official Pro and Team entitlements require a valid Fluxmail license key. ELv2 does not allow you to change or circumvent license key functionality, remove protected functionality, or provide Fluxmail itself as a hosted or managed service that exposes a substantial set of its features. Use of the Fluxmail name and logos is also subject to the [Fluxmail Terms of Service](https://fluxmail.ai/terms).

@@ -3,7 +3,7 @@
   "version": "0.7.0",
   "private": true,
   "description": "Self-hosted email API with MCP and REST support for Gmail, Outlook, and IMAP/SMTP",
-  "license": "SEE LICENSE IN LICENSE.md",
+  "license": "Elastic-2.0",
   "type": "module",
   "engines": {
     "node": "^20.20.0 || >=22.22.0"

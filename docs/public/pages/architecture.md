@@ -1,12 +1,12 @@
 ---
 title: 'Architecture'
 description: 'Where Fluxmail keeps your data and how MCP, REST, and CLI requests reach each email provider.'
-updated: '2026-07-18'
+updated: '2026-07-25'
 ---
 
 ## Where your data lives
 
-Fluxmail keeps its SQLite database on the machine where it runs. Google and Microsoft OAuth tokens, OAuth application secrets, license state, and IMAP/SMTP passwords are encrypted at rest with AES-256-GCM. Restart-bound deployment settings live in `<data dir>/config.toml`; the encryption key remains outside that file. Your client talks to your email provider through the self-hosted Fluxmail process. Fluxmail does not copy email content to a service operated by Fluxmail. Content returned through MCP may be sent to the client's model provider, depending on how that client runs. The [code is source-available](https://github.com/churichard/fluxmail) under the [Fluxmail proprietary license](https://github.com/churichard/fluxmail/blob/main/LICENSE.md).
+Fluxmail keeps its SQLite database on the machine where it runs. Google and Microsoft OAuth tokens, OAuth application secrets, license state, and IMAP/SMTP passwords are encrypted at rest with AES-256-GCM. Restart-bound deployment settings live in `<data dir>/config.toml`; the encryption key remains outside that file. Your client talks to your email provider through the self-hosted Fluxmail process. Fluxmail does not copy email content to a service operated by Fluxmail. Content returned through MCP may be sent to the client's model provider, depending on how that client runs. The [code is source available](https://github.com/churichard/fluxmail) under the [Elastic License 2.0](https://github.com/churichard/fluxmail/blob/main/LICENSE.md).
 
 ## How requests flow
 

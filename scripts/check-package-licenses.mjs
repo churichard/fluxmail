@@ -1,37 +1,81 @@
 #!/usr/bin/env node
 
 import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-const packageDirectories = process.argv.slice(2);
+export const EXPECTED_LICENSE = 'Elastic-2.0';
 
-if (packageDirectories.length === 0) {
-  fail('No package directories were provided.');
+const scriptPath = fileURLToPath(import.meta.url);
+const repositoryRoot = path.resolve(path.dirname(scriptPath), '..');
+
+export async function findPackageLicenseProblems({ rootDirectory = repositoryRoot, packageDirectories }) {
+  const problems = [];
+  const rootLicense = await readText(
+    path.join(rootDirectory, 'LICENSE.md'),
+    'The root LICENSE.md is missing.',
+    problems,
+  );
+
+  await checkManifest(path.join(rootDirectory, 'package.json'), 'The root package.json', problems);
+
+  for (const directory of packageDirectories) {
+    const packageLicense = await readText(
+      path.join(directory, 'LICENSE.md'),
+      `${directory} has no LICENSE.md.`,
+      problems,
+    );
+
+    if (rootLicense !== undefined && packageLicense !== undefined && packageLicense !== rootLicense) {
+      problems.push(`${directory} has an outdated LICENSE.md. Copy the root LICENSE.md into the package.`);
+    }
+
+    await checkManifest(path.join(directory, 'package.json'), `${directory}/package.json`, problems);
+  }
+
+  return problems;
 }
 
-const rootLicense = await readFile(new URL('../LICENSE.md', import.meta.url), 'utf8');
-const staleLicenses = [];
-
-for (const directory of packageDirectories) {
+async function readText(filePath, missingMessage, problems) {
   try {
-    const packageLicense = await readFile(path.join(directory, 'LICENSE.md'), 'utf8');
-    if (packageLicense !== rootLicense) {
-      staleLicenses.push(directory);
-    }
+    return await readFile(filePath, 'utf8');
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error;
-    staleLicenses.push(directory);
+    problems.push(missingMessage);
+    return undefined;
   }
 }
 
-if (staleLicenses.length > 0) {
-  fail(
-    `These packages have a missing or outdated LICENSE.md: ${staleLicenses.join(', ')}. ` +
-      'Copy the root LICENSE.md into each package before publishing.',
-  );
+async function checkManifest(filePath, label, problems) {
+  const source = await readText(filePath, `${label} is missing.`, problems);
+  if (source === undefined) return;
+
+  let manifest;
+  try {
+    manifest = JSON.parse(source);
+  } catch {
+    problems.push(`${label} is not valid JSON.`);
+    return;
+  }
+
+  if (manifest.license !== EXPECTED_LICENSE) {
+    problems.push(`${label} must declare "license": "${EXPECTED_LICENSE}".`);
+  }
 }
 
 function fail(message) {
   console.error(`Error: ${message}`);
   process.exit(1);
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
+  const packageDirectories = process.argv.slice(2);
+  if (packageDirectories.length === 0) {
+    fail('No package directories were provided.');
+  }
+
+  const problems = await findPackageLicenseProblems({ packageDirectories });
+  if (problems.length > 0) {
+    fail(problems.join('\n'));
+  }
 }

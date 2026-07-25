@@ -1,7 +1,7 @@
 ---
 title: 'Teams & plans'
 description: 'Add members, share mailboxes across a team, and unlock paid-plan limits on a self-hosted Fluxmail instance.'
-updated: '2026-07-17'
+updated: '2026-07-25'
 ---
 
 ## Members and shared mailboxes
@@ -77,4 +77,8 @@ One license activates one instance, and enforcement keeps working offline. If yo
 
 ## Software license
 
-Fluxmail is proprietary, source-available software. You can inspect, test, and privately modify the source. Production use must stay within your Fluxmail entitlement, including the built-in Personal plan. The license does not permit redistribution, hosted resale, competing use, or bypassing plan controls. Read the [full license terms](https://github.com/churichard/fluxmail/blob/main/LICENSE.md) before using or modifying the software.
+Fluxmail is source available under the [Elastic License 2.0](https://github.com/churichard/fluxmail/blob/main/LICENSE.md). You may use, modify, create derivative works, and redistribute it subject to that license. A fork does not need a paid Fluxmail subscription merely because it is a fork. Without a valid paid key, Fluxmail uses the Personal plan with 3 mailboxes and 1 member.
+
+Official Pro and Team entitlements require a valid Fluxmail license key. ELv2 does not allow you to change or circumvent license key functionality or remove functionality protected by a key. It also does not allow you to provide Fluxmail to third parties as a hosted or managed service that exposes a substantial set of its features.
+
+The software license does not grant rights to Fluxmail names or logos beyond applicable law. Their use is subject to the [Fluxmail Terms of Service](https://fluxmail.ai/terms).
