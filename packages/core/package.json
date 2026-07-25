@@ -2,7 +2,7 @@
   "name": "@fluxmail/core",
   "version": "0.7.0",
   "description": "Unified email types and provider interface for Fluxmail",
-  "license": "SEE LICENSE IN LICENSE.md",
+  "license": "Elastic-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/churichard/fluxmail.git",

@@ -2,7 +2,7 @@
   "name": "@fluxmail/provider-outlook",
   "version": "0.7.0",
   "description": "Microsoft Graph adapter for the Fluxmail unified email API",
-  "license": "SEE LICENSE IN LICENSE.md",
+  "license": "Elastic-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/churichard/fluxmail.git",

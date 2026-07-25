@@ -4,6 +4,18 @@ The contract between this repo's license client (`packages/server/src/licensing/
 and the hosted license server (private repo). The client side of every shape
 below is implemented here; the server must match it exactly.
 
+## Protected license functionality
+
+The license client, instance binding, signed leases, plan caps, grace period,
+and quota gates described here make up Fluxmail's license key functionality
+under the Elastic License 2.0. Modified copies may not change, disable, or
+circumvent that functionality, or remove functionality protected by a license
+key.
+
+`LICENSE.md` contains the controlling terms. This section records which
+technical behavior implements those terms; it does not add to or change the
+license.
+
 ## Endpoints
 
 ### `POST /api/v1/licenses/validate`
