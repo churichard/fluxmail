@@ -10,17 +10,17 @@ Only the breaking entries for the interfaces you use apply. An MCP-only integrat
 
 ### Changed
 
-- **Breaking:** CLI users must replace `--unread-only` with `--read false`, replace `--starred-only` with `--starred true`, pass a boolean to `--has-attachment`, treat `--text` as literal text, use typed syntax for `emails search`, and discard existing page tokens; [update CLI commands before upgrading](https://fluxmail.ai/docs/upgrades/0.7.0/) ([#76](https://github.com/churichard/fluxmail/pull/76))
-- **Breaking:** MCP clients must replace the `unreadOnly` and `starredOnly` search arguments with `read` and `starred`, treat `list_emails.text` as literal text, use typed syntax for `search_emails.query`, and discard existing page tokens; [update MCP clients before upgrading](https://fluxmail.ai/docs/upgrades/0.7.0/) ([#76](https://github.com/churichard/fluxmail/pull/76))
-- **Breaking:** REST clients must replace the `unreadOnly` and `starredOnly` message query parameters with `read` and `starred`, treat `text` as literal text, and discard existing page tokens; [update REST requests before upgrading](https://fluxmail.ai/docs/upgrades/0.7.0/) ([#76](https://github.com/churichard/fluxmail/pull/76))
+- [CLI] **Breaking:** CLI users must replace `--unread-only` with `--read false`, replace `--starred-only` with `--starred true`, pass a boolean to `--has-attachment`, treat `--text` as literal text, use typed syntax for `emails search`, and discard existing page tokens; [update CLI commands before upgrading](https://fluxmail.ai/docs/upgrades/0.7.0/) ([#76](https://github.com/churichard/fluxmail/pull/76))
+- [MCP] **Breaking:** MCP clients must replace the `unreadOnly` and `starredOnly` search arguments with `read` and `starred`, treat `list_emails.text` as literal text, use typed syntax for `search_emails.query`, and discard existing page tokens; [update MCP clients before upgrading](https://fluxmail.ai/docs/upgrades/0.7.0/) ([#76](https://github.com/churichard/fluxmail/pull/76))
+- [REST] **Breaking:** REST clients must replace the `unreadOnly` and `starredOnly` message query parameters with `read` and `starred`, treat `text` as literal text, and discard existing page tokens; [update REST requests before upgrading](https://fluxmail.ai/docs/upgrades/0.7.0/) ([#76](https://github.com/churichard/fluxmail/pull/76))
 - **Breaking:** Custom provider authors must handle `EmailQuery.read` and `EmailQuery.starred` instead of `unreadOnly` and `starredOnly`, treat `text` as literal text, add the required `Capabilities.search` field, and support both values for every advertised boolean filter; [update custom providers before upgrading](https://fluxmail.ai/docs/upgrades/0.7.0/) ([#76](https://github.com/churichard/fluxmail/pull/76))
-- Reject unsupported search filters and provider-native queries before CLI, MCP, or REST requests reach a built-in or custom provider ([#77](https://github.com/churichard/fluxmail/pull/77))
+- [MCP / CLI / REST] Reject unsupported search filters and provider-native queries before CLI, MCP, or REST requests reach a built-in or custom provider ([#77](https://github.com/churichard/fluxmail/pull/77))
 
 ### Added
 
-- Add typed portable search syntax to CLI `emails search`, MCP `search_emails`, and the REST `query` parameter, with parser diagnostics in MCP and REST results ([#76](https://github.com/churichard/fluxmail/pull/76))
-- Apply portable search normalization and capability checks consistently across CLI, MCP, REST, and email providers ([#76](https://github.com/churichard/fluxmail/pull/76))
-- Add signed, query-bound page tokens that expire after one hour, plus provider-aware filtered pagination with incomplete-page metadata and canonical attachment checks ([#76](https://github.com/churichard/fluxmail/pull/76))
+- [MCP / CLI / REST] Add typed portable search syntax to CLI `emails search`, MCP `search_emails`, and the REST `query` parameter, with parser diagnostics in MCP and REST results ([#76](https://github.com/churichard/fluxmail/pull/76))
+- [MCP / CLI / REST] Apply portable search normalization and capability checks consistently across CLI, MCP, REST, and email providers ([#76](https://github.com/churichard/fluxmail/pull/76))
+- [MCP / CLI / REST] Add signed, query-bound page tokens that expire after one hour, plus provider-aware filtered pagination with incomplete-page metadata and canonical attachment checks ([#76](https://github.com/churichard/fluxmail/pull/76))
 
 ## [0.6.1] - 2026-07-23
 
