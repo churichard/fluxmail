@@ -67,7 +67,9 @@ Curate the generated `CHANGELOG.md` entry for users. Follow Common Changelog:
 
 - Use applicable H3 groups in this order: `Changed`, `Added`, `Removed`, and `Fixed`.
 - Write imperative, single-line bullets that end with the best pull request, issue, or commit link.
-- Put breaking entries first, prefix them with `**Breaking:**`, and include a migration step or link.
+- Begin every bullet that affects MCP, CLI, or REST with one bracketed interface label. Use only `MCP`, `CLI`, and `REST`, in that order, such as `[MCP]`, `[MCP / CLI]`, or `[MCP / CLI / REST]`. Leave bullets that do not affect these interfaces untagged.
+- Include only affected interfaces in the label. Combine interfaces only when one bullet accurately describes the same change for each one, and split the bullet when their behavior or migration differs.
+- Put breaking entries first, place `**Breaking:**` immediately after the interface label when present, and include a migration step or link.
 - Name the affected documented public surface or audience in every breaking entry, such as CLI, MCP, REST, custom providers, configuration, stored data, authentication, or runtime.
 - Use the names from public documentation. Do not present an internal package as a supported interface or recommend direct use unless the public docs explicitly support it.
 - Split breaking entries when interfaces require different migration steps. Combine interfaces only when the same break and migration apply to each one.
