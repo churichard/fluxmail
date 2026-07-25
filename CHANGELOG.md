@@ -4,19 +4,23 @@ Fluxmail records user-facing changes in this file. The format follows [Common Ch
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-25
+
+Only the breaking entries for the interfaces you use apply. An MCP-only integration, for example, does not need the CLI or REST migrations.
+
 ### Changed
 
-- **Breaking:** replace `unreadOnly` and `starredOnly` with tri-state `read` and `starred` filters, and make `hasAttachment` support both boolean values
-- **Breaking:** treat structured `text` as literal search text; use `rawProviderQuery` for Gmail syntax or Outlook KQL
-- **Breaking:** parse CLI and MCP search strings as typed portable syntax, add the REST `query` parameter, and return parser diagnostics with search results
-- **Breaking:** require the `search` capability on custom providers and require both values for every advertised boolean filter
-- **Breaking:** invalidate existing page tokens and replace them with signed, query-bound tokens that expire after one hour
-- Reject search filters and provider-native queries when an account reports that it cannot support them
+- **Breaking:** CLI users must replace `--unread-only` with `--read false`, replace `--starred-only` with `--starred true`, pass a boolean to `--has-attachment`, treat `--text` as literal text, use typed syntax for `emails search`, and discard existing page tokens; [update CLI commands before upgrading](https://fluxmail.ai/docs/upgrades/0.7.0/) ([#76](https://github.com/churichard/fluxmail/pull/76))
+- **Breaking:** MCP clients must replace the `unreadOnly` and `starredOnly` search arguments with `read` and `starred`, treat `list_emails.text` as literal text, use typed syntax for `search_emails.query`, and discard existing page tokens; [update MCP clients before upgrading](https://fluxmail.ai/docs/upgrades/0.7.0/) ([#76](https://github.com/churichard/fluxmail/pull/76))
+- **Breaking:** REST clients must replace the `unreadOnly` and `starredOnly` message query parameters with `read` and `starred`, treat `text` as literal text, and discard existing page tokens; [update REST requests before upgrading](https://fluxmail.ai/docs/upgrades/0.7.0/) ([#76](https://github.com/churichard/fluxmail/pull/76))
+- **Breaking:** Custom provider authors must handle `EmailQuery.read` and `EmailQuery.starred` instead of `unreadOnly` and `starredOnly`, treat `text` as literal text, add the required `Capabilities.search` field, and support both values for every advertised boolean filter; [update custom providers before upgrading](https://fluxmail.ai/docs/upgrades/0.7.0/) ([#76](https://github.com/churichard/fluxmail/pull/76))
+- Reject unsupported search filters and provider-native queries before CLI, MCP, or REST requests reach a built-in or custom provider ([#77](https://github.com/churichard/fluxmail/pull/77))
 
 ### Added
 
-- Add portable search normalization, parsing, formatting, capability checks, and capability intersection to `@fluxmail/core`
-- Add provider-aware filtered pagination with incomplete-page metadata and canonical attachment checks
+- Add typed portable search syntax to CLI `emails search`, MCP `search_emails`, and the REST `query` parameter, with parser diagnostics in MCP and REST results ([#76](https://github.com/churichard/fluxmail/pull/76))
+- Apply portable search normalization and capability checks consistently across CLI, MCP, REST, and email providers ([#76](https://github.com/churichard/fluxmail/pull/76))
+- Add signed, query-bound page tokens that expire after one hour, plus provider-aware filtered pagination with incomplete-page metadata and canonical attachment checks ([#76](https://github.com/churichard/fluxmail/pull/76))
 
 ## [0.6.1] - 2026-07-23
 
@@ -102,9 +106,10 @@ Fluxmail records user-facing changes in this file. The format follows [Common Ch
 - Prevent hosted Microsoft OAuth responses from forwarding connection credentials through the HTTP referrer ([#43](https://github.com/churichard/fluxmail/pull/43))
 - Stop a pending IMAP connection immediately when its provider closes during setup ([#49](https://github.com/churichard/fluxmail/pull/49))
 
-[Unreleased]: https://github.com/churichard/fluxmail/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/churichard/fluxmail/compare/v0.7.0...HEAD
 [0.4.0]: https://github.com/churichard/fluxmail/compare/v0.3.0...v0.4.0
 [0.4.1]: https://github.com/churichard/fluxmail/compare/v0.4.0...v0.4.1
 [0.5.0]: https://github.com/churichard/fluxmail/compare/v0.4.1...v0.5.0
 [0.6.0]: https://github.com/churichard/fluxmail/compare/v0.5.0...v0.6.0
 [0.6.1]: https://github.com/churichard/fluxmail/compare/v0.6.0...v0.6.1
+[0.7.0]: https://github.com/churichard/fluxmail/compare/v0.6.1...v0.7.0

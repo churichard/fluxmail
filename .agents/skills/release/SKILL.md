@@ -68,7 +68,12 @@ Curate the generated `CHANGELOG.md` entry for users. Follow Common Changelog:
 - Use applicable H3 groups in this order: `Changed`, `Added`, `Removed`, and `Fixed`.
 - Write imperative, single-line bullets that end with the best pull request, issue, or commit link.
 - Put breaking entries first, prefix them with `**Breaking:**`, and include a migration step or link.
-- Merge related changes and omit empty groups, authors for this single-contributor project, and internal work.
+- Name the affected documented public surface or audience in every breaking entry, such as CLI, MCP, REST, custom providers, configuration, stored data, authentication, or runtime.
+- Use the names from public documentation. Do not present an internal package as a supported interface or recommend direct use unless the public docs explicitly support it.
+- Split breaking entries when interfaces require different migration steps. Combine interfaces only when the same break and migration apply to each one.
+- Name every affected interface for shared breaks such as invalid page tokens, and state that users of other interfaces do not need that migration.
+- When a release has several interface-specific migrations, add the same compact surface map to the public upgrade guide and preserve the scoping in the approval packet.
+- Merge related changes within a surface and omit empty groups, authors for this single-contributor project, and internal work.
 - Use `_No user-facing changes._` only when the audited range has no user-facing changes.
 
 Audit the entry against the full commit range and do not invent changes. If the notes reveal a higher-impact change, prepare the correct version instead.
