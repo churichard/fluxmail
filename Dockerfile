@@ -11,6 +11,7 @@ COPY packages/server/package.json packages/server/
 RUN pnpm install --frozen-lockfile
 COPY tsconfig.base.json ./
 COPY packages ./packages
+COPY test/fixtures ./test/fixtures
 RUN pnpm build && pnpm --filter fluxmail deploy --legacy --prod /out
 
 FROM node:22-slim
