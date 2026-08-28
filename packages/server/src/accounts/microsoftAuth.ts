@@ -51,6 +51,22 @@ export function requireMicrosoftConfig(config: FluxmailConfig): NonNullable<Flux
   return config.microsoft;
 }
 
+export function requireHostedMicrosoftConfig(config: FluxmailConfig): NonNullable<FluxmailConfig['microsoft']> {
+  const microsoft = requireMicrosoftConfig(config);
+  if (!microsoft.clientSecret) {
+    // Only claim FLUXMAIL_PUBLIC_URL is set when it is: the REST connection routes
+    // reach this check on servers running without a configured public URL.
+    throw new EmailError(
+      'invalid_request',
+      (config.publicUrlConfigured
+        ? 'FLUXMAIL_PUBLIC_URL is set, so Outlook uses the hosted connection flow, which needs a client secret.'
+        : 'Hosted Outlook connections need a client secret.') +
+        ' Add a Web redirect URI and MICROSOFT_CLIENT_SECRET to the Entra app.',
+    );
+  }
+  return microsoft;
+}
+
 function tenantEndpoint(microsoft: StoredMicrosoftOAuthApp, path: 'authorize' | 'token'): string {
   return `https://login.microsoftonline.com/${encodeURIComponent(microsoft.tenantId)}/oauth2/v2.0/${path}`;
 }

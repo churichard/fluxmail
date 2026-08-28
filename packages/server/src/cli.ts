@@ -25,6 +25,7 @@ import { buildMcpServer } from './mcp/buildServer.js';
 import { runLoopbackFlow } from './accounts/googleAuth.js';
 import { runMicrosoftLoopbackFlow } from './accounts/microsoftAuth.js';
 import {
+  assertHostedConnectionReady,
   prepareHostedGmailConnection,
   prepareHostedOutlookConnection,
   selectGmailConnectionMode,
@@ -64,6 +65,7 @@ import {
   type Telemetry,
 } from './telemetry.js';
 import {
+  apiErrorCode,
   clearSessionToken,
   instanceClient,
   loadInstanceConfig,
@@ -282,6 +284,9 @@ async function secretInput(file: string | undefined, label: string): Promise<str
   return file === undefined ? hiddenPrompt(label) : readSecretFile(file);
 }
 
+/** Offered when a configured public URL, not an explicit --hosted, chose the hosted flow. */
+const LOOPBACK_FLOW_REMEDY = 'Pass --local to use the loopback flow on this computer instead.';
+
 function planLine(ent: Entitlements): string {
   const members = `${ent.maxMembers} member${ent.maxMembers === 1 ? '' : 's'}`;
   return `${ent.plan} (up to ${ent.maxAccounts} mailboxes, ${members})`;
@@ -305,7 +310,6 @@ interface ActiveCliOperation {
   startedAt: number;
   initialExitCode: number | string | null | undefined;
   logger: Logger;
-  errorLogged?: boolean;
 }
 
 const activeCliOperations = new WeakMap<Command, ActiveCliOperation>();
@@ -315,7 +319,7 @@ function finishCliOperation(program: Command, outcome: 'success' | 'error', erro
   const active = activeCliOperations.get(program);
   if (!active) return;
   activeCliOperations.delete(program);
-  if (outcome === 'error' && !active.errorLogged) {
+  if (outcome === 'error') {
     const context = { productSurface: 'cli' as const, operation: active.operation, skipConsole: true };
     if (error !== undefined) logFailure(active.logger, 'cli.operation_failed', error, context);
     else
@@ -336,15 +340,11 @@ function finishCliOperation(program: Command, outcome: 'success' | 'error', erro
   });
 }
 
-function logActiveCliError(program: Command, error: unknown): void {
-  const active = activeCliOperations.get(program);
-  if (!active || active.errorLogged) return;
-  active.errorLogged = true;
-  logFailure(active.logger, 'cli.operation_failed', error, {
-    productSurface: 'cli',
-    operation: active.operation,
-    skipConsole: true,
-  });
+/** End a failed command with the error's own telemetry code instead of a generic one. */
+function failCliOperation(program: Command, error: unknown, prefix = 'Error: '): void {
+  finishCliOperation(program, 'error', apiErrorCode(error), error);
+  console.error(`${prefix}${error instanceof Error ? error.message : String(error)}`);
+  process.exitCode = 1;
 }
 
 export function waitForServerListening(server: ReturnType<typeof serve>): Promise<void> {
@@ -548,9 +548,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         });
         console.log(`Fluxmail is ready. Logged in to local as ${result.member.name}.`);
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -609,9 +607,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         useInstance(instanceName);
         console.log(`Logged in to ${instanceName} as ${result.member.name}.`);
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -628,9 +624,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         clearSessionToken(selected.name);
         console.log(`Logged out of ${selected.name}.`);
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -655,9 +649,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         useInstance(name);
         console.log(`Using ${name}.`);
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
   instances
@@ -669,9 +661,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         removeInstance(name);
         console.log(`Removed CLI instance ${name}. Server data was not changed.`);
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -702,9 +692,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         });
         console.log(`Reset ${member.name}'s password and revoked existing sessions.`);
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
   authCommand
@@ -722,9 +710,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
           );
         }
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
   authCommand
@@ -738,9 +724,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         });
         console.log(`Revoked ${sessionId}.`);
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -870,26 +854,31 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
       }
       const selected = resolveInstance(selectedInstance());
       if (!selected.token) {
-        console.error(`Error: Log in to instance "${selected.name}" before connecting a mailbox.`);
-        process.exitCode = 1;
+        failCliOperation(
+          program,
+          new EmailError('permission_denied', `Log in to instance "${selected.name}" before connecting a mailbox.`),
+        );
         return;
       }
       try {
         validateAccountConnectionFlags(provider, opts);
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
         return;
       }
       let useControlPlane = selected.profile.kind === 'remote' || provider === 'imap';
       if (selected.profile.kind === 'local' && provider !== 'imap') {
         try {
-          useControlPlane = selectGmailConnectionMode(createContext().config, opts) === 'hosted';
+          const { config } = createContext();
+          const mode = selectGmailConnectionMode(config, opts);
+          // A configured public URL selects the hosted flow on its own, so report a
+          // missing OAuth app here instead of after a connection grant is minted.
+          if (mode === 'hosted') {
+            assertHostedConnectionReady(config, provider, opts.hosted ? undefined : LOOPBACK_FLOW_REMEDY);
+          }
+          useControlPlane = mode === 'hosted';
         } catch (err) {
-          logActiveCliError(program, err);
-          console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-          process.exitCode = 1;
+          failCliOperation(program, err);
           return;
         }
       }
@@ -956,9 +945,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
             for (const warning of result.warnings ?? []) console.log(`Warning: ${warning.message}.`);
           }
         } catch (err) {
-          logActiveCliError(program, err);
-          console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-          process.exitCode = 1;
+          failCliOperation(program, err);
         }
         return;
       }
@@ -1114,9 +1101,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
           );
         }
       } catch (err) {
-        finishCliOperation(program, 'error', isEmailError(err) ? err.code : 'internal', err);
-        console.error(`\nError: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err, '\nError: ');
       }
     });
 
@@ -1165,9 +1150,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
           console.log(`Updated folder settings for ${accountId}.`);
           for (const warning of result.warnings) console.log(`Warning: ${warning.message}.`);
         } catch (err) {
-          logActiveCliError(program, err);
-          console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-          process.exitCode = 1;
+          failCliOperation(program, err);
         }
       },
     );
@@ -1201,9 +1184,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
           console.log(`${a.id}  ${a.provider}  ${a.email}  [${a.status}]  owner=${a.ownerMemberId}  access=${access}`);
         }
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -1218,9 +1199,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         });
         console.log(`Removed ${accountId}`);
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -1241,9 +1220,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         );
         console.log(`${account.email} is now owned by ${account.ownerMemberId}.`);
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -1277,9 +1254,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
           `Updated access for ${account.email}: ${account.sharedWithAll ? 'all members' : `${account.grantedMemberIds.length} explicit grant(s)`}.`,
         );
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -1310,9 +1285,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         console.log(`Enrollment code (shown once): ${member.invitation.token}`);
         console.log(`Expires: ${new Date(member.invitation.expiresAt).toISOString()}`);
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -1342,9 +1315,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
           );
         }
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -1359,9 +1330,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         });
         console.log(`Removed ${memberId}.`);
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -1385,9 +1354,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         );
         console.log(`${member.name} now has the ${member.role} role.`);
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -1411,9 +1378,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         );
         console.log(`${member.name} is now ${member.status}.`);
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -1434,9 +1399,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
           console.log(`${label} (shown once): ${token.token}`);
           console.log(`Expires: ${new Date(token.expiresAt).toISOString()}`);
         } catch (err) {
-          logActiveCliError(program, err);
-          console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-          process.exitCode = 1;
+          failCliOperation(program, err);
         }
       });
   }
@@ -1454,9 +1417,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
           console.log(`${session.id}  ${session.deviceName}  expires=${new Date(session.expiresAt).toISOString()}`);
         }
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -1473,9 +1434,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         );
         console.log(`Revoked ${sessionId}.`);
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -1538,9 +1497,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         console.log(`  ${created.key}\n`);
         console.log('Store it now; it cannot be shown again.');
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -1569,9 +1526,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
           );
         }
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -1598,9 +1553,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
             : `Updated ${keyId} to ${accountIds.length} mailbox(es).`,
         );
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -1635,9 +1588,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         });
         console.log(`Updated ${keyId} to profile ${permissions.profile}`);
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -1656,9 +1607,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         await client.json(path, { method: 'DELETE' });
         console.log(`Revoked ${keyId}`);
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -1709,9 +1658,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
           );
         }
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -1741,9 +1688,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         if (status.lastValidatedAt) console.log(`Last validated: ${status.lastValidatedAt}`);
         if (status.warning) console.log(`Warning: ${status.warning}`);
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -1763,9 +1708,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         );
         console.log('This instance is back to Personal plan limits.');
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -1781,9 +1724,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         writeDeploymentConfig(file, deploymentToml(), { exclusive: true });
         console.log(`Created ${file}`);
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -2007,9 +1948,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         const status = await instanceClient(selectedInstance()).json('/api/v1/status');
         console.log(JSON.stringify(status, null, 2));
       } catch (err) {
-        logActiveCliError(program, err);
-        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
+        failCliOperation(program, err);
       }
     });
 
@@ -2021,9 +1960,7 @@ export async function runCli(argv: readonly string[] = process.argv): Promise<vo
   try {
     await program.parseAsync([...argv]);
   } catch (err) {
-    finishCliOperation(program, 'error', isEmailError(err) ? err.code : 'internal', err);
-    console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-    process.exitCode = 1;
+    failCliOperation(program, err);
     await Promise.all([shutdownTelemetry(), shutdownLogging()]);
   }
 }

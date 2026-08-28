@@ -1,4 +1,4 @@
-import { EmailError } from '@fluxmail/core';
+import { EmailError, isEmailError } from '@fluxmail/core';
 import type { FluxmailConfig } from '../config.js';
 import type { FluxmailDb } from '../storage/db.js';
 import {
@@ -7,7 +7,7 @@ import {
   type GmailConnectionIntent,
 } from '../storage/gmailConnectionGrants.js';
 import { requireHostedGoogleConfig } from './googleAuth.js';
-import { requireMicrosoftConfig } from './microsoftAuth.js';
+import { requireHostedMicrosoftConfig } from './microsoftAuth.js';
 
 export type GmailConnectionMode = 'local' | 'hosted';
 
@@ -40,6 +40,28 @@ export function selectGmailConnectionMode(
     : 'local';
 }
 
+/**
+ * Confirm the hosted OAuth application exists before a connection grant is
+ * minted. `remedy` lets a caller append the escape hatch its surface offers.
+ */
+export function assertHostedConnectionReady(
+  config: FluxmailConfig,
+  provider: 'gmail' | 'outlook',
+  remedy?: string,
+): void {
+  try {
+    if (provider === 'gmail') requireHostedGoogleConfig(config);
+    else requireHostedMicrosoftConfig(config);
+  } catch (error) {
+    // The loopback flow needs an OAuth client of its own: Gmail ships a Desktop
+    // client, but Outlook requires MICROSOFT_CLIENT_ID either way, so suggesting
+    // it without one would send the user to the same error.
+    const loopbackAvailable = provider === 'gmail' || config.microsoft !== undefined;
+    if (!remedy || !loopbackAvailable || !isEmailError(error)) throw error;
+    throw new EmailError(error.code, `${error.message} ${remedy}`);
+  }
+}
+
 export function prepareHostedGmailConnection(
   db: FluxmailDb,
   config: FluxmailConfig,
@@ -58,13 +80,7 @@ export function prepareHostedOutlookConnection(
   config: FluxmailConfig,
   intent: GmailConnectionIntent,
 ): { connectionUrl: string; expiresAt: number } {
-  const microsoft = requireMicrosoftConfig(config);
-  if (!microsoft.clientSecret) {
-    throw new EmailError(
-      'invalid_request',
-      'MICROSOFT_CLIENT_SECRET is required for hosted Outlook connections. Add a Web redirect URI and client secret to the Entra app.',
-    );
-  }
+  requireHostedMicrosoftConfig(config);
   const { token, expiresAt } = createOutlookConnectionGrant(db, intent);
   return {
     connectionUrl: `${config.publicUrl}/auth/microsoft/connect?token=${encodeURIComponent(token)}`,

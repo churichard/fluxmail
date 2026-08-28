@@ -235,7 +235,11 @@ export class InstanceClient {
     if (this.profile.kind === 'local') {
       const context = createContext();
       try {
-        const response = await createApp(context).request(pathname, { ...init, headers });
+        // A local instance handles the request in this process, so the CLI command
+        // already reports the outcome. Withholding telemetry keeps one user action
+        // from being counted twice and keeps the rest surface meaning a real HTTP
+        // call. The logger stays, so local logs still record the failure.
+        const response = await createApp({ ...context, telemetry: undefined }).request(pathname, { ...init, headers });
         const body = response.body ? await response.arrayBuffer() : null;
         return new Response(body?.byteLength ? body : null, {
           status: response.status,

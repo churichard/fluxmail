@@ -27,9 +27,14 @@ export function requireGoogleConfig(config: FluxmailConfig): { clientId: string;
 export function requireHostedGoogleConfig(config: FluxmailConfig): { clientId: string; clientSecret: string } {
   const google = requireGoogleConfig(config);
   if (google.clientId === DEFAULT_GOOGLE_CLIENT_ID || !google.clientSecret) {
+    // Only claim FLUXMAIL_PUBLIC_URL is set when it is: the REST connection routes
+    // reach this check on servers running without a configured public URL.
     throw new EmailError(
       'invalid_request',
-      'Hosted Gmail connections require a custom Google Web application. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.',
+      (config.publicUrlConfigured
+        ? 'FLUXMAIL_PUBLIC_URL is set, so Gmail uses the hosted connection flow, which needs your own Google Web application.'
+        : 'Hosted Gmail connections need your own Google Web application.') +
+        ' Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.',
     );
   }
   return { clientId: google.clientId, clientSecret: google.clientSecret };

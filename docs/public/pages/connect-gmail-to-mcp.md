@@ -1,7 +1,7 @@
 ---
 title: 'Connect Gmail / Google Workspace'
 description: 'Connect a Gmail or Google Workspace mailbox, configure Google OAuth, and reconnect expired tokens.'
-updated: '2026-07-17'
+updated: '2026-08-26'
 ---
 
 Fluxmail includes a Google Desktop OAuth client, so you can connect Gmail locally without creating Google Cloud credentials. The local flow uses PKCE, and your OAuth tokens stay with the Fluxmail server you run.
@@ -52,7 +52,7 @@ docker compose exec fluxmail \
 
 On local Docker, the command prints a Google consent URL and waits for the callback on `127.0.0.1:8976`. On a remote deployment with `FLUXMAIL_PUBLIC_URL` set, it prints a one-time connection link instead. Open the link in your browser, choose the Google account, and approve access. Hosted links expire after 10 minutes and do not require an admin API key.
 
-Fluxmail uses the hosted flow whenever `FLUXMAIL_PUBLIC_URL` is set. Without it, `fluxmail accounts add gmail` uses the local callback at `http://127.0.0.1:8976/oauth/callback`. For troubleshooting, pass `--hosted` or `--local` to choose a flow explicitly.
+Fluxmail uses the hosted flow whenever `FLUXMAIL_PUBLIC_URL` is set. The hosted flow cannot use the built-in Google client, which only accepts local callbacks, so it needs your own Web application. Without a public URL, `fluxmail accounts add gmail` uses the local callback at `http://127.0.0.1:8976/oauth/callback`. For troubleshooting, pass `--hosted` or `--local` to choose a flow explicitly.
 
 ## Use your own Google OAuth app
 
