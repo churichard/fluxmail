@@ -17,7 +17,7 @@ import {
 import { resolveDeploymentConfig } from '../src/config.js';
 import { createContext } from '../src/context.js';
 import { setupInitialAdmin } from '../src/auth.js';
-import { saveLocalInstance, saveSessionToken } from '../src/cliInstances.js';
+import { saveLocalInstance, saveRemoteInstance, saveSessionToken } from '../src/cliInstances.js';
 import { InstanceConfigStore } from '../src/instanceConfig.js';
 import { getLogger } from '../src/logging.js';
 import { customPermissionPolicy, permissionPolicyForProfile } from '../src/permissions.js';
@@ -38,6 +38,7 @@ const fileLockModuleUrl = new URL('../src/storage/fileLock.ts', import.meta.url)
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -620,6 +621,59 @@ describe('CLI telemetry', () => {
     } finally {
       process.exitCode = previousExitCode;
     }
+  });
+
+  it('omits reauthorize when only a remote instance can match an existing IMAP mailbox', async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), 'fluxmail-cli-remote-imap-'));
+    vi.stubEnv('FLUXMAIL_DATA_DIR', dataDir);
+    vi.stubEnv('FLUXMAIL_IMAP_PASSWORD_FOR_TEST', 'private-imap-password');
+    saveRemoteInstance('work', 'https://mail.example.com');
+    saveSessionToken('work', 'fms_private_session');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ data: { account: { id: 'acct_remote', email: 'owner@example.com' } } }), {
+            status: 201,
+            headers: { 'content-type': 'application/json' },
+          }),
+      ),
+    );
+    const { capture, telemetry } = telemetrySpy();
+
+    await createCliProgram({ telemetry }).parseAsync([
+      'node',
+      'fluxmail',
+      '--no-update-notifier',
+      'accounts',
+      'add',
+      'imap',
+      '--email',
+      'owner@example.com',
+      '--imap-host',
+      'imap.example.com',
+      '--smtp-host',
+      'smtp.example.com',
+      '--imap-password-env',
+      'FLUXMAIL_IMAP_PASSWORD_FOR_TEST',
+    ]);
+
+    expect(capture.mock.calls).toEqual([
+      [
+        'operation completed',
+        {
+          product_surface: 'cli',
+          operation: 'accounts add',
+          outcome: 'success',
+          duration_ms: expect.any(Number),
+          provider: 'imap',
+        },
+      ],
+    ]);
+    const captured = JSON.stringify(capture.mock.calls);
+    expect(captured).not.toContain('private-imap-password');
+    expect(captured).not.toContain('owner@example.com');
   });
 
   it('does not record the telemetry disable command', async () => {

@@ -26,7 +26,8 @@ export function configuredOAuthAppKind(config: FluxmailConfig, provider: Provide
 
 export interface ConnectionTelemetry {
   provider: Provider;
-  reauthorize: boolean;
+  /** Omit when the surface cannot tell a reconnection from a new mailbox. */
+  reauthorize?: boolean;
   flow?: ConnectionFlow;
   oauthApp?: OAuthAppKind;
 }
@@ -35,7 +36,7 @@ export interface ConnectionTelemetry {
 export function connectionProperties(connection: ConnectionTelemetry): TelemetryProperties {
   return {
     provider: connection.provider,
-    reauthorize: connection.reauthorize,
+    ...(connection.reauthorize === undefined ? {} : { reauthorize: connection.reauthorize }),
     ...(connection.flow ? { connection_flow: connection.flow } : {}),
     ...(connection.oauthApp ? { oauth_app: connection.oauthApp } : {}),
   };

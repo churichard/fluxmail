@@ -888,9 +888,16 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         process.exitCode = 1;
         return;
       }
-      const reauthorize = opts.reauthorize !== undefined;
-      recordCliOperationProperties(program, connectionProperties({ provider, reauthorize }));
       const selected = resolveInstance(selectedInstance());
+      // A remote instance reconnects an IMAP mailbox that matches the address,
+      // so without --reauthorize only the server knows which one this is.
+      const reauthorize =
+        opts.reauthorize !== undefined
+          ? true
+          : selected.profile.kind === 'remote' && provider === 'imap'
+            ? undefined
+            : false;
+      recordCliOperationProperties(program, connectionProperties({ provider, reauthorize }));
       if (!selected.token) {
         failCliOperation(
           program,
@@ -934,7 +941,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         }
       }
       if (useControlPlane) {
-        let localImapReauthorize = reauthorize;
+        let localImapReauthorize = reauthorize ?? false;
         try {
           if (selected.profile.kind === 'remote' && opts.local) {
             throw new EmailError('invalid_request', '--local is only available for the local instance.');
