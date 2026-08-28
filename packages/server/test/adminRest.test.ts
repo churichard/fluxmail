@@ -127,6 +127,102 @@ describe('administrative REST API', () => {
     expect(JSON.stringify(capture.mock.calls)).not.toContain(privateKeyId);
   });
 
+  it('records the provider, OAuth application, and mailbox totals for administrative connections', async () => {
+    const capture = vi.fn();
+    const telemetry = { capture, shutdown: vi.fn().mockResolvedValue(undefined) };
+    const { app, auth, member, registry } = fixture(telemetry);
+    vi.spyOn(registry, 'testImapCredentials').mockResolvedValue([]);
+
+    const prepared = await app.request(
+      '/api/v1/admin/connections',
+      jsonRequest('POST', { provider: 'gmail', ownerMemberId: member.id }, auth),
+    );
+    expect(prepared.status).toBe(201);
+
+    const privateMailbox = 'private@example.com';
+    const privateSecret = 'private-imap-password';
+    const imapConnection = {
+      provider: 'imap' as const,
+      ownerMemberId: member.id,
+      email: privateMailbox,
+      imap: {
+        host: 'imap.example.com',
+        port: 993,
+        security: 'tls',
+        user: privateMailbox,
+        password: privateSecret,
+      },
+      smtp: {
+        host: 'smtp.example.com',
+        port: 587,
+        security: 'starttls',
+        user: privateMailbox,
+        password: privateSecret,
+      },
+    };
+    const saved = await app.request('/api/v1/admin/connections', jsonRequest('POST', imapConnection, auth));
+    expect(saved.status).toBe(201);
+
+    const reconnected = await app.request('/api/v1/admin/connections', jsonRequest('POST', imapConnection, auth));
+    expect(reconnected.status).toBe(201);
+
+    const failed = await app.request(
+      '/api/v1/admin/connections',
+      jsonRequest('POST', { provider: 'gmail', reauthorizeAccountId: 'acct_private_reference' }, auth),
+    );
+    expect(failed.status).toBe(404);
+
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({
+        product_surface: 'rest',
+        operation: 'createAdministrativeConnection',
+        outcome: 'success',
+        provider: 'gmail',
+        reauthorize: false,
+        connection_flow: 'hosted',
+        oauth_app: 'custom',
+      }),
+    );
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({
+        operation: 'createAdministrativeConnection',
+        outcome: 'success',
+        provider: 'imap',
+        reauthorize: true,
+        account_count: 1,
+      }),
+    );
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({
+        operation: 'createAdministrativeConnection',
+        outcome: 'success',
+        provider: 'imap',
+        account_count: 1,
+        gmail_account_count: 0,
+        outlook_account_count: 0,
+        imap_account_count: 1,
+      }),
+    );
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({
+        operation: 'createAdministrativeConnection',
+        outcome: 'error',
+        error_code: 'not_found',
+        provider: 'gmail',
+        reauthorize: true,
+      }),
+    );
+    const captured = JSON.stringify(capture.mock.calls);
+    expect(captured).not.toContain(privateMailbox);
+    expect(captured).not.toContain(privateSecret);
+    expect(captured).not.toContain('acct_private_reference');
+    expect(captured).not.toContain('imap.example.com');
+  });
+
   it('records license deactivation as an administrative operation', async () => {
     const capture = vi.fn();
     const telemetry = { capture, shutdown: vi.fn().mockResolvedValue(undefined) };

@@ -647,6 +647,86 @@ describe('HTTP app', () => {
     );
   });
 
+  it('records mailbox totals and the OAuth application when a hosted connection completes', async () => {
+    vi.mocked(exchangeCode).mockResolvedValue({
+      email: 'private-owner@example.com',
+      tokens: { refresh_token: 'private-refresh-token', id_token: 'id' },
+    });
+    const capture = vi.fn();
+    const deps = { ...appDeps(), telemetry: { capture, shutdown: vi.fn().mockResolvedValue(undefined) } };
+    const member = addMember(deps.db, { name: 'Owner' });
+    deps.registry.addImapAccount(
+      'existing@example.com',
+      {
+        imap: { host: 'imap.example.com', port: 993, security: 'tls', user: 'existing', password: 'secret' },
+        smtp: { host: 'smtp.example.com', port: 587, security: 'starttls', user: 'existing', password: 'secret' },
+        saveSent: true,
+        folderOverrides: {},
+      },
+      undefined,
+      member.id,
+    );
+    const app = createApp(deps);
+    const { token } = createGmailConnectionGrant(deps.db, { ownerMemberId: member.id });
+
+    const start = await app.request(`/auth/google/connect?token=${encodeURIComponent(token)}`, { method: 'POST' });
+    const state = new URL(start.headers.get('location') ?? '').searchParams.get('state');
+    expect((await app.request(`/auth/google/callback?state=${state}&code=authorization-code`)).status).toBe(200);
+
+    const reconnectGrant = createGmailConnectionGrant(deps.db, { ownerMemberId: member.id });
+    const reconnectStart = await app.request(`/auth/google/connect?token=${encodeURIComponent(reconnectGrant.token)}`, {
+      method: 'POST',
+    });
+    const reconnectState = new URL(reconnectStart.headers.get('location') ?? '').searchParams.get('state');
+    expect(
+      (await app.request(`/auth/google/callback?state=${reconnectState}&code=second-authorization-code`)).status,
+    ).toBe(200);
+
+    const stale = await app.request('/auth/google/callback?state=private-stale-state&code=stale');
+    expect(stale.status).toBe(400);
+
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({
+        product_surface: 'rest',
+        operation: 'completeHostedConnection',
+        outcome: 'success',
+        provider: 'gmail',
+        reauthorize: false,
+        connection_flow: 'hosted',
+        oauth_app: 'custom',
+        account_count: 2,
+        gmail_account_count: 1,
+        imap_account_count: 1,
+        outlook_account_count: 0,
+      }),
+    );
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({
+        operation: 'completeHostedConnection',
+        outcome: 'success',
+        provider: 'gmail',
+        reauthorize: true,
+        account_count: 2,
+      }),
+    );
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({
+        operation: 'completeHostedConnection',
+        outcome: 'error',
+        error_code: 'invalid_state',
+        provider: 'gmail',
+      }),
+    );
+    const captured = JSON.stringify(capture.mock.calls);
+    expect(captured).not.toContain('private-owner@example.com');
+    expect(captured).not.toContain('private-refresh-token');
+    expect(captured).not.toContain('private-stale-state');
+    expect(captured).not.toContain('client-id');
+  });
+
   it('preserves member ownership and reauthorization checks through the hosted flow', async () => {
     vi.mocked(exchangeCode).mockResolvedValue({
       email: 'other@example.com',

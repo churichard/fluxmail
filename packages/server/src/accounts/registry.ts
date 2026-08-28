@@ -642,6 +642,18 @@ export class AccountRegistry {
     this.evictProvider(accountId);
   }
 
+  /** Connected mailbox totals by provider. Aggregate counts only, for telemetry. */
+  accountProviderCounts(): Record<'total' | Provider, number> {
+    const counts: Record<'total' | Provider, number> = { total: 0, gmail: 0, outlook: 0, imap: 0 };
+    for (const row of this.db.select({ provider: accounts.provider }).from(accounts).all()) {
+      counts.total += 1;
+      if (row.provider === 'gmail' || row.provider === 'outlook' || row.provider === 'imap') {
+        counts[row.provider] += 1;
+      }
+    }
+    return counts;
+  }
+
   markStatus(accountId: string, status: Account['status']): void {
     this.db.update(accounts).set({ status }).where(eq(accounts.id, accountId)).run();
   }
