@@ -17,6 +17,19 @@ import {
 } from '../src/cliInstances.js';
 import { createContext } from '../src/context.js';
 
+const { appDeps } = vi.hoisted(() => ({ appDeps: [] as Array<{ telemetry?: unknown; logger?: unknown }> }));
+
+vi.mock('../src/http/app.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/http/app.js')>();
+  return {
+    ...actual,
+    createApp: (deps: Parameters<typeof actual.createApp>[0]) => {
+      appDeps.push(deps);
+      return actual.createApp(deps);
+    },
+  };
+});
+
 function privateMode(filePath: string): number {
   return statSync(filePath).mode & 0o777;
 }
@@ -151,5 +164,29 @@ describe('CLI instance profiles', () => {
     ).resolves.toEqual([]);
 
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('handles a local request without telemetry so one action is not counted twice', async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), 'fluxmail-cli-local-telemetry-'));
+    vi.stubEnv('FLUXMAIL_DATA_DIR', dataDir);
+    vi.stubEnv('FLUXMAIL_ENCRYPTION_KEY', '77'.repeat(32));
+    vi.stubEnv('FLUXMAIL_TELEMETRY', '0');
+    const setupContext = createContext();
+    const setup = await setupInitialAdmin(setupContext.db, {
+      name: 'Local Owner',
+      email: 'local@example.com',
+      password: 'River42!',
+    });
+    (setupContext.db as unknown as { $client: { close(): void } }).$client.close();
+    const client = new InstanceClient('local', { kind: 'local' }, setup.session.token);
+    appDeps.length = 0;
+
+    const response = await client.request('/api/v1/me');
+
+    expect(response.status).toBe(200);
+    expect(appDeps).toHaveLength(1);
+    expect(appDeps[0]!.telemetry).toBeUndefined();
+    // The CLI command reports the outcome; local logs still record REST failures.
+    expect(appDeps[0]!.logger).toBeDefined();
   });
 });

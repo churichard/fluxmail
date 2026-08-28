@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { FluxmailConfig } from '../src/config.js';
 import {
+  assertHostedConnectionReady,
   prepareHostedGmailConnection,
   prepareHostedOutlookConnection,
   selectGmailConnectionMode,
@@ -93,7 +94,57 @@ describe('Gmail connection mode', () => {
     };
 
     expect(() => prepareHostedGmailConnection(db, desktopConfig, { memberId: 'member_1' })).toThrow(
-      /custom Google Web application/,
+      /your own Google Web application/,
+    );
+  });
+
+  it('names the setting that selected the hosted flow', () => {
+    const desktopConfig = config(true);
+    desktopConfig.google = { clientId: DEFAULT_GOOGLE_CLIENT_ID, clientSecret: DEFAULT_GOOGLE_CLIENT_SECRET };
+    const publicEntraConfig = config(true);
+    publicEntraConfig.microsoft = { clientId: 'microsoft-client-id', tenantId: 'common' };
+
+    expect(() => assertHostedConnectionReady(desktopConfig, 'gmail')).toThrow(/FLUXMAIL_PUBLIC_URL is set/);
+    expect(() => assertHostedConnectionReady(publicEntraConfig, 'outlook')).toThrow(/FLUXMAIL_PUBLIC_URL is set/);
+  });
+
+  it('does not claim FLUXMAIL_PUBLIC_URL is set when it is not', () => {
+    const db = openDb(':memory:');
+    const desktopConfig = config(false);
+    desktopConfig.google = { clientId: DEFAULT_GOOGLE_CLIENT_ID, clientSecret: DEFAULT_GOOGLE_CLIENT_SECRET };
+    const publicEntraConfig = config(false);
+    publicEntraConfig.microsoft = { clientId: 'microsoft-client-id', tenantId: 'common' };
+
+    expect(() => prepareHostedGmailConnection(db, desktopConfig, { memberId: 'member_1' })).toThrow(
+      /^(?!.*FLUXMAIL_PUBLIC_URL is set).*Hosted Gmail connections need your own Google Web application/,
+    );
+    expect(() => prepareHostedOutlookConnection(db, publicEntraConfig, { memberId: 'member_1' })).toThrow(
+      /^(?!.*FLUXMAIL_PUBLIC_URL is set).*Hosted Outlook connections need a client secret/,
+    );
+  });
+
+  it('appends a caller supplied remedy and accepts a ready hosted app', () => {
+    const desktopConfig = config(true);
+    desktopConfig.google = { clientId: DEFAULT_GOOGLE_CLIENT_ID, clientSecret: DEFAULT_GOOGLE_CLIENT_SECRET };
+    const publicEntraConfig = config(true);
+    publicEntraConfig.microsoft = { clientId: 'microsoft-client-id', tenantId: 'common' };
+
+    expect(() => assertHostedConnectionReady(desktopConfig, 'gmail', 'Pass --local instead.')).toThrow(
+      /Pass --local instead\./,
+    );
+    expect(() => assertHostedConnectionReady(publicEntraConfig, 'outlook', 'Pass --local instead.')).toThrow(
+      /Pass --local instead\./,
+    );
+    expect(() => assertHostedConnectionReady(config(true), 'gmail')).not.toThrow();
+    expect(() => assertHostedConnectionReady(config(true), 'outlook')).not.toThrow();
+  });
+
+  it('omits the loopback remedy when Outlook has no OAuth client for it either', () => {
+    const noEntraConfig = config(true);
+    delete noEntraConfig.microsoft;
+
+    expect(() => assertHostedConnectionReady(noEntraConfig, 'outlook', 'Pass --local instead.')).toThrow(
+      /^(?!.*Pass --local instead).*MICROSOFT_CLIENT_ID is not set/,
     );
   });
 
