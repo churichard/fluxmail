@@ -17,7 +17,7 @@ import {
 import { resolveDeploymentConfig } from '../src/config.js';
 import { createContext } from '../src/context.js';
 import { setupInitialAdmin } from '../src/auth.js';
-import { saveLocalInstance, saveSessionToken } from '../src/cliInstances.js';
+import { saveLocalInstance, saveRemoteInstance, saveSessionToken } from '../src/cliInstances.js';
 import { InstanceConfigStore } from '../src/instanceConfig.js';
 import { getLogger } from '../src/logging.js';
 import { customPermissionPolicy, permissionPolicyForProfile } from '../src/permissions.js';
@@ -30,6 +30,7 @@ import {
   openDb,
 } from '../src/storage/db.js';
 import { getTelemetry } from '../src/telemetry.js';
+import { AccountRegistry } from '../src/accounts/registry.js';
 
 const runFile = promisify(execFile);
 const configMigrationModuleUrl = new URL('../src/configMigration.ts', import.meta.url).href;
@@ -37,6 +38,7 @@ const fileLockModuleUrl = new URL('../src/storage/fileLock.ts', import.meta.url)
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -309,6 +311,8 @@ describe('CLI telemetry', () => {
             outcome: 'error',
             error_code: 'not_found',
             duration_ms: expect.any(Number),
+            provider: 'imap',
+            reauthorize: true,
           },
         ],
       ]);
@@ -318,6 +322,84 @@ describe('CLI telemetry', () => {
       expect(captured).not.toContain('owner@example.com');
       expect(captured).not.toContain('imap.example.com');
       expect(error).toHaveBeenCalled();
+    } finally {
+      process.exitCode = previousExitCode;
+    }
+  });
+
+  it('records mailbox totals and implicit reauthorization for a local IMAP connection', async () => {
+    const previousExitCode = process.exitCode;
+    process.exitCode = undefined;
+    const dataDir = mkdtempSync(path.join(tmpdir(), 'fluxmail-cli-accounts-add-success-'));
+    vi.stubEnv('FLUXMAIL_DATA_DIR', dataDir);
+    vi.stubEnv('FLUXMAIL_ENCRYPTION_KEY', 'bb'.repeat(32));
+    vi.stubEnv('FLUXMAIL_IMAP_PASSWORD_FOR_TEST', 'private-imap-password');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(AccountRegistry.prototype, 'testImapCredentials').mockResolvedValue([]);
+    const { capture, telemetry } = telemetrySpy();
+    const privateMailbox = 'private@example.com';
+
+    try {
+      const context = createContext();
+      const setup = await setupInitialAdmin(context.db, {
+        name: 'Local Owner',
+        email: 'owner@example.com',
+        password: 'River42!',
+      });
+      context.registry.addImapAccount(
+        privateMailbox,
+        {
+          imap: { host: 'old-imap.example.com', port: 993, security: 'tls', user: privateMailbox, password: 'old' },
+          smtp: {
+            host: 'old-smtp.example.com',
+            port: 587,
+            security: 'starttls',
+            user: privateMailbox,
+            password: 'old',
+          },
+          saveSent: true,
+          folderOverrides: {},
+        },
+        undefined,
+        setup.member.id,
+      );
+      (context.db as unknown as { $client: { close(): void } }).$client.close();
+      saveLocalInstance('local');
+      saveSessionToken('local', setup.session.token);
+
+      await createCliProgram({ telemetry }).parseAsync([
+        'node',
+        'fluxmail',
+        '--no-update-notifier',
+        'accounts',
+        'add',
+        'imap',
+        '--email',
+        privateMailbox,
+        '--imap-host',
+        'imap.example.com',
+        '--smtp-host',
+        'smtp.example.com',
+        '--imap-password-env',
+        'FLUXMAIL_IMAP_PASSWORD_FOR_TEST',
+      ]);
+
+      expect(capture).toHaveBeenCalledWith('operation completed', {
+        product_surface: 'cli',
+        operation: 'accounts add',
+        outcome: 'success',
+        duration_ms: expect.any(Number),
+        provider: 'imap',
+        reauthorize: true,
+        account_count: 1,
+        gmail_account_count: 0,
+        outlook_account_count: 0,
+        imap_account_count: 1,
+      });
+      const captured = JSON.stringify(capture.mock.calls);
+      expect(captured).not.toContain(privateMailbox);
+      expect(captured).not.toContain('private-imap-password');
+      expect(captured).not.toContain('imap.example.com');
     } finally {
       process.exitCode = previousExitCode;
     }
@@ -373,6 +455,72 @@ describe('CLI telemetry', () => {
     }
   });
 
+  it('records the provider and mailbox totals after a local account removal', async () => {
+    const previousExitCode = process.exitCode;
+    process.exitCode = undefined;
+    const dataDir = mkdtempSync(path.join(tmpdir(), 'fluxmail-cli-accounts-remove-success-'));
+    vi.stubEnv('FLUXMAIL_DATA_DIR', dataDir);
+    vi.stubEnv('FLUXMAIL_ENCRYPTION_KEY', 'cc'.repeat(32));
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { capture, telemetry } = telemetrySpy();
+    const privateMailbox = 'private@example.com';
+
+    try {
+      const context = createContext();
+      const setup = await setupInitialAdmin(context.db, {
+        name: 'Local Owner',
+        email: 'owner@example.com',
+        password: 'River42!',
+      });
+      const account = context.registry.addImapAccount(
+        privateMailbox,
+        {
+          imap: { host: 'imap.example.com', port: 993, security: 'tls', user: privateMailbox, password: 'secret' },
+          smtp: {
+            host: 'smtp.example.com',
+            port: 587,
+            security: 'starttls',
+            user: privateMailbox,
+            password: 'secret',
+          },
+          saveSent: true,
+          folderOverrides: {},
+        },
+        undefined,
+        setup.member.id,
+      );
+      (context.db as unknown as { $client: { close(): void } }).$client.close();
+      saveLocalInstance('local');
+      saveSessionToken('local', setup.session.token);
+
+      await createCliProgram({ telemetry }).parseAsync([
+        'node',
+        'fluxmail',
+        '--no-update-notifier',
+        'accounts',
+        'remove',
+        account.id,
+      ]);
+
+      expect(capture).toHaveBeenCalledWith('operation completed', {
+        product_surface: 'cli',
+        operation: 'accounts remove',
+        outcome: 'success',
+        duration_ms: expect.any(Number),
+        provider: 'imap',
+        account_count: 0,
+        gmail_account_count: 0,
+        outlook_account_count: 0,
+        imap_account_count: 0,
+      });
+      const captured = JSON.stringify(capture.mock.calls);
+      expect(captured).not.toContain(privateMailbox);
+      expect(captured).not.toContain(account.id);
+    } finally {
+      process.exitCode = previousExitCode;
+    }
+  });
+
   it('names the loopback flag when a public URL selected the hosted connection', async () => {
     const previousExitCode = process.exitCode;
     process.exitCode = undefined;
@@ -412,10 +560,120 @@ describe('CLI telemetry', () => {
         outcome: 'error',
         error_code: 'invalid_request',
         duration_ms: expect.any(Number),
+        provider: 'gmail',
+        reauthorize: false,
+        connection_flow: 'hosted',
+        oauth_app: 'built-in',
       });
     } finally {
       process.exitCode = previousExitCode;
     }
+  });
+
+  it('records a hosted Gmail connection with the operator OAuth application', async () => {
+    const previousExitCode = process.exitCode;
+    process.exitCode = undefined;
+    const dataDir = mkdtempSync(path.join(tmpdir(), 'fluxmail-cli-hosted-custom-'));
+    vi.stubEnv('FLUXMAIL_DATA_DIR', dataDir);
+    vi.stubEnv('FLUXMAIL_ENCRYPTION_KEY', '77'.repeat(32));
+    vi.stubEnv('FLUXMAIL_PUBLIC_URL', 'https://mail.example.com');
+    vi.stubEnv('GOOGLE_CLIENT_ID', 'private-google-client-id');
+    vi.stubEnv('GOOGLE_CLIENT_SECRET', 'private-google-client-secret');
+    const messages: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((line: string) => messages.push(line));
+    const { capture, telemetry } = telemetrySpy();
+
+    try {
+      const context = createContext();
+      const setup = await setupInitialAdmin(context.db, {
+        name: 'Local Owner',
+        email: 'owner@example.com',
+        password: 'River42!',
+      });
+      (context.db as unknown as { $client: { close(): void } }).$client.close();
+      saveLocalInstance('local');
+      saveSessionToken('local', setup.session.token);
+
+      await createCliProgram({ telemetry }).parseAsync([
+        'node',
+        'fluxmail',
+        '--no-update-notifier',
+        'accounts',
+        'add',
+        'gmail',
+      ]);
+
+      expect(messages.join('\n')).toContain('/auth/google/connect?token=');
+      expect(capture).toHaveBeenCalledWith('operation completed', {
+        product_surface: 'cli',
+        operation: 'accounts add',
+        outcome: 'success',
+        duration_ms: expect.any(Number),
+        provider: 'gmail',
+        reauthorize: false,
+        connection_flow: 'hosted',
+        oauth_app: 'custom',
+      });
+      const captured = JSON.stringify(capture.mock.calls);
+      expect(captured).not.toContain('private-google-client-id');
+      expect(captured).not.toContain('private-google-client-secret');
+      expect(captured).not.toContain('owner@example.com');
+    } finally {
+      process.exitCode = previousExitCode;
+    }
+  });
+
+  it('omits reauthorize when only a remote instance can match an existing IMAP mailbox', async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), 'fluxmail-cli-remote-imap-'));
+    vi.stubEnv('FLUXMAIL_DATA_DIR', dataDir);
+    vi.stubEnv('FLUXMAIL_IMAP_PASSWORD_FOR_TEST', 'private-imap-password');
+    saveRemoteInstance('work', 'https://mail.example.com');
+    saveSessionToken('work', 'fms_private_session');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ data: { account: { id: 'acct_remote', email: 'owner@example.com' } } }), {
+            status: 201,
+            headers: { 'content-type': 'application/json' },
+          }),
+      ),
+    );
+    const { capture, telemetry } = telemetrySpy();
+
+    await createCliProgram({ telemetry }).parseAsync([
+      'node',
+      'fluxmail',
+      '--no-update-notifier',
+      'accounts',
+      'add',
+      'imap',
+      '--email',
+      'owner@example.com',
+      '--imap-host',
+      'imap.example.com',
+      '--smtp-host',
+      'smtp.example.com',
+      '--imap-password-env',
+      'FLUXMAIL_IMAP_PASSWORD_FOR_TEST',
+    ]);
+
+    expect(capture.mock.calls).toEqual([
+      [
+        'operation completed',
+        {
+          product_surface: 'cli',
+          operation: 'accounts add',
+          outcome: 'success',
+          duration_ms: expect.any(Number),
+          provider: 'imap',
+        },
+      ],
+    ]);
+    const captured = JSON.stringify(capture.mock.calls);
+    expect(captured).not.toContain('private-imap-password');
+    expect(captured).not.toContain('owner@example.com');
   });
 
   it('does not record the telemetry disable command', async () => {

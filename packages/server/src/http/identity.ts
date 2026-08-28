@@ -28,6 +28,8 @@ import { prepareHostedGmailConnection, prepareHostedOutlookConnection } from '..
 import type { ImapCredentials } from '@fluxmail/provider-imap';
 import { requestClientAddress } from './admin.js';
 import { operationIdForRequest, type OperationRoute } from './operationRoutes.js';
+import { setOperationProperties } from './operationTelemetry.js';
+import { accountInventoryProperties, configuredOAuthAppKind, connectionProperties } from '../accounts/telemetry.js';
 import { logFailure, type Logger } from '../logging.js';
 
 export const identityOperationRoutes = [
@@ -530,12 +532,22 @@ export function registerIdentityRoutes(typedApp: OpenAPIHono<any>, deps: RestApi
       requireSession(principal);
       if (!deps.registry) throw new EmailError('unsupported_capability', 'Account management is unavailable.');
       const input = c.req.valid('json');
+      setOperationProperties(
+        c,
+        connectionProperties({
+          provider: input.provider,
+          reauthorize: input.reauthorizeAccountId !== undefined,
+          ...(input.provider === 'imap' ? {} : { flow: 'hosted' as const }),
+          oauthApp: configuredOAuthAppKind(deps.config, input.provider),
+        }),
+      );
       let existing = input.reauthorizeAccountId ? deps.registry.getAccount(input.reauthorizeAccountId) : undefined;
       if (!existing && input.provider === 'imap' && input.email) {
         existing = deps.registry
           .listAccounts()
           .find((account) => account.email.toLowerCase() === input.email!.toLowerCase());
       }
+      setOperationProperties(c, { reauthorize: existing !== undefined });
       if (existing && !canManageOwnedAccount(principal, existing)) {
         throw new EmailError('permission_denied', 'Only the mailbox owner or an administrator can reauthorize it.');
       }
@@ -586,6 +598,7 @@ export function registerIdentityRoutes(typedApp: OpenAPIHono<any>, deps: RestApi
         existing ? undefined : { sharedWithAll: false },
       );
       audit(deps, principal, 'account.connection.save', 'success', { type: 'account', id: account.id });
+      setOperationProperties(c, accountInventoryProperties(deps.registry));
       return c.json({ data: { account, warnings } }, 201);
     } catch (error) {
       return jsonError(c, error);
@@ -612,6 +625,7 @@ export function registerIdentityRoutes(typedApp: OpenAPIHono<any>, deps: RestApi
       }
       deps.registry.removeAccount(account.id);
       audit(deps, principal, 'account.remove', 'success', { type: 'account', id: account.id });
+      setOperationProperties(c, { provider: account.provider, ...accountInventoryProperties(deps.registry) });
       return c.json({ data: { removed: account.id } }, 200);
     } catch (error) {
       return jsonError(c, error);
@@ -953,6 +967,7 @@ export function registerIdentityRoutes(typedApp: OpenAPIHono<any>, deps: RestApi
       if (!canSeeAccountMetadata(principal, account)) throw new EmailError('not_found', 'Mailbox not found.');
       deps.registry.removeAccount(accountId);
       audit(deps, principal, 'account.remove', 'success', { type: 'account', id: accountId });
+      setOperationProperties(c, { provider: account.provider, ...accountInventoryProperties(deps.registry) });
       return c.json({ data: { removed: accountId } }, 200);
     } catch (error) {
       return jsonError(c, error);

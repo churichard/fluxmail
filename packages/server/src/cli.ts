@@ -63,6 +63,7 @@ import {
   shutdownTelemetry,
   telemetryDisabledInAnyEnvironment,
   type Telemetry,
+  type TelemetryProperties,
 } from './telemetry.js';
 import {
   apiErrorCode,
@@ -81,6 +82,7 @@ import { recordAdminAuditEvent } from './storage/adminAudit.js';
 import { canManageOwnedAccount } from './authorization.js';
 import { createCliUpdateNotifier, type CliUpdateNotifier, type CliUpdateNotifierFactory } from './updateNotifier.js';
 import { registerMailCommands } from './cliMail.js';
+import { accountInventoryProperties, configuredOAuthAppKind, connectionProperties } from './accounts/telemetry.js';
 import {
   flushLogging,
   escapeLogTextForConsole,
@@ -310,10 +312,43 @@ interface ActiveCliOperation {
   startedAt: number;
   initialExitCode: number | string | null | undefined;
   logger: Logger;
+  properties?: TelemetryProperties;
 }
 
 const activeCliOperations = new WeakMap<Command, ActiveCliOperation>();
 const activeUpdateNotifiers = new WeakMap<Command, CliUpdateNotifier>();
+
+/** Attach safe, aggregate properties to the telemetry event for the running command. */
+function recordCliOperationProperties(program: Command, properties: TelemetryProperties): void {
+  const active = activeCliOperations.get(program);
+  if (active) active.properties = { ...active.properties, ...properties };
+}
+
+/** Read local mailbox state without letting telemetry affect the command. */
+async function inspectLocalRegistry<T>(
+  inspect: (registry: ReturnType<typeof createContext>['registry']) => T,
+): Promise<T | undefined> {
+  let context: ReturnType<typeof createContext> | undefined;
+  try {
+    context = createContext();
+    return inspect(context.registry);
+  } catch {
+    return undefined;
+  } finally {
+    if (context) {
+      try {
+        await context.registry.close();
+      } catch {
+        // Telemetry cleanup must not affect the command.
+      }
+      try {
+        (context.db as unknown as { $client: { close(): void } }).$client.close();
+      } catch {
+        // Telemetry cleanup must not affect the command.
+      }
+    }
+  }
+}
 
 function finishCliOperation(program: Command, outcome: 'success' | 'error', errorCode?: string, error?: unknown): void {
   const active = activeCliOperations.get(program);
@@ -337,6 +372,7 @@ function finishCliOperation(program: Command, outcome: 'success' | 'error', erro
     outcome,
     durationMs: performance.now() - active.startedAt,
     errorCode,
+    ...(active.properties ? { properties: active.properties } : {}),
   });
 }
 
@@ -853,6 +889,15 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         return;
       }
       const selected = resolveInstance(selectedInstance());
+      // A remote instance reconnects an IMAP mailbox that matches the address,
+      // so without --reauthorize only the server knows which one this is.
+      const reauthorize =
+        opts.reauthorize !== undefined
+          ? true
+          : selected.profile.kind === 'remote' && provider === 'imap'
+            ? undefined
+            : false;
+      recordCliOperationProperties(program, connectionProperties({ provider, reauthorize }));
       if (!selected.token) {
         failCliOperation(
           program,
@@ -867,10 +912,23 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         return;
       }
       let useControlPlane = selected.profile.kind === 'remote' || provider === 'imap';
+      if (selected.profile.kind === 'remote' && provider !== 'imap') {
+        // A remote instance always completes OAuth through its own public URL.
+        recordCliOperationProperties(program, connectionProperties({ provider, reauthorize, flow: 'hosted' }));
+      }
       if (selected.profile.kind === 'local' && provider !== 'imap') {
         try {
           const { config } = createContext();
           const mode = selectGmailConnectionMode(config, opts);
+          recordCliOperationProperties(
+            program,
+            connectionProperties({
+              provider,
+              reauthorize,
+              flow: mode === 'hosted' ? 'hosted' : 'loopback',
+              oauthApp: configuredOAuthAppKind(config, provider),
+            }),
+          );
           // A configured public URL selects the hosted flow on its own, so report a
           // missing OAuth app here instead of after a connection grant is minted.
           if (mode === 'hosted') {
@@ -883,6 +941,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         }
       }
       if (useControlPlane) {
+        let localImapReauthorize = reauthorize ?? false;
         try {
           if (selected.profile.kind === 'remote' && opts.local) {
             throw new EmailError('invalid_request', '--local is only available for the local instance.');
@@ -897,6 +956,12 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
               throw new EmailError('invalid_request', '--email must be a mailbox address.');
             if (!opts.imapHost) throw new EmailError('invalid_request', '--imap-host is required for IMAP accounts.');
             if (!opts.smtpHost) throw new EmailError('invalid_request', '--smtp-host is required for IMAP accounts.');
+            if (selected.profile.kind === 'local' && !localImapReauthorize) {
+              localImapReauthorize =
+                (await inspectLocalRegistry((registry) =>
+                  registry.listAccounts().some((account) => account.email.toLowerCase() === email.toLowerCase()),
+                )) ?? false;
+            }
             const imapPassword = await accountSecret(opts.imapPasswordEnv, 'IMAP password');
             const smtpPassword = opts.smtpPasswordEnv
               ? await accountSecret(opts.smtpPasswordEnv, 'SMTP password')
@@ -941,6 +1006,13 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
           });
           if (result.connectionUrl) console.log(`Open this URL in your browser:\n\n  ${result.connectionUrl}\n`);
           if (result.account) {
+            if (selected.profile.kind === 'local' && provider === 'imap') {
+              const inventory = await inspectLocalRegistry((registry) => accountInventoryProperties(registry));
+              recordCliOperationProperties(program, {
+                reauthorize: localImapReauthorize,
+                ...inventory,
+              });
+            }
             console.log(`Connected ${result.account.email} (account id: ${result.account.id})`);
             for (const warning of result.warnings ?? []) console.log(`Warning: ${warning.message}.`);
           }
@@ -969,6 +1041,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         }
         if (!existing) ctx.registry.assertCanAddAccount();
         const access = { sharedWithAll: false, grantedMemberIds: [] };
+        const accountIdsBeforeConnection = new Set(ctx.registry.listAccounts().map((account) => account.id));
         const auditConnection = (operation: string, accountId?: string): void => {
           try {
             recordAdminAuditEvent(ctx.db, {
@@ -1033,6 +1106,10 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
             },
           );
           auditConnection('account.connection.complete', account.id);
+          recordCliOperationProperties(program, {
+            reauthorize: accountIdsBeforeConnection.has(account.id),
+            ...accountInventoryProperties(ctx.registry),
+          });
           console.log(
             `\nConnected ${account.email} (account id: ${account.id})` +
               (account.ownerMemberId === owner.id ? ` for member ${owner.name}` : ''),
@@ -1089,6 +1166,10 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
           },
         );
         auditConnection('account.connection.complete', account.id);
+        recordCliOperationProperties(program, {
+          reauthorize: accountIdsBeforeConnection.has(account.id),
+          ...accountInventoryProperties(ctx.registry),
+        });
         console.log(
           `\nConnected ${account.email} (account id: ${account.id})` +
             (account.ownerMemberId === owner.id ? ` for member ${owner.name}` : ''),
@@ -1194,9 +1275,21 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
     .description('Disconnect an account and delete its stored tokens')
     .action(async (accountId: string) => {
       try {
-        await instanceClient(selectedInstance()).json(`/api/v1/accounts/${encodeURIComponent(accountId)}/connection`, {
+        const selected = resolveInstance(selectedInstance());
+        const provider =
+          selected.profile.kind === 'local'
+            ? await inspectLocalRegistry((registry) => registry.getAccount(accountId).provider)
+            : undefined;
+        await instanceClient(selected.name).json(`/api/v1/accounts/${encodeURIComponent(accountId)}/connection`, {
           method: 'DELETE',
         });
+        if (selected.profile.kind === 'local') {
+          const inventory = await inspectLocalRegistry((registry) => accountInventoryProperties(registry));
+          recordCliOperationProperties(program, {
+            ...(provider ? { provider } : {}),
+            ...inventory,
+          });
+        }
         console.log(`Removed ${accountId}`);
       } catch (err) {
         failCliOperation(program, err);

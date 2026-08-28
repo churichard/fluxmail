@@ -561,6 +561,107 @@ describe('member authentication', () => {
     expect(registry.loadImapCredentials(account.id).folderOverrides).toEqual({ sent: 'Sent Items' });
   });
 
+  it('records the provider and mailbox totals when a member connects and removes a mailbox', async () => {
+    const capture = vi.fn();
+    const telemetry = { capture, shutdown: vi.fn().mockResolvedValue(undefined) };
+    const { app, db, registry } = fixture(telemetry);
+    const setup = await setupInitialAdmin(db, {
+      name: 'Mailbox Owner',
+      email: 'owner@example.com',
+      password: strongPassword,
+    });
+    vi.spyOn(registry, 'testImapCredentials').mockResolvedValue([]);
+    const headers = { authorization: `Bearer ${setup.session.token}`, 'content-type': 'application/json' };
+    const privateMailbox = 'private@example.com';
+    const privateSecret = 'private-imap-password';
+    const connectionBody = JSON.stringify({
+      provider: 'imap',
+      email: privateMailbox,
+      imap: { host: 'imap.example.com', port: 993, security: 'tls', user: privateMailbox, password: privateSecret },
+      smtp: {
+        host: 'smtp.example.com',
+        port: 587,
+        security: 'starttls',
+        user: privateMailbox,
+        password: privateSecret,
+      },
+    });
+
+    const connection = await app.request('/api/v1/accounts/connections', {
+      method: 'POST',
+      headers,
+      body: connectionBody,
+    });
+    expect(connection.status).toBe(201);
+    const accountId = ((await connection.json()) as { data: { account: { id: string } } }).data.account.id;
+
+    const reconnect = await app.request('/api/v1/accounts/connections', {
+      method: 'POST',
+      headers,
+      body: connectionBody,
+    });
+    expect(reconnect.status).toBe(201);
+
+    // This instance has no Google application, so the hosted flow cannot start.
+    const gmail = await app.request('/api/v1/accounts/connections', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ provider: 'gmail' }),
+    });
+    expect(gmail.status).toBe(400);
+
+    const removal = await app.request(`/api/v1/accounts/${accountId}/connection`, { method: 'DELETE', headers });
+    expect(removal.status).toBe(200);
+
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({
+        product_surface: 'rest',
+        operation: 'connectOwnAccount',
+        outcome: 'success',
+        provider: 'imap',
+        reauthorize: false,
+        account_count: 1,
+        imap_account_count: 1,
+      }),
+    );
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({
+        operation: 'connectOwnAccount',
+        outcome: 'success',
+        provider: 'imap',
+        reauthorize: true,
+        account_count: 1,
+      }),
+    );
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({
+        operation: 'connectOwnAccount',
+        outcome: 'error',
+        error_code: 'invalid_request',
+        provider: 'gmail',
+        connection_flow: 'hosted',
+      }),
+    );
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({
+        operation: 'removeOwnAccount',
+        outcome: 'success',
+        provider: 'imap',
+        account_count: 0,
+        imap_account_count: 0,
+      }),
+    );
+    const captured = JSON.stringify(capture.mock.calls);
+    expect(captured).not.toContain(privateMailbox);
+    expect(captured).not.toContain(privateSecret);
+    expect(captured).not.toContain(accountId);
+    expect(captured).not.toContain('imap.example.com');
+  });
+
   it('returns 503 for provider failures on member-managed IMAP routes', async () => {
     const { app, db, registry } = fixture();
     const setup = await setupInitialAdmin(db, {

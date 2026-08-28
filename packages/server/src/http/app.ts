@@ -28,7 +28,8 @@ import {
 import { buildMicrosoftAuthUrl, exchangeMicrosoftCode, requireMicrosoftConfig } from '../accounts/microsoftAuth.js';
 import { prepareHostedGmailConnection, prepareHostedOutlookConnection } from '../accounts/gmailConnection.js';
 import { VERSION } from '../version.js';
-import type { Telemetry } from '../telemetry.js';
+import { captureOperation, type OperationOutcome, type Telemetry } from '../telemetry.js';
+import { accountInventoryProperties, connectionProperties, oauthAppKind } from '../accounts/telemetry.js';
 import { findMember } from '../storage/members.js';
 import { createRestApi } from './rest.js';
 import { canAdminister, canSeeAccountMetadata } from '../authorization.js';
@@ -123,6 +124,34 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
     `<p>Continue to ${identityProvider} to choose the account you want to connect.</p>` +
     '<form method="post">' +
     `<button type="submit">Continue with ${identityProvider}</button></form></body></html>`;
+
+  /**
+   * Record the browser flow that completes a hosted connection. The CLI and REST
+   * routes only mint the link, so this is where a hosted mailbox is linked.
+   */
+  const captureHostedConnection = (
+    provider: 'gmail' | 'outlook',
+    startedAt: number,
+    outcome: OperationOutcome,
+    details: { reauthorize?: boolean; clientId?: string; errorCode?: string; linked?: boolean } = {},
+  ): void => {
+    captureOperation(telemetry, {
+      productSurface: 'rest',
+      operation: 'completeHostedConnection',
+      outcome,
+      durationMs: performance.now() - startedAt,
+      ...(details.errorCode ? { errorCode: details.errorCode } : {}),
+      properties: {
+        ...connectionProperties({
+          provider,
+          reauthorize: details.reauthorize ?? false,
+          flow: 'hosted',
+          oauthApp: oauthAppKind(provider, details.clientId),
+        }),
+        ...(details.linked ? accountInventoryProperties(registry) : {}),
+      },
+    });
+  };
 
   const beginGoogleOAuth = (intent?: GmailConnectionIntent): string => {
     const oauthClient = { ...requireHostedGoogleConfig(config) };
@@ -454,16 +483,31 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
   app.get('/auth/google/callback', async (c) => {
     c.header('cache-control', 'no-store');
     c.header('referrer-policy', 'no-referrer');
+    const startedAt = performance.now();
+    const finishActivity = telemetry?.beginActivity?.();
     const state = c.req.query('state');
     const pending = state ? googleOauthStates.get(state) : undefined;
+    const failConnection = (errorCode: string, message: string, status: 400 | 500) => {
+      captureHostedConnection('gmail', startedAt, 'error', {
+        errorCode,
+        reauthorize: pending?.intent?.reauthorizeAccountId !== undefined,
+        clientId: pending?.oauthClient.clientId,
+      });
+      finishActivity?.();
+      return c.text(message, status);
+    };
     if (!state || !pending || pending.expiresAt < Date.now()) {
-      return c.text('Invalid or expired OAuth state. Start the Gmail connection flow again.', 400);
+      return failConnection(
+        'invalid_state',
+        'Invalid or expired OAuth state. Start the Gmail connection flow again.',
+        400,
+      );
     }
     googleOauthStates.delete(state);
     const error = c.req.query('error');
-    if (error) return c.text(`Google returned an error: ${error}`, 400);
+    if (error) return failConnection('provider_error', `Google returned an error: ${error}`, 400);
     const code = c.req.query('code');
-    if (!code) return c.text('Missing code parameter.', 400);
+    if (!code) return failConnection('missing_code', 'Missing code parameter.', 400);
 
     const client = createOAuthClient(config, `${config.publicUrl}/auth/google/callback`, pending.oauthClient);
     try {
@@ -505,6 +549,11 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
         resourceType: 'account',
         resourceId: account.id,
       });
+      captureHostedConnection('gmail', startedAt, 'success', {
+        reauthorize: reauthorizeAccount !== undefined || duplicate !== undefined,
+        clientId: pending.oauthClient.clientId,
+        linked: true,
+      });
       return c.html(
         `<html><body style="font-family: sans-serif"><h2>${escapeHtml(email)} is connected to Fluxmail</h2>` +
           `<p>Account id: <code>${escapeHtml(account.id)}</code>. You can close this tab.</p></body></html>`,
@@ -513,8 +562,12 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
       logFailure(logger, 'oauth.google_callback_failed', err);
       // Surface why connecting failed (expired code, missing refresh token,
       // account limit) instead of a blank 500 the user cannot act on.
-      if (isEmailError(err)) return c.text(`Could not connect the account: ${err.message}`, 400);
-      return c.text('Could not connect the account; check the server logs.', 500);
+      if (isEmailError(err)) {
+        return failConnection(err.code, `Could not connect the account: ${err.message}`, 400);
+      }
+      return failConnection('internal', 'Could not connect the account; check the server logs.', 500);
+    } finally {
+      finishActivity?.();
     }
   });
 
@@ -579,18 +632,37 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
   app.get('/auth/microsoft/callback', async (c) => {
     c.header('cache-control', 'no-store');
     c.header('referrer-policy', 'no-referrer');
+    const startedAt = performance.now();
+    const finishActivity = telemetry?.beginActivity?.();
     const state = c.req.query('state');
     const pending = state ? microsoftOauthStates.get(state) : undefined;
+    const failConnection = (errorCode: string, message: string, status: 400 | 500) => {
+      captureHostedConnection('outlook', startedAt, 'error', {
+        errorCode,
+        reauthorize: pending?.intent?.reauthorizeAccountId !== undefined,
+        clientId: pending?.oauthClient.clientId,
+      });
+      finishActivity?.();
+      return c.text(message, status);
+    };
     if (!state || !pending || pending.expiresAt < Date.now()) {
-      return c.text('Invalid or expired OAuth state. Start the Outlook connection flow again.', 400);
+      return failConnection(
+        'invalid_state',
+        'Invalid or expired OAuth state. Start the Outlook connection flow again.',
+        400,
+      );
     }
     microsoftOauthStates.delete(state);
     const error = c.req.query('error');
     if (error) {
-      return c.text(`Microsoft returned an error: ${c.req.query('error_description') ?? error}`, 400);
+      return failConnection(
+        'provider_error',
+        `Microsoft returned an error: ${c.req.query('error_description') ?? error}`,
+        400,
+      );
     }
     const code = c.req.query('code');
-    if (!code) return c.text('Missing code parameter.', 400);
+    if (!code) return failConnection('missing_code', 'Missing code parameter.', 400);
 
     try {
       const { email, displayName, credentials } = await exchangeMicrosoftCode(
@@ -638,14 +710,23 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
         resourceType: 'account',
         resourceId: account.id,
       });
+      captureHostedConnection('outlook', startedAt, 'success', {
+        reauthorize: reauthorizeAccount !== undefined || duplicate !== undefined,
+        clientId: pending.oauthClient.clientId,
+        linked: true,
+      });
       return c.html(
         `<html><body style="font-family: sans-serif"><h2>${escapeHtml(email)} is connected to Fluxmail</h2>` +
           `<p>Account id: <code>${escapeHtml(account.id)}</code>. You can close this tab.</p></body></html>`,
       );
     } catch (err) {
       logFailure(logger, 'oauth.microsoft_callback_failed', err);
-      if (isEmailError(err)) return c.text(`Could not connect the account: ${err.message}`, 400);
-      return c.text('Could not connect the account; check the server logs.', 500);
+      if (isEmailError(err)) {
+        return failConnection(err.code, `Could not connect the account: ${err.message}`, 400);
+      }
+      return failConnection('internal', 'Could not connect the account; check the server logs.', 500);
+    } finally {
+      finishActivity?.();
     }
   });
 

@@ -24,6 +24,8 @@ import { findMember } from '../storage/members.js';
 import type { Principal } from '../auth.js';
 import { canAdminister, canSeeAccountMetadata } from '../authorization.js';
 import { operationIdForRequest } from './operationRoutes.js';
+import { setOperationProperties } from './operationTelemetry.js';
+import { accountInventoryProperties, configuredOAuthAppKind, connectionProperties } from '../accounts/telemetry.js';
 import { logCodedFailure, logFailure, type Logger } from '../logging.js';
 
 export const ADMIN_BODY_LIMIT = 64 * 1024;
@@ -551,6 +553,15 @@ export function registerAdminRoutes(app: OpenAPIHono<any>, deps: AdminApiDeps): 
       const auth = c.get('restAuth') as Principal;
       requireAdmin(auth, 'admin.accounts');
       const input = c.req.valid('json');
+      setOperationProperties(
+        c,
+        connectionProperties({
+          provider: input.provider,
+          reauthorize: input.reauthorizeAccountId !== undefined,
+          ...(input.provider === 'imap' ? {} : { flow: 'hosted' as const }),
+          oauthApp: configuredOAuthAppKind(deps.config, input.provider),
+        }),
+      );
       const access = resolveSharing(deps, input);
       if (access.reauthorizeAccountId) {
         requireAdminAccount(auth, registry(deps).getAccount(access.reauthorizeAccountId));
@@ -585,6 +596,11 @@ export function registerAdminRoutes(app: OpenAPIHono<any>, deps: AdminApiDeps): 
       }
 
       const existing = access.reauthorizeAccountId ? registry(deps).getAccount(access.reauthorizeAccountId) : undefined;
+      const duplicate = existing
+        ? undefined
+        : registry(deps)
+            .listAccounts()
+            .find((account) => account.email.toLowerCase() === input.email.toLowerCase());
       if (existing && (existing.provider !== 'imap' || existing.email.toLowerCase() !== input.email.toLowerCase())) {
         throw new EmailError('invalid_request', `Account ${existing.id} does not match IMAP mailbox ${input.email}.`);
       }
@@ -612,6 +628,10 @@ export function registerAdminRoutes(app: OpenAPIHono<any>, deps: AdminApiDeps): 
           ? { sharedWithAll: access.sharedWithAll ?? false, grantedMemberIds: access.grantedMemberIds }
           : undefined,
       );
+      setOperationProperties(c, {
+        reauthorize: existing !== undefined || duplicate !== undefined,
+        ...accountInventoryProperties(registry(deps)),
+      });
       return json({ data: { account: connected, warnings } }, 201);
     }),
   );

@@ -27,12 +27,14 @@ import { VERSION } from '../version.js';
 import { administrationUsesHttps, adminOperationId, registerAdminRoutes, requestBodyExceedsLimit } from './admin.js';
 import { recordAdminAuditEvent } from '../storage/adminAudit.js';
 import { identityOperationId, registerIdentityRoutes } from './identity.js';
+import { operationProperties } from './operationTelemetry.js';
 import { logCodedFailure, logFailure, type Logger } from '../logging.js';
 
 interface RestVariables {
   restAuth: Principal;
   restService: EmailService;
   restLogger?: Logger;
+  restTelemetry?: TelemetryProperties;
 }
 
 type RestEnv = { Bindings: HttpBindings; Variables: RestVariables };
@@ -893,6 +895,7 @@ export function createRestApi(deps: RestApiDeps): OpenAPIHono<RestEnv> {
         outcome: c.res.status < 400 && !errorCode ? 'success' : 'error',
         durationMs: performance.now() - startedAt,
         errorCode,
+        properties: operationProperties(c),
       });
       finishActivity?.();
     }
@@ -920,6 +923,7 @@ export function createRestApi(deps: RestApiDeps): OpenAPIHono<RestEnv> {
         outcome: c.res.status < 400 ? 'success' : 'error',
         durationMs: performance.now() - startedAt,
         errorCode,
+        properties: operationProperties(c),
       });
       finishActivity?.();
     }
