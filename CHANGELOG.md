@@ -4,6 +4,18 @@ Fluxmail records user-facing changes in this file. The format follows [Common Ch
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-01
+
+### Changed
+
+- Relicense Fluxmail under the [Elastic License 2.0](https://github.com/churichard/fluxmail/blob/main/LICENSE.md), which permits use, modification, and redistribution but does not permit circumventing license key functionality or offering Fluxmail as a hosted service ([#80](https://github.com/churichard/fluxmail/pull/80))
+- Record the mailbox provider, OAuth flow, OAuth application kind, and installation mailbox counts in anonymous telemetry, and report the browser callback that finishes a hosted connection as `completeHostedConnection`; [turn telemetry off](https://fluxmail.ai/docs/configuration/) to opt out ([#83](https://github.com/churichard/fluxmail/pull/83))
+
+### Fixed
+
+- [CLI] Fail `fluxmail accounts add gmail` and `fluxmail accounts add outlook` before printing a connection link when `FLUXMAIL_PUBLIC_URL` selects the hosted flow without a suitable OAuth application, and offer `--local` ([#82](https://github.com/churichard/fluxmail/pull/82))
+- [CLI / REST] Name `FLUXMAIL_PUBLIC_URL` in hosted Gmail and Outlook connection errors so the setting that selected the flow is clear ([#82](https://github.com/churichard/fluxmail/pull/82))
+
 ## [0.7.0] - 2026-07-25
 
 Only the breaking entries for the interfaces you use apply. An MCP-only integration, for example, does not need the CLI or REST migrations.
@@ -106,10 +118,11 @@ Only the breaking entries for the interfaces you use apply. An MCP-only integrat
 - Prevent hosted Microsoft OAuth responses from forwarding connection credentials through the HTTP referrer ([#43](https://github.com/churichard/fluxmail/pull/43))
 - Stop a pending IMAP connection immediately when its provider closes during setup ([#49](https://github.com/churichard/fluxmail/pull/49))
 
-[Unreleased]: https://github.com/churichard/fluxmail/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/churichard/fluxmail/compare/v0.8.0...HEAD
 [0.4.0]: https://github.com/churichard/fluxmail/compare/v0.3.0...v0.4.0
 [0.4.1]: https://github.com/churichard/fluxmail/compare/v0.4.0...v0.4.1
 [0.5.0]: https://github.com/churichard/fluxmail/compare/v0.4.1...v0.5.0
 [0.6.0]: https://github.com/churichard/fluxmail/compare/v0.5.0...v0.6.0
 [0.6.1]: https://github.com/churichard/fluxmail/compare/v0.6.0...v0.6.1
 [0.7.0]: https://github.com/churichard/fluxmail/compare/v0.6.1...v0.7.0
+[0.8.0]: https://github.com/churichard/fluxmail/compare/v0.7.0...v0.8.0
