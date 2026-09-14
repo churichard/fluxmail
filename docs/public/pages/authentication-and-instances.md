@@ -18,6 +18,16 @@ Fluxmail asks for a password without displaying it. The command creates the firs
 
 Passwords must contain 8 to 256 Unicode characters. Fluxmail rejects common passwords and passwords based on the member's name or email address. It does not require a mix of uppercase letters, numbers, and symbols.
 
+## Log in to an existing local instance
+
+If the instance is already set up but the CLI has no `local` profile (for example after the profile was removed or the CLI files were lost), login recreates it:
+
+```bash
+fluxmail --instance local login
+```
+
+On a machine with no CLI profiles at all, bare `fluxmail login` recreates the `local` profile and logs in there. If other profiles exist, name the local one explicitly as above.
+
 ## Log in to a remote instance
 
 Name the profile when you add a server:
