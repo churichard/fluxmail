@@ -4,6 +4,14 @@ Fluxmail records user-facing changes in this file. The format follows [Common Ch
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-09-14
+
+### Fixed
+
+- [CLI] Recreate the missing `local` instance profile when logging in to an existing local instance ([#85](https://github.com/churichard/fluxmail/pull/85))
+- [CLI] Reject `fluxmail setup` on an already configured instance and point at login instead ([#85](https://github.com/churichard/fluxmail/pull/85))
+- [CLI] Clarify the missing-instance error and align `instances` table output ([#85](https://github.com/churichard/fluxmail/pull/85))
+
 ## [0.8.0] - 2026-09-01
 
 ### Changed
@@ -118,7 +126,7 @@ Only the breaking entries for the interfaces you use apply. An MCP-only integrat
 - Prevent hosted Microsoft OAuth responses from forwarding connection credentials through the HTTP referrer ([#43](https://github.com/churichard/fluxmail/pull/43))
 - Stop a pending IMAP connection immediately when its provider closes during setup ([#49](https://github.com/churichard/fluxmail/pull/49))
 
-[Unreleased]: https://github.com/churichard/fluxmail/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/churichard/fluxmail/compare/v0.8.1...HEAD
 [0.4.0]: https://github.com/churichard/fluxmail/compare/v0.3.0...v0.4.0
 [0.4.1]: https://github.com/churichard/fluxmail/compare/v0.4.0...v0.4.1
 [0.5.0]: https://github.com/churichard/fluxmail/compare/v0.4.1...v0.5.0
@@ -126,3 +134,4 @@ Only the breaking entries for the interfaces you use apply. An MCP-only integrat
 [0.6.1]: https://github.com/churichard/fluxmail/compare/v0.6.0...v0.6.1
 [0.7.0]: https://github.com/churichard/fluxmail/compare/v0.6.1...v0.7.0
 [0.8.0]: https://github.com/churichard/fluxmail/compare/v0.7.0...v0.8.0
+[0.8.1]: https://github.com/churichard/fluxmail/compare/v0.8.0...v0.8.1
