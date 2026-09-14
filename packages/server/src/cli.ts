@@ -77,7 +77,13 @@ import {
   saveSessionToken,
   useInstance,
 } from './cliInstances.js';
-import { authenticateBearer, isBootstrapComplete, normalizeAndValidatePassword, recoverAdminPassword, setupInitialAdmin } from './auth.js';
+import {
+  authenticateBearer,
+  isBootstrapComplete,
+  normalizeAndValidatePassword,
+  recoverAdminPassword,
+  setupInitialAdmin,
+} from './auth.js';
 import { recordAdminAuditEvent } from './storage/adminAudit.js';
 import { canManageOwnedAccount } from './authorization.js';
 import { createCliUpdateNotifier, type CliUpdateNotifier, type CliUpdateNotifierFactory } from './updateNotifier.js';
@@ -562,7 +568,10 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
       try {
         const earlyContext = createContext();
         if (isBootstrapComplete(earlyContext.db)) {
-          throw new EmailError('invalid_request', 'This instance has already been set up. Run "fluxmail --instance local login" to log in to the existing instance.');
+          throw new EmailError(
+            'invalid_request',
+            'This instance has already been set up. Run "fluxmail --instance local login" to log in to the existing instance.',
+          );
         }
         const name = opts.name ?? (opts.existingAdmin ? undefined : await textPrompt('Administrator name'));
         const email = opts.email ?? (await textPrompt('Administrator email'));
@@ -606,7 +615,11 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         }
         const requestedInstance = selectedInstance();
         const instanceConfig = loadInstanceConfig();
-        if (!opts.server && !instanceConfig.instances.local && (requestedInstance === 'local' || (!requestedInstance && Object.keys(instanceConfig.instances).length === 0))) {
+        if (
+          !opts.server &&
+          !instanceConfig.instances.local &&
+          (requestedInstance === 'local' || (!requestedInstance && Object.keys(instanceConfig.instances).length === 0))
+        ) {
           saveLocalInstance('local');
         }
         const instanceName = requestedInstance ?? (opts.server ? 'remote' : resolveInstance().name);
