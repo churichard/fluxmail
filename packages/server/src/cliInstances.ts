@@ -200,7 +200,7 @@ export function resolveInstance(name?: string): { name: string; profile: Instanc
   if (!selected)
     throw new EmailError(
       'invalid_request',
-      'No CLI instance is configured. Run "fluxmail setup" or "fluxmail login --server <url>".',
+      'No CLI instance is configured.\nFor an existing local instance, run "fluxmail --instance local login".\nFor a new local instance, run "fluxmail setup".\nFor a remote instance, run "fluxmail login --server <url>".',
     );
   const profile = config.instances[selected];
   if (!profile) throw new EmailError('not_found', `No CLI instance named "${selected}".`);

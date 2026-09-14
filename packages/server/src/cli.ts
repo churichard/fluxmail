@@ -77,7 +77,7 @@ import {
   saveSessionToken,
   useInstance,
 } from './cliInstances.js';
-import { authenticateBearer, normalizeAndValidatePassword, recoverAdminPassword, setupInitialAdmin } from './auth.js';
+import { authenticateBearer, isBootstrapComplete, normalizeAndValidatePassword, recoverAdminPassword, setupInitialAdmin } from './auth.js';
 import { recordAdminAuditEvent } from './storage/adminAudit.js';
 import { canManageOwnedAccount } from './authorization.js';
 import { createCliUpdateNotifier, type CliUpdateNotifier, type CliUpdateNotifierFactory } from './updateNotifier.js';
@@ -560,9 +560,13 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
     .option('--existing-admin <member>', 'Existing administrator id or email for a migrated instance')
     .action(async (opts: { name?: string; email?: string; existingAdmin?: string }) => {
       try {
+        const earlyContext = createContext();
+        if (isBootstrapComplete(earlyContext.db)) {
+          throw new EmailError('invalid_request', 'This instance has already been set up. Run "fluxmail --instance local login" to log in to the existing instance.');
+        }
         const name = opts.name ?? (opts.existingAdmin ? undefined : await textPrompt('Administrator name'));
         const email = opts.email ?? (await textPrompt('Administrator email'));
-        const context = createContext();
+        const context = earlyContext;
         const passwordMember = opts.existingAdmin
           ? { ...findMember(context.db, opts.existingAdmin), email }
           : { name: name ?? '', email };
@@ -601,7 +605,8 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
           throw new EmailError('invalid_request', '--enroll and --reset cannot be used together.');
         }
         const requestedInstance = selectedInstance();
-        if (!opts.server && requestedInstance === 'local' && !loadInstanceConfig().instances.local) {
+        const instanceConfig = loadInstanceConfig();
+        if (!opts.server && !instanceConfig.instances.local && (requestedInstance === 'local' || (!requestedInstance && Object.keys(instanceConfig.instances).length === 0))) {
           saveLocalInstance('local');
         }
         const instanceName = requestedInstance ?? (opts.server ? 'remote' : resolveInstance().name);
@@ -670,9 +675,19 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
     .description('List configured instances')
     .action(() => {
       const config = loadInstanceConfig();
-      for (const [name, profile] of Object.entries(config.instances)) {
+      const rows = Object.entries(config.instances).map(([name, profile]) => ({
+        name,
+        active: config.active === name ? '*' : '',
+        kind: profile.kind,
+        url: profile.kind === 'remote' ? profile.serverUrl : '',
+      }));
+      const width = (values: string[]): number => Math.max(...values.map((value) => value.length));
+      const nameWidth = width(['NAME', ...rows.map((row) => row.name)]);
+      const kindWidth = width(['KIND', ...rows.map((row) => row.kind)]);
+      console.log(`${'NAME'.padEnd(nameWidth)}  ACTIVE  ${'KIND'.padEnd(kindWidth)}  URL`.trimEnd());
+      for (const row of rows) {
         console.log(
-          `${name}${config.active === name ? ' *' : ''}  ${profile.kind}${profile.kind === 'remote' ? `  ${profile.serverUrl}` : ''}`,
+          `${row.name.padEnd(nameWidth)}  ${(row.active ? '*' : ' ').padEnd('ACTIVE'.length)}  ${row.kind.padEnd(kindWidth)}  ${row.url}`.trimEnd(),
         );
       }
     });
