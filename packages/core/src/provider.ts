@@ -10,6 +10,7 @@ import type {
   Page,
   PageOpts,
   SendResult,
+  SendAsIdentity,
   Thread,
 } from './types.js';
 
@@ -33,6 +34,9 @@ export interface EmailProvider {
 
   /** Cheap connectivity + auth check. Throws EmailError('auth_expired') on bad credentials. */
   testConnection(): Promise<void>;
+
+  /** Discover provider-managed sender identities. Optional for custom providers. */
+  listSendAs?(): Promise<SendAsIdentity[]>;
 
   /** Metadata-level listing (no bodies). */
   listMessages(q: EmailQuery, page?: PageOpts): Promise<Page<Message>>;

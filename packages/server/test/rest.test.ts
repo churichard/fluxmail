@@ -6,6 +6,7 @@ import { customPermissionPolicy, permissionPolicyForProfile } from '../src/permi
 import { createApiKey } from '../src/storage/apiKeys.js';
 import { openDb } from '../src/storage/db.js';
 import { addMember } from '../src/storage/members.js';
+import { listAdminAuditEvents } from '../src/storage/adminAudit.js';
 
 const account = {
   id: 'acct_1',
@@ -62,6 +63,11 @@ function fixture() {
     listAccounts: vi.fn(() => [account]),
     listFolders: vi.fn(async () => [{ id: 'INBOX', name: 'Inbox', role: 'inbox' as const }]),
     listLabels: vi.fn(async () => [{ id: 'Label_1', name: 'private-project' }]),
+    listSendAs: vi.fn(async () => [
+      { email: 'me@example.com', isPrimary: true, source: 'provider' as const },
+      { email: 'private-alias@example.com', isPrimary: false, source: 'provider' as const },
+    ]),
+    replaceSendAs: vi.fn(async () => [{ email: 'me@example.com', isPrimary: true, source: 'configured' as const }]),
     listMessages: vi.fn(async () => ({ items: [message], nextPageToken: 'next_1' })),
     getMessage: vi.fn(async () => message),
     getThread: vi.fn(async () => ({ id: 'thread_1', subject: 'Hello', messages: [message] })),
@@ -128,6 +134,9 @@ describe('REST API discovery and authentication', () => {
       default: true,
       description: 'Include attachments from the original message. Defaults to true.',
     });
+    expect(document.components.schemas.DraftRequest.properties.from).toMatchObject({ type: 'string', format: 'email' });
+    expect(document.paths['/api/v1/accounts/{accountId}/send-as'].get.operationId).toBe('listSendAs');
+    expect(document.paths['/api/v1/accounts/{accountId}/send-as'].put.operationId).toBe('replaceSendAs');
     expect(document.components.schemas.ModifyMessagesRequest.properties.folder.description).toMatch(
       /Required when action is move/,
     );
@@ -196,6 +205,39 @@ describe('REST API discovery and authentication', () => {
 });
 
 describe('REST email operations', () => {
+  it('lists sender addresses and protects idempotent alias replacement with admin.accounts', async () => {
+    const { app, auth, db, member, service } = fixture();
+    const listed = await app.request('/api/v1/accounts/acct_1/send-as', { headers: auth });
+    expect(listed.status).toBe(200);
+    expect(service.listSendAs).toHaveBeenCalledWith('acct_1');
+
+    const body = { identities: [{ email: 'private-alias@example.com', name: 'Sales' }] };
+    const denied = await app.request('/api/v1/accounts/acct_1/send-as', jsonRequest('PUT', body, auth));
+    expect(denied.status).toBe(403);
+    expect(service.replaceSendAs).not.toHaveBeenCalled();
+
+    const { key: adminKey } = createApiKey(
+      db,
+      'account admin',
+      member.id,
+      permissionPolicyForProfile('full', ['admin.accounts']),
+    );
+    const adminAuth = { authorization: `Bearer ${adminKey}` };
+    const first = await app.request('/api/v1/accounts/acct_1/send-as', jsonRequest('PUT', body, adminAuth));
+    const second = await app.request('/api/v1/accounts/acct_1/send-as', jsonRequest('PUT', body, adminAuth));
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(service.replaceSendAs).toHaveBeenCalledTimes(2);
+    expect(service.replaceSendAs).toHaveBeenNthCalledWith(1, 'acct_1', body.identities);
+    expect(service.replaceSendAs).toHaveBeenNthCalledWith(2, 'acct_1', body.identities);
+    expect(listAdminAuditEvents(db).filter((event) => event.operation === 'put /api/v1/accounts/:id/send-as')).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ outcome: 'success', resourceType: 'account', resourceId: 'acct_1' }),
+        expect.objectContaining({ outcome: 'error', errorCode: 'permission_denied' }),
+      ]),
+    );
+  });
+
   it('routes the full read, draft, schedule, action, and attachment surface', async () => {
     const { app, auth, service } = fixture();
     expect((await app.request('/api/v1/accounts', { headers: auth })).status).toBe(200);
@@ -261,6 +303,15 @@ describe('REST email operations', () => {
       jsonRequest('POST', { body: { text: 'Reply' }, replyAll: true }, auth),
     );
     expect(replyAll.status).toBe(400);
+    const draftWithSender = await app.request(
+      '/api/v1/accounts/acct_1/send',
+      jsonRequest(
+        'POST',
+        { draftId: 'draft_1', from: 'sales@example.com' },
+        { ...auth, 'idempotency-key': 'draft-with-sender' },
+      ),
+    );
+    expect(draftWithSender.status).toBe(400);
     const badAttachment = await app.request(
       '/api/v1/accounts/acct_1/drafts',
       jsonRequest(
@@ -412,6 +463,7 @@ describe('REST email operations', () => {
     expect((await app.request('/api/v1')).status).toBe(200);
     expect((await app.request('/api/v1/status', { headers: auth })).status).toBe(200);
     expect((await app.request('/api/v1/accounts/acct_1/labels', { headers: auth })).status).toBe(200);
+    expect((await app.request('/api/v1/accounts/acct_1/send-as', { headers: auth })).status).toBe(200);
     const privateQuery = 'from:private@example.com from:other@example.com';
     expect(
       (
@@ -425,6 +477,10 @@ describe('REST email operations', () => {
     expect(capture).toHaveBeenCalledWith(
       'operation completed',
       expect.objectContaining({ product_surface: 'rest', operation: 'getApiInfo', outcome: 'success' }),
+    );
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({ product_surface: 'rest', operation: 'listSendAs', outcome: 'success' }),
     );
     expect(capture).toHaveBeenCalledWith(
       'operation completed',
@@ -454,6 +510,7 @@ describe('REST email operations', () => {
     );
     expect(JSON.stringify(capture.mock.calls)).not.toContain('me@example.com');
     expect(JSON.stringify(capture.mock.calls)).not.toContain('private-project');
+    expect(JSON.stringify(capture.mock.calls)).not.toContain('private-alias@example.com');
     expect(JSON.stringify(capture.mock.calls)).not.toContain(privateQuery);
     expect(warn).toHaveBeenCalledWith(
       'rest.operation_failed',

@@ -33,9 +33,11 @@ export async function buildRawMessage(
   draft: DraftInput,
   from: EmailAddress,
   threading?: ThreadingHeaders,
+  replyTo?: EmailAddress,
 ): Promise<Buffer> {
   const options: Mail.Options = {
     from: { name: from.name ?? '', address: from.email },
+    ...(replyTo ? { replyTo: { name: replyTo.name ?? '', address: replyTo.email } } : {}),
     to: toMailAddresses(draft.to),
     cc: toMailAddresses(draft.cc),
     bcc: toMailAddresses(draft.bcc),

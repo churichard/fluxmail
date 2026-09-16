@@ -6,6 +6,7 @@ import {
   type AttachmentMeta,
   type Capabilities,
   type DraftInput,
+  type EmailAddress,
   type EmailProvider,
   type EmailQuery,
   type Folder,
@@ -75,6 +76,7 @@ export interface OutlookProviderOptions {
   accountId: string;
   tokenProvider: MicrosoftAccessTokenProvider;
   fetch?: typeof globalThis.fetch;
+  resolveSender?: (email: string) => EmailAddress | undefined;
 }
 
 export const OUTLOOK_CAPABILITIES: Capabilities = {
@@ -246,12 +248,14 @@ export class OutlookProvider implements EmailProvider {
   private readonly accountId: string;
   private readonly tokenProvider: MicrosoftAccessTokenProvider;
   private readonly fetchImpl: typeof globalThis.fetch;
+  private readonly resolveSender: ((email: string) => EmailAddress | undefined) | undefined;
   private folderCache: { fetchedAt: number; snapshot: FolderSnapshot } | undefined;
 
   constructor(options: OutlookProviderOptions) {
     this.accountId = options.accountId;
     this.tokenProvider = options.tokenProvider;
     this.fetchImpl = options.fetch ?? globalThis.fetch;
+    this.resolveSender = options.resolveSender;
   }
 
   get capabilities(): Capabilities {
@@ -624,12 +628,23 @@ export class OutlookProvider implements EmailProvider {
   }
 
   private draftPayload(draft: DraftInput, newMessage: boolean): Record<string, unknown> {
+    const sender = draft.from ? (this.resolveSender?.(draft.from) ?? { email: draft.from }) : undefined;
     return {
       ...(newMessage || draft.subject !== undefined ? { subject: draft.subject ?? '' } : {}),
       body: bodyFor(draft),
       ...(newMessage || draft.to !== undefined ? { toRecipients: toGraphRecipients(draft.to) } : {}),
       ...(newMessage || draft.cc !== undefined ? { ccRecipients: toGraphRecipients(draft.cc) } : {}),
       ...(newMessage || draft.bcc !== undefined ? { bccRecipients: toGraphRecipients(draft.bcc) } : {}),
+      ...(sender
+        ? {
+            from: {
+              emailAddress: {
+                address: sender.email,
+                ...(sender.name ? { name: sender.name } : {}),
+              },
+            },
+          }
+        : {}),
     };
   }
 

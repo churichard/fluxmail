@@ -54,6 +54,7 @@ interface QueryOptions {
 }
 
 interface MessageContentOptions extends InputOptions {
+  from?: string;
   to: string[];
   cc: string[];
   bcc: string[];
@@ -74,6 +75,7 @@ interface SendOptions extends MessageContentOptions {
 }
 
 interface ForwardOptions extends InputOptions {
+  from?: string;
   to: string[];
   cc: string[];
   comment?: string;
@@ -170,6 +172,7 @@ function readAttachment(filePath: string): AttachmentInput {
 function hasMessageContentOptions(options: MessageContentOptions): boolean {
   return Boolean(
     options.to.length ||
+    options.from !== undefined ||
     options.cc.length ||
     options.bcc.length ||
     options.subject !== undefined ||
@@ -200,6 +203,7 @@ function messageRequest(options: MessageContentOptions): Record<string, unknown>
   const html = options.html ?? (options.htmlFile ? readSource(options.htmlFile) : undefined);
   if (text === undefined && html === undefined && !process.stdin.isTTY) text = readSource('-');
   return {
+    ...(options.from !== undefined ? { from: options.from } : {}),
     ...(options.to.length ? { to: parseAddresses(options.to) } : {}),
     ...(options.cc.length ? { cc: parseAddresses(options.cc) } : {}),
     ...(options.bcc.length ? { bcc: parseAddresses(options.bcc) } : {}),
@@ -216,6 +220,7 @@ function messageRequest(options: MessageContentOptions): Record<string, unknown>
 
 function addMessageContentOptions(command: Command): Command {
   return command
+    .option('--from <address>', 'Send from an available address')
     .option('--to <address>', 'Add a To recipient; repeat as needed', collect, [])
     .option('--cc <address>', 'Add a Cc recipient; repeat as needed', collect, [])
     .option('--bcc <address>', 'Add a Bcc recipient; repeat as needed', collect, [])
@@ -461,6 +466,7 @@ export function registerMailCommands(program: Command, options: MailCommandOptio
     .command('forward')
     .argument('<message-id>', 'Provider message ID')
     .description('Forward a message')
+    .option('--from <address>', 'Send from an available address')
     .option('--to <address>', 'Add a To recipient; repeat as needed', collect, [])
     .option('--cc <address>', 'Add a Cc recipient; repeat as needed', collect, [])
     .option('--comment <text>', 'Add a comment above the forwarded message')
@@ -473,6 +479,7 @@ export function registerMailCommands(program: Command, options: MailCommandOptio
       if (forwardOptions.input) {
         if (
           forwardOptions.to.length ||
+          forwardOptions.from !== undefined ||
           forwardOptions.cc.length ||
           forwardOptions.comment !== undefined ||
           forwardOptions.attachments === false
@@ -482,6 +489,7 @@ export function registerMailCommands(program: Command, options: MailCommandOptio
         request = readJsonInput(forwardOptions.input);
       } else {
         request = {
+          ...(forwardOptions.from !== undefined ? { from: forwardOptions.from } : {}),
           to: parseAddresses(forwardOptions.to),
           ...(forwardOptions.cc.length ? { cc: parseAddresses(forwardOptions.cc) } : {}),
           ...(forwardOptions.comment !== undefined ? { comment: forwardOptions.comment } : {}),

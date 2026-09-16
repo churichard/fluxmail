@@ -23,18 +23,24 @@ function dedupe(addrs: EmailAddress[]): EmailAddress[] {
  * reply targets Reply-To (falling back to From); reply-all additionally includes the
  * original To/Cc, minus the replying account's own address.
  */
-export function computeReplyRecipients(original: Message, ownAddress: string, replyAll: boolean): ReplyRecipients {
-  const self: EmailAddress = { email: ownAddress };
+export function computeReplyRecipients(
+  original: Message,
+  ownAddresses: string | string[],
+  replyAll: boolean,
+): ReplyRecipients {
+  const owned = (Array.isArray(ownAddresses) ? ownAddresses : [ownAddresses]).map((email) => ({ email }));
+  const self = owned[0]!;
+  const isOwned = (address: EmailAddress) => owned.some((candidate) => sameAddress(address, candidate));
   const replyTarget = original.replyTo?.length ? original.replyTo : original.from ? [original.from] : [];
 
   if (!replyAll) {
-    const to = dedupe(replyTarget).filter((a) => !sameAddress(a, self));
+    const to = dedupe(replyTarget).filter((a) => !isOwned(a));
     // Replying to yourself (e.g. a note in Sent): fall back to the original To.
     return { to: to.length ? to : dedupe(original.to), cc: [] };
   }
 
-  const to = dedupe([...replyTarget, ...original.to]).filter((a) => !sameAddress(a, self));
-  const cc = dedupe(original.cc ?? []).filter((a) => !sameAddress(a, self) && !to.some((b) => sameAddress(a, b)));
+  const to = dedupe([...replyTarget, ...original.to]).filter((a) => !isOwned(a));
+  const cc = dedupe(original.cc ?? []).filter((a) => !isOwned(a) && !to.some((b) => sameAddress(a, b)));
   return { to: to.length ? to : [self], cc };
 }
 

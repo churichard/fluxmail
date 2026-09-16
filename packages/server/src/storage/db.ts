@@ -8,7 +8,7 @@ import { VERSION } from '../version.js';
 import { decryptString } from './crypto.js';
 import { withFileLock } from './fileLock.js';
 
-export const CURRENT_STORE_FORMAT = 2;
+export const CURRENT_STORE_FORMAT = 3;
 export const MIN_SUPPORTED_STORE_FORMAT = 1;
 export const MAX_SUPPORTED_STORE_FORMAT = CURRENT_STORE_FORMAT;
 export const LEGACY_STORE_FORMAT = 0;
@@ -106,6 +106,18 @@ export const accountCredentials = sqliteTable('account_credentials', {
   updatedAt: integer('updated_at').notNull(),
   revision: integer('revision').notNull().default(1),
 });
+
+export const accountSendAs = sqliteTable(
+  'account_send_as',
+  {
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    email: text('email').notNull(),
+    name: text('name'),
+  },
+  (table) => [primaryKey({ columns: [table.accountId, table.email] })],
+);
 
 export const imapMessages = sqliteTable(
   'imap_messages',
@@ -334,6 +346,12 @@ CREATE TABLE IF NOT EXISTS account_credentials (
   encrypted_credentials TEXT NOT NULL,
   updated_at INTEGER NOT NULL,
   revision INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS account_send_as (
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  email TEXT NOT NULL,
+  name TEXT,
+  PRIMARY KEY (account_id, email)
 );
 CREATE TABLE IF NOT EXISTS imap_messages (
   id TEXT PRIMARY KEY,
@@ -795,9 +813,21 @@ function migrateToFormatTwo(_sqlite: Database.Database): void {
   // license state. The instance_settings table was created by format 1.
 }
 
+function migrateToFormatThree(sqlite: Database.Database): void {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS account_send_as (
+      account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+      email TEXT NOT NULL,
+      name TEXT,
+      PRIMARY KEY (account_id, email)
+    )
+  `);
+}
+
 const MIGRATIONS = [
   { format: 1, run: migrateToFormatOne },
   { format: 2, run: migrateToFormatTwo },
+  { format: 3, run: migrateToFormatThree },
 ] as const;
 
 function openCompatibleDb(dbPath: string, dataDir: string, options: { backupBeforeMigration?: boolean }): FluxmailDb {

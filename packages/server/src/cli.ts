@@ -883,6 +883,87 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
 
   const accounts = program.command('accounts').description('Manage connected email accounts');
 
+  interface CliSendAsIdentity {
+    email: string;
+    name?: string;
+    isPrimary: boolean;
+    source: 'provider' | 'configured';
+  }
+
+  const sendAs = accounts.command('send-as').description('Manage sender addresses');
+  sendAs
+    .command('list')
+    .argument('<account-id>', 'Email account ID')
+    .description('List available sender addresses')
+    .action(async (accountId: string) => {
+      try {
+        const identities = await instanceClient(selectedInstance()).json<CliSendAsIdentity[]>(
+          `/api/v1/accounts/${encodeURIComponent(accountId)}/send-as`,
+        );
+        console.log(JSON.stringify(identities, null, 2));
+      } catch (err) {
+        failCliOperation(program, err);
+      }
+    });
+
+  sendAs
+    .command('add')
+    .argument('<account-id>', 'Email account ID')
+    .argument('<email>', 'Existing provider alias')
+    .option('--name <name>', 'Sender display name')
+    .description('Add a configured Outlook or IMAP sender address')
+    .action(async (accountId: string, email: string, opts: { name?: string }) => {
+      try {
+        const client = instanceClient(selectedInstance());
+        const existing = await client.json<CliSendAsIdentity[]>(
+          `/api/v1/accounts/${encodeURIComponent(accountId)}/send-as`,
+        );
+        const configured = existing
+          .filter((identity) => identity.source === 'configured' && !identity.isPrimary)
+          .map(({ email, name }) => ({ email, ...(name ? { name } : {}) }));
+        const normalized = email.trim().toLowerCase();
+        const next = configured.filter((identity) => identity.email.toLowerCase() !== normalized);
+        next.push({ email: email.trim(), ...(opts.name?.trim() ? { name: opts.name.trim() } : {}) });
+        await client.json(`/api/v1/accounts/${encodeURIComponent(accountId)}/send-as`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ identities: next }),
+        });
+        console.log(`Added sender address ${email.trim()} to ${accountId}.`);
+      } catch (err) {
+        failCliOperation(program, err);
+      }
+    });
+
+  sendAs
+    .command('remove')
+    .argument('<account-id>', 'Email account ID')
+    .argument('<email>', 'Configured sender address')
+    .description('Remove a configured Outlook or IMAP sender address')
+    .action(async (accountId: string, email: string) => {
+      try {
+        const client = instanceClient(selectedInstance());
+        const existing = await client.json<CliSendAsIdentity[]>(
+          `/api/v1/accounts/${encodeURIComponent(accountId)}/send-as`,
+        );
+        const normalized = email.trim().toLowerCase();
+        const configured = existing
+          .filter(
+            (identity) =>
+              identity.source === 'configured' && !identity.isPrimary && identity.email.toLowerCase() !== normalized,
+          )
+          .map(({ email, name }) => ({ email, ...(name ? { name } : {}) }));
+        await client.json(`/api/v1/accounts/${encodeURIComponent(accountId)}/send-as`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ identities: configured }),
+        });
+        console.log(`Removed sender address ${email.trim()} from ${accountId}.`);
+      } catch (err) {
+        failCliOperation(program, err);
+      }
+    });
+
   accounts
     .command('add')
     .argument('<provider>', 'Email provider: gmail, outlook, or imap')

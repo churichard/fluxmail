@@ -584,9 +584,15 @@ describe('OutlookProvider', () => {
         return new Response(null, { status: 202 });
       return json({ error: { code: 'ErrorItemNotFound', message: `${method} ${url.pathname}` } }, 404);
     }) as unknown as typeof fetch;
-    const outlook = provider(fetchMock);
+    const outlook = new OutlookProvider({
+      accountId: 'acct-1',
+      tokenProvider: { getAccessToken: vi.fn().mockResolvedValue('access-token') },
+      fetch: fetchMock,
+      resolveSender: (email) => (email === 'sales@example.com' ? { email, name: 'Sales' } : undefined),
+    });
 
     const result = await outlook.send({
+      from: 'sales@example.com',
       to: [{ email: 'alex@example.com' }],
       subject: 'Status',
       body: { text: 'Hello' },
@@ -600,6 +606,7 @@ describe('OutlookProvider', () => {
       subject: 'Status',
       body: { contentType: 'Text', content: 'Hello' },
       toRecipients: [{ emailAddress: { address: 'alex@example.com' } }],
+      from: { emailAddress: { address: 'sales@example.com', name: 'Sales' } },
     });
     expect(calls.find((call) => call.url.pathname.endsWith('/attachments'))?.body).toMatchObject({
       '@odata.type': '#microsoft.graph.fileAttachment',
@@ -656,6 +663,7 @@ describe('OutlookProvider', () => {
       ccRecipients: [],
       bccRecipients: [],
     });
+    expect(patchedBody).not.toHaveProperty('from');
   });
 
   it('updates flags, moves messages, permanently deletes, and downloads attachments', async () => {

@@ -24,6 +24,7 @@ This command has no command-specific options.
 
 | Command | Description |
 | --- | --- |
+| [`fluxmail accounts send-as`](/docs/cli/accounts-send-as) | Manage sender addresses |
 | [`fluxmail accounts add`](/docs/cli/accounts-add) | Connect a Gmail, Outlook, or IMAP account |
 | [`fluxmail accounts configure`](/docs/cli/accounts-configure) | Set special folder paths for an IMAP account |
 | [`fluxmail accounts list`](/docs/cli/accounts-list) | List connected accounts |

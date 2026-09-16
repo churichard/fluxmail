@@ -337,6 +337,8 @@ describe('CLI email commands', () => {
     await run([
       'emails',
       'send',
+      '--from',
+      'sales@example.com',
       '--to',
       'Ann <ann@example.com>',
       '--subject',
@@ -354,6 +356,7 @@ describe('CLI email commands', () => {
     expect(request.method).toBe('POST');
     expect(request.headers.get('idempotency-key')).toMatch(/^[0-9a-f-]{36}$/);
     expect(request.body).toMatchObject({
+      from: 'sales@example.com',
       to: [{ name: 'Ann', email: 'ann@example.com' }],
       subject: 'Status',
       body: { text: 'Hello from a file' },
@@ -379,6 +382,8 @@ describe('CLI email commands', () => {
     await run([
       'drafts',
       'create',
+      '--from',
+      'support@example.com',
       '--to',
       'Ann <ann@example.com>',
       '--cc',
@@ -397,6 +402,7 @@ describe('CLI email commands', () => {
     ]);
 
     expect(requests.at(-1)?.body).toEqual({
+      from: 'support@example.com',
       to: [{ name: 'Ann', email: 'ann@example.com' }],
       cc: [{ email: 'copy@example.com' }],
       bcc: [{ email: 'blind@example.com' }],
@@ -422,6 +428,8 @@ describe('CLI email commands', () => {
       'emails',
       'forward',
       'msg/with space',
+      '--from',
+      'billing@example.com',
       '--to',
       'ann@example.com',
       '--cc',
@@ -437,6 +445,7 @@ describe('CLI email commands', () => {
     expect(request.url.pathname).toBe('/api/v1/accounts/acct_1/messages/msg%2Fwith%20space/forward');
     expect(request.headers.get('idempotency-key')).toBe('forward-retry-key');
     expect(request.body).toEqual({
+      from: 'billing@example.com',
       to: [{ email: 'ann@example.com' }],
       cc: [{ email: 'copy@example.com' }],
       comment: 'Private comment',
@@ -462,6 +471,11 @@ describe('CLI email commands', () => {
     expect(process.exitCode).toBe(1);
     expect(requests).toHaveLength(requestCount);
     expect(error).toHaveBeenCalledWith(expect.stringContaining('--input cannot be combined'));
+
+    await run(['emails', 'send', '--draft', 'draft_1', '--from', 'sales@example.com']);
+    expect(process.exitCode).toBe(1);
+    expect(requests).toHaveLength(requestCount);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('--draft cannot be combined'));
   });
 
   it('maps every modification action and its action-specific options', async () => {

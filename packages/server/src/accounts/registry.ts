@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import { OAuth2Client, type Credentials } from 'google-auth-library';
-import { EmailError, type Account, type EmailProvider, type Provider } from '@fluxmail/core';
+import { EmailError, type Account, type EmailAddress, type EmailProvider, type Provider } from '@fluxmail/core';
 import { GmailProvider, GMAIL_CAPABILITIES } from '@fluxmail/provider-gmail';
 import { ImapProvider, IMAP_CAPABILITIES, type FolderWarning, type ImapCredentials } from '@fluxmail/provider-imap';
 import { OutlookProvider, OUTLOOK_CAPABILITIES } from '@fluxmail/provider-outlook';
@@ -15,6 +15,7 @@ import { DEFAULT_GOOGLE_CLIENT_ID } from './defaultGoogleOAuth.js';
 import { requireGoogleConfig } from './googleAuth.js';
 import { SqliteImapStateStore } from '../storage/imapState.js';
 import { refreshMicrosoftCredentials, requireMicrosoftConfig, type MicrosoftCredentials } from './microsoftAuth.js';
+import { listConfiguredSendAs } from '../storage/sendAs.js';
 
 export interface AccountAccessInput {
   sharedWithAll: boolean;
@@ -191,12 +192,24 @@ export class AccountRegistry {
                 ...(account.displayName ? { displayName: account.displayName } : {}),
                 credentials: stored as ImapCredentials,
                 store: new SqliteImapStateStore(this.db, accountId),
+                resolveSender: (email) => this.resolveConfiguredSender(accountId, email),
               })
             : undefined;
     if (!provider)
       throw new EmailError('unsupported_capability', `Provider "${account.provider}" is not supported yet`);
     this.providers.set(accountId, { provider, ...credentialState });
     return provider;
+  }
+
+  private resolveConfiguredSender(accountId: string, email: string): EmailAddress | undefined {
+    const account = this.getAccount(accountId);
+    if (account.email.toLowerCase() === email.toLowerCase()) {
+      return { email: account.email, ...(account.displayName ? { name: account.displayName } : {}) };
+    }
+    const identity = listConfiguredSendAs(this.db, accountId).find(
+      (candidate) => candidate.email.toLowerCase() === email.toLowerCase(),
+    );
+    return identity ? { email: identity.email, ...(identity.name ? { name: identity.name } : {}) } : undefined;
   }
 
   private loadCredentialRow(accountId: string): CredentialState {
@@ -352,6 +365,7 @@ export class AccountRegistry {
     let refresh: Promise<string> | undefined;
     const provider = new OutlookProvider({
       accountId,
+      resolveSender: (sender) => this.resolveConfiguredSender(accountId, sender),
       tokenProvider: {
         getAccessToken: async (forceRefresh = false): Promise<string> => {
           if (!forceRefresh && credentials.expiresAt > Date.now() + 60_000) return credentials.accessToken;

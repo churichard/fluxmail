@@ -76,7 +76,7 @@ Administrative access is separate from mail access:
 
 | Capability | What it allows |
 | --- | --- |
-| `admin.accounts` | Connect and reauthorize mailboxes, test IMAP and SMTP settings, and update IMAP folder mappings. |
+| `admin.accounts` | Connect and reauthorize mailboxes, test IMAP and SMTP settings, update IMAP folder mappings, and configure Outlook or IMAP sender addresses. |
 | `admin.members` | Invite, suspend, activate, promote, demote, and remove members. It also permits session revocation. |
 | `admin.api_keys` | Create, update, list, and revoke API keys. |
 | `admin.license` | Read, activate, and deactivate the instance license. |
@@ -108,7 +108,7 @@ fluxmail apikey capabilities
 <!-- BEGIN GENERATED:permission-capabilities -->
 | Capability | Actions |
 | --- | --- |
-| `mail.read` | List, search, and read mail; inspect status, folders, and labels; list scheduled sends; download attachments. |
+| `mail.read` | List, search, and read mail; inspect status, folders, labels, and sender addresses; list scheduled sends; download attachments. |
 | `mail.drafts` | Create, update, and delete drafts; cancel scheduled sends. |
 | `mail.organize` | Mark read or unread, star, archive, move, and manage labels or Outlook categories. |
 | `mail.trash` | Move messages to or from Trash. |

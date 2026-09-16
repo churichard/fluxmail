@@ -25,7 +25,7 @@ const BASE_BACKOFF_MS = 30_000;
 const CLAIM_LEASE_MS = 5 * 60_000;
 
 /** Errors that no amount of retrying will fix (e.g. the draft is gone). */
-const PERMANENT_CODES = new Set(['not_found', 'invalid_request', 'unsupported_capability']);
+const PERMANENT_CODES = new Set(['not_found', 'invalid_request', 'permission_denied', 'unsupported_capability']);
 
 /**
  * Fires scheduled sends when their time comes. Owned by the long-lived

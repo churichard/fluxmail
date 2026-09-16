@@ -12,6 +12,8 @@ Before you start, find the IMAP and SMTP settings from your email provider. Some
 
 Fluxmail defaults to IMAP over TLS on port 993 and SMTP with STARTTLS on port 587. It uses the mailbox address as the username for both connections. You can override each of these settings when you connect the mailbox.
 
+If the SMTP account has aliases, an administrator can register those existing addresses in Fluxmail. The selected address is used in both the From header and SMTP envelope. Your SMTP server must allow it. See [Send from another address](/docs/send-as-addresses).
+
 ## 2. Connect the mailbox
 
 Choose the setup that matches how you run Fluxmail.

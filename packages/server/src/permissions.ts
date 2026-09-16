@@ -21,7 +21,7 @@ export type Capability = McpCapability | AdminCapability;
 
 export const MCP_CAPABILITY_DESCRIPTIONS: Record<McpCapability, string> = {
   'mail.read':
-    'List, search, and read mail; inspect status, folders, and labels; list scheduled sends; download attachments.',
+    'List, search, and read mail; inspect status, folders, labels, and sender addresses; list scheduled sends; download attachments.',
   'mail.drafts': 'Create, update, and delete drafts; cancel scheduled sends.',
   'mail.organize': 'Mark read or unread, star, archive, move, and manage labels or Outlook categories.',
   'mail.trash': 'Move messages to or from Trash.',

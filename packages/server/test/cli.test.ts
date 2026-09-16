@@ -48,6 +48,110 @@ function telemetrySpy() {
 }
 
 describe('CLI telemetry', () => {
+  it('records a send-as update without capturing the account or address', async () => {
+    const previousExitCode = process.exitCode;
+    process.exitCode = undefined;
+    const dataDir = mkdtempSync(path.join(tmpdir(), 'fluxmail-cli-send-as-add-'));
+    vi.stubEnv('FLUXMAIL_DATA_DIR', dataDir);
+    vi.stubEnv('FLUXMAIL_ENCRYPTION_KEY', 'ad'.repeat(32));
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { capture, telemetry } = telemetrySpy();
+    const privateAlias = 'private-alias@example.com';
+
+    try {
+      const context = createContext();
+      const setup = await setupInitialAdmin(context.db, {
+        name: 'Local Owner',
+        email: 'owner@example.com',
+        password: 'River42!',
+      });
+      const account = context.registry.addImapAccount(
+        'mailbox@example.com',
+        {
+          imap: { host: 'imap.example.com', port: 993, security: 'tls', user: 'mailbox', password: 'secret' },
+          smtp: { host: 'smtp.example.com', port: 587, security: 'starttls', user: 'mailbox', password: 'secret' },
+          saveSent: true,
+          folderOverrides: {},
+        },
+        undefined,
+        setup.member.id,
+      );
+      (context.db as unknown as { $client: { close(): void } }).$client.close();
+      saveLocalInstance('local');
+      saveSessionToken('local', setup.session.token);
+
+      await createCliProgram({ telemetry }).parseAsync([
+        'node',
+        'fluxmail',
+        '--no-update-notifier',
+        'accounts',
+        'send-as',
+        'add',
+        account.id,
+        privateAlias,
+        '--name',
+        'Private Sales',
+      ]);
+
+      expect(capture).toHaveBeenCalledWith('operation completed', {
+        product_surface: 'cli',
+        operation: 'accounts send-as add',
+        outcome: 'success',
+        duration_ms: expect.any(Number),
+      });
+      const captured = JSON.stringify(capture.mock.calls);
+      expect(captured).not.toContain(account.id);
+      expect(captured).not.toContain(privateAlias);
+      expect(captured).not.toContain('Private Sales');
+    } finally {
+      process.exitCode = previousExitCode;
+    }
+  });
+
+  it('records a send-as lookup error without capturing the account reference', async () => {
+    const previousExitCode = process.exitCode;
+    process.exitCode = undefined;
+    const dataDir = mkdtempSync(path.join(tmpdir(), 'fluxmail-cli-send-as-list-error-'));
+    vi.stubEnv('FLUXMAIL_DATA_DIR', dataDir);
+    vi.stubEnv('FLUXMAIL_ENCRYPTION_KEY', 'ae'.repeat(32));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { capture, telemetry } = telemetrySpy();
+    const privateAccount = 'acct_private_send_as';
+
+    try {
+      const context = createContext();
+      const setup = await setupInitialAdmin(context.db, {
+        name: 'Local Owner',
+        email: 'owner@example.com',
+        password: 'River42!',
+      });
+      (context.db as unknown as { $client: { close(): void } }).$client.close();
+      saveLocalInstance('local');
+      saveSessionToken('local', setup.session.token);
+
+      await createCliProgram({ telemetry }).parseAsync([
+        'node',
+        'fluxmail',
+        '--no-update-notifier',
+        'accounts',
+        'send-as',
+        'list',
+        privateAccount,
+      ]);
+
+      expect(capture).toHaveBeenCalledWith('operation completed', {
+        product_surface: 'cli',
+        operation: 'accounts send-as list',
+        outcome: 'error',
+        error_code: 'not_found',
+        duration_ms: expect.any(Number),
+      });
+      expect(JSON.stringify(capture.mock.calls)).not.toContain(privateAccount);
+    } finally {
+      process.exitCode = previousExitCode;
+    }
+  });
+
   it('flushes local logs when a stdio stream ends', async () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), 'fluxmail-cli-stdio-logging-'));
     const input = new PassThrough();

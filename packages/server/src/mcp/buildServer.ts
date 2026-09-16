@@ -13,6 +13,7 @@ import {
   type Message,
   type ModifyAction,
   type PageOpts,
+  type SendAsIdentity,
 } from '@fluxmail/core';
 import type { EmailService, SendInput } from '../service/emailService.js';
 import { DEFAULT_MAX_ATTACHMENT_BYTES } from '../config.js';
@@ -65,6 +66,7 @@ const queryShape = {
 
 const draftShape = {
   accountId: accountIdParam,
+  from: z.string().email().optional().describe('Connected address or an available send-as address'),
   to: addressList.optional(),
   cc: addressList.optional(),
   bcc: addressList.optional(),
@@ -98,6 +100,7 @@ function parseAddresses(raw: string[] | undefined): EmailAddress[] | undefined {
 
 type DraftArgs = {
   accountId?: string;
+  from?: string;
   to?: string[];
   cc?: string[];
   bcc?: string[];
@@ -119,6 +122,7 @@ function toSendInput(args: DraftArgs): SendInput {
       ...(args.bodyHtml !== undefined ? { html: args.bodyHtml } : {}),
     },
   };
+  if (args.from !== undefined) input.from = args.from;
   const to = parseAddresses(args.to);
   if (to?.length) input.to = to;
   const cc = parseAddresses(args.cc);
@@ -144,6 +148,7 @@ export function toSendRequest(args: DraftArgs & { draftId?: string }): SendInput
       'replyToMessageId',
       'replyAll',
       'attachments',
+      'from',
     ] as const;
     if (contentKeys.some((key) => args[key] !== undefined)) {
       throw new EmailError(
@@ -439,6 +444,21 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
 
   if (can('mail.read'))
     server.registerTool(
+      'list_send_as',
+      {
+        description: 'List sender addresses available for an account.',
+        inputSchema: { accountId: accountIdParam },
+        annotations: { readOnlyHint: true },
+      },
+      gated(
+        'list_send_as',
+        'mail.read',
+        async (args: { accountId?: string }): Promise<SendAsIdentity[]> => service.listSendAs(args.accountId),
+      ),
+    );
+
+  if (can('mail.read'))
+    server.registerTool(
       'list_emails',
       {
         description:
@@ -649,6 +669,7 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
         inputSchema: {
           accountId: accountIdParam,
           messageId: idParam,
+          from: z.string().email().optional().describe('Connected address or an available send-as address'),
           to: addressList.min(1),
           cc: addressList.optional(),
           comment: z.string().optional(),
@@ -665,6 +686,7 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
           cc?: string[];
           comment?: string;
           includeAttachments?: boolean;
+          from?: string;
         }) => {
           requireCapabilities(['mail.send', 'mail.read']);
           const to = parseAddresses(args.to) ?? [];
@@ -675,6 +697,7 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
             ...(cc?.length ? { cc } : {}),
             ...(args.comment !== undefined ? { comment: args.comment } : {}),
             ...(args.includeAttachments !== undefined ? { includeAttachments: args.includeAttachments } : {}),
+            ...(args.from !== undefined ? { from: args.from } : {}),
           });
         },
         () => service.enforceQuota(),

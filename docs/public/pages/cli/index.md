@@ -43,6 +43,10 @@ docker compose exec fluxmail fluxmail accounts list
 | [`fluxmail serve`](/docs/cli/serve) | Run the HTTP server (MCP at /mcp and REST at /api/v1) |
 | [`fluxmail stdio`](/docs/cli/stdio) | Run as a stdio MCP server (for Claude Desktop / Claude Code local config) |
 | [`fluxmail accounts`](/docs/cli/accounts) | Manage connected email accounts |
+| [`fluxmail accounts send-as`](/docs/cli/accounts-send-as) | Manage sender addresses |
+| [`fluxmail accounts send-as list`](/docs/cli/accounts-send-as-list) | List available sender addresses |
+| [`fluxmail accounts send-as add`](/docs/cli/accounts-send-as-add) | Add a configured Outlook or IMAP sender address |
+| [`fluxmail accounts send-as remove`](/docs/cli/accounts-send-as-remove) | Remove a configured Outlook or IMAP sender address |
 | [`fluxmail accounts add`](/docs/cli/accounts-add) | Connect a Gmail, Outlook, or IMAP account |
 | [`fluxmail accounts configure`](/docs/cli/accounts-configure) | Set special folder paths for an IMAP account |
 | [`fluxmail accounts list`](/docs/cli/accounts-list) | List connected accounts |
