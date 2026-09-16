@@ -21,7 +21,7 @@ function oauthClient(claims: Record<string, unknown>): OAuth2Client {
 }
 
 describe('Google OAuth identity', () => {
-  it('requests gmail.modify for the built-in app', () => {
+  it('requests gmail.modify for built-in message and send-as access', () => {
     const config = {
       google: { clientId: DEFAULT_GOOGLE_CLIENT_ID, clientSecret: DEFAULT_GOOGLE_CLIENT_SECRET },
     } as FluxmailConfig;

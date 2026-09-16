@@ -594,10 +594,12 @@ export class EmailService {
     }
     const original = await p.getMessage(draft.replyToMessageId);
     const identities = await this.sendAsIdentities(p, account.id, account);
-    const selected = draft.from
-      ? await this.validateSender(p, account.id, account, draft.from, identities)
-      : this.selectReplySender(original, identities);
-    if (!selected.isPrimary) draft.from = selected.email;
+    const requestedSender = draft.from;
+    const selected =
+      requestedSender !== undefined
+        ? await this.validateSender(p, account.id, account, requestedSender, identities)
+        : this.selectReplySender(original, identities);
+    if (requestedSender !== undefined || !selected.isPrimary) draft.from = selected.email;
     else delete draft.from;
     if (!draft.to?.length) {
       const recipients = computeReplyRecipients(

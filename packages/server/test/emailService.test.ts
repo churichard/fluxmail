@@ -182,6 +182,23 @@ describe('EmailService send-as selection', () => {
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ from: 'support@example.com' }));
   });
 
+  it('keeps an explicit primary sender when updating a reply draft', async () => {
+    const updateDraft = vi.fn().mockResolvedValue({});
+    const service = serviceWith({
+      listSendAs: vi.fn().mockResolvedValue(identities),
+      getMessage: vi.fn().mockResolvedValue({ ...original, to: [{ email: 'sales@example.com' }] }),
+      updateDraft,
+    });
+
+    await service.updateDraft('acct_1', 'draft_1', {
+      from: 'ME@example.com',
+      replyToMessageId: original.id,
+      body: { text: 'Reply' },
+    });
+
+    expect(updateDraft).toHaveBeenCalledWith('draft_1', expect.objectContaining({ from: 'me@example.com' }));
+  });
+
   it('reuses an owned sender when replying to a sent message', async () => {
     const createDraft = vi.fn().mockResolvedValue({});
     const service = serviceWith({
