@@ -22,6 +22,7 @@ interface MailCommandOptions {
   selectedInstance: () => string | undefined;
   selectedAccount: () => string | undefined;
   reportError: (error: unknown, code: string) => void;
+  reportPartialFailure: (code: string) => void;
 }
 
 interface AccountSummary {
@@ -51,6 +52,7 @@ interface QueryOptions {
   rawProviderQuery?: string;
   pageSize?: string;
   pageToken?: string;
+  includeSnippet?: boolean;
 }
 
 interface MessageContentOptions extends InputOptions {
@@ -248,7 +250,8 @@ function addQueryOptions(command: Command, includeText: boolean): Command {
     .option('--before <date>', 'Return messages before this YYYY-MM-DD date')
     .option('--raw-provider-query <query>', 'Pass a provider-native query')
     .option('--page-size <number>', 'Return 1 to 100 messages')
-    .option('--page-token <token>', 'Continue from a previous response');
+    .option('--page-token <token>', 'Continue from a previous response')
+    .option('--include-snippet <boolean>', 'Request or suppress message previews', booleanOption);
   if (includeText) command.option('--text <query>', 'Filter by literal full-text search');
   return command;
 }
@@ -273,6 +276,7 @@ function queryString(options: QueryOptions, typedQuery?: string): string {
   if (options.read !== undefined) query.set('read', String(options.read));
   if (options.starred !== undefined) query.set('starred', String(options.starred));
   if (options.hasAttachment !== undefined) query.set('hasAttachment', String(options.hasAttachment));
+  if (options.includeSnippet !== undefined) query.set('includeSnippet', String(options.includeSnippet));
   return query.size ? `?${query}` : '';
 }
 
@@ -409,6 +413,80 @@ export function registerMailCommands(program: Command, options: MailCommandOptio
         ),
       );
     })(),
+  );
+
+  const batchSearch = emails
+    .command('search-batch')
+    .argument('[query]', 'Typed portable search query')
+    .description('Search multiple email accounts')
+    .option('--account <id>', 'Account ID to search; repeat as needed', collect, [])
+    .option('--folder <role>', 'Filter by a portable folder role')
+    .option('--text <query>', 'Filter by literal full-text search')
+    .option('--from <address>', 'Filter by sender')
+    .option('--to <address>', 'Filter by recipient')
+    .option('--subject <text>', 'Filter by subject')
+    .option('--read <boolean>', 'Filter by read state', booleanOption)
+    .option('--starred <boolean>', 'Filter by starred state', booleanOption)
+    .option('--has-attachment <boolean>', 'Filter by attachment state', booleanOption)
+    .option('--after <date>', 'Return messages on or after this YYYY-MM-DD date')
+    .option('--before <date>', 'Return messages before this YYYY-MM-DD date')
+    .option('--page-size <number>', 'Return 1 to 100 messages per account')
+    .option('--include-snippet <boolean>', 'Request or suppress message previews', booleanOption)
+    .option('--input <file>', 'Read an exact REST JSON body from a file, or pass - for stdin');
+  batchSearch.action(
+    async (query: string | undefined, batchOptions: QueryOptions & { account: string[]; input?: string }) =>
+      run(async () => {
+        let request: Record<string, unknown>;
+        if (batchOptions.input) {
+          if (
+            query ||
+            batchOptions.account.length ||
+            Object.entries(batchOptions).some(
+              ([key, value]) => key !== 'input' && key !== 'account' && value !== undefined,
+            )
+          ) {
+            throw new EmailError(
+              'invalid_request',
+              '--input cannot be combined with a query, accounts, or search options.',
+            );
+          }
+          request = readJsonInput(batchOptions.input);
+        } else {
+          if (!query) throw new EmailError('invalid_request', 'Pass a typed query or use --input.');
+          if (!batchOptions.account.length) {
+            throw new EmailError('invalid_request', 'Pass --account at least once or use --input.');
+          }
+          request = {
+            accounts: batchOptions.account.map((accountId) => ({ accountId })),
+            query,
+            ...Object.fromEntries(
+              Object.entries({
+                folder: batchOptions.folder,
+                text: batchOptions.text,
+                from: batchOptions.from,
+                to: batchOptions.to,
+                subject: batchOptions.subject,
+                read: batchOptions.read,
+                starred: batchOptions.starred,
+                hasAttachment: batchOptions.hasAttachment,
+                after: batchOptions.after,
+                before: batchOptions.before,
+                pageSize: batchOptions.pageSize ? Number(batchOptions.pageSize) : undefined,
+                includeSnippet: batchOptions.includeSnippet,
+              }).filter(([, value]) => value !== undefined),
+            ),
+          };
+        }
+        const client = instanceClient(options.selectedInstance());
+        const response = await client.jsonEnvelope<Array<{ accountId: string; error?: unknown }>>(
+          '/api/v1/messages/search',
+          jsonRequest(request),
+        );
+        printJson(response);
+        if (response.data.some((group) => group.error !== undefined)) {
+          options.reportPartialFailure('account_failure');
+        }
+      })(),
   );
 
   emails
@@ -640,7 +718,7 @@ export function registerMailCommands(program: Command, options: MailCommandOptio
   attachments
     .command('download')
     .argument('<message-id>', 'Provider message ID')
-    .argument('<attachment-id>', 'Provider attachment ID')
+    .argument('<attachment-id>', 'Opaque attachment ID from message metadata')
     .requiredOption('--output <path>', 'Write the attachment to this path')
     .option('--force', 'Overwrite an existing file')
     .description('Download an attachment')

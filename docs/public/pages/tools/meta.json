@@ -19,6 +19,7 @@
     "list-send-as",
     "modify-emails",
     "search-emails",
+    "search-emails-batch",
     "send-email",
     "update-draft"
   ]

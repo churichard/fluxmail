@@ -17,7 +17,7 @@ import {
   type Label,
   type Message,
   type ModifyAction,
-  type Page,
+  type MessageSearchPage,
   type PageOpts,
   type SendResult,
   type SendAsIdentity,
@@ -64,6 +64,7 @@ const MAX_PAGE_SIZE = 100;
 const NON_IDEMPOTENT_MAX_RETRIES = 3;
 const BATCH_MODIFY_MAX_IDS = 1_000;
 const FILTERED_PAGE_TOKEN_VERSION = 1;
+const FILTERED_PAGE_TOKEN_PREFIX = 'fm1.';
 const GOOGLE_USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo';
 const IMMUTABLE_SYSTEM_LABELS = new Set(['sent', 'draft', 'drafts', 'trash']);
 
@@ -80,8 +81,11 @@ function invalidFilteredPageToken(): EmailError {
 function decodeFilteredPageToken(token: string | undefined): FilteredPageToken {
   if (!token) return { v: FILTERED_PAGE_TOKEN_VERSION, pendingIds: [] };
   try {
-    const bytes = Buffer.from(token, 'base64url');
-    if (bytes.toString('base64url') !== token) throw new Error();
+    const encoded = token.startsWith(FILTERED_PAGE_TOKEN_PREFIX)
+      ? token.slice(FILTERED_PAGE_TOKEN_PREFIX.length)
+      : token;
+    const bytes = Buffer.from(encoded, 'base64url');
+    if (bytes.toString('base64url') !== encoded) throw new Error();
     const parsed = JSON.parse(bytes.toString('utf8')) as Partial<FilteredPageToken>;
     if (
       parsed.v !== FILTERED_PAGE_TOKEN_VERSION ||
@@ -103,13 +107,14 @@ function decodeFilteredPageToken(token: string | undefined): FilteredPageToken {
 }
 
 function encodeFilteredPageToken(pendingIds: string[], providerToken: string | undefined): string {
-  return Buffer.from(
+  const encoded = Buffer.from(
     JSON.stringify({
       v: FILTERED_PAGE_TOKEN_VERSION,
       pendingIds,
       ...(providerToken ? { providerToken } : {}),
     } satisfies FilteredPageToken),
   ).toString('base64url');
+  return `${FILTERED_PAGE_TOKEN_PREFIX}${encoded}`;
 }
 
 function assertAttachmentSize(sizeBytes: number, maxBytes: number | undefined): void {
@@ -244,23 +249,31 @@ export class GmailProvider implements EmailProvider {
     return identities;
   }
 
-  private async labels(forceRefresh = false): Promise<gmail_v1.Schema$Label[]> {
+  private async labels(forceRefresh = false, signal?: AbortSignal): Promise<gmail_v1.Schema$Label[]> {
     if (!forceRefresh && this.labelCache && Date.now() - this.labelCache.fetchedAt < LABEL_CACHE_TTL_MS) {
       return this.labelCache.labels;
     }
-    const res = await withRetry(() => this.gmail.users.labels.list({ userId: 'me' }));
+    const res = await withRetry(
+      () =>
+        signal
+          ? this.gmail.users.labels.list({ userId: 'me' }, { signal })
+          : this.gmail.users.labels.list({ userId: 'me' }),
+      3,
+      undefined,
+      signal,
+    );
     const labels = res.data.labels ?? [];
     this.labelCache = { fetchedAt: Date.now(), labels };
     return labels;
   }
 
-  private async labelNameMap(): Promise<Map<string, string>> {
-    const labels = await this.labels();
+  private async labelNameMap(signal?: AbortSignal): Promise<Map<string, string>> {
+    const labels = await this.labels(false, signal);
     return new Map(labels.filter((l) => l.id && l.name).map((l) => [l.id!, l.name!]));
   }
 
   /** Gmail messages carry the DRAFT label, but only Draft resources expose the draft id. */
-  private async attachDraftIds(messages: Message[]): Promise<void> {
+  private async attachDraftIds(messages: Message[], signal?: AbortSignal): Promise<void> {
     const unresolved = new Map(
       messages.filter((message) => message.flags.draft).map((message) => [message.id, message]),
     );
@@ -268,12 +281,18 @@ export class GmailProvider implements EmailProvider {
 
     let pageToken: string | undefined;
     do {
-      const res = await withRetry(() =>
-        this.gmail.users.drafts.list({
-          userId: 'me',
-          maxResults: 500,
-          ...(pageToken ? { pageToken } : {}),
-        }),
+      const res = await withRetry(
+        () => {
+          const params = {
+            userId: 'me',
+            maxResults: 500,
+            ...(pageToken ? { pageToken } : {}),
+          };
+          return signal ? this.gmail.users.drafts.list(params, { signal }) : this.gmail.users.drafts.list(params);
+        },
+        3,
+        undefined,
+        signal,
       );
       for (const draft of res.data.drafts ?? []) {
         const message = draft.message?.id ? unresolved.get(draft.message.id) : undefined;
@@ -316,7 +335,8 @@ export class GmailProvider implements EmailProvider {
     return created.data.id;
   }
 
-  async listMessages(input: EmailQuery, page?: PageOpts): Promise<Page<Message>> {
+  async listMessages(input: EmailQuery, page?: PageOpts): Promise<MessageSearchPage> {
+    page?.signal?.throwIfAborted();
     const normalized = normalizeEmailQuery(input);
     if (!normalized.success) {
       throw new EmailError('invalid_request', normalized.diagnostics.map((item) => item.message).join(' '), {
@@ -324,20 +344,24 @@ export class GmailProvider implements EmailProvider {
       });
     }
     const q = normalized.query;
-    const labels = await this.labels();
+    const labels = await this.labels(false, page?.signal);
     const gq = toGmailQuery(q, (folder) => {
       const match = labels.find((l) => l.id === folder || l.name?.toLowerCase() === folder.toLowerCase());
       return match?.id ?? null;
     });
     const pageSize = Math.min(Math.max(page?.pageSize ?? DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
-    const labelNames = await this.labelNameMap();
+    const labelNames = await this.labelNameMap(page?.signal);
     const items: Message[] = [];
     const localFilter = q.hasAttachment !== undefined || q.after !== undefined || q.before !== undefined;
     let inspectedCandidates = 0;
-    const decodedToken = localFilter ? decodeFilteredPageToken(page?.pageToken) : undefined;
+    const decodedToken =
+      localFilter || page?.pageToken?.startsWith(FILTERED_PAGE_TOKEN_PREFIX)
+        ? decodeFilteredPageToken(page?.pageToken)
+        : undefined;
     let pendingIds = decodedToken?.pendingIds ?? [];
-    let providerToken = localFilter ? decodedToken?.providerToken : page?.pageToken;
+    let providerToken = decodedToken ? decodedToken.providerToken : page?.pageToken;
     let remainingIds: string[] = [];
+    let timeLimited = false;
     do {
       let ids: string[];
       if (pendingIds.length) {
@@ -345,31 +369,52 @@ export class GmailProvider implements EmailProvider {
         pendingIds = [];
       } else {
         const batchSize = Math.min(localFilter ? MAX_PAGE_SIZE : pageSize - items.length, 1_000 - inspectedCandidates);
-        const res = await withRetry(() =>
-          this.gmail.users.messages.list({
-            userId: 'me',
-            maxResults: batchSize,
-            ...(providerToken ? { pageToken: providerToken } : {}),
-            ...(gq.q ? { q: gq.q } : {}),
-            ...(gq.labelIds ? { labelIds: gq.labelIds } : {}),
-            ...(gq.includeSpamTrash ? { includeSpamTrash: true } : {}),
-          }),
+        const res = await withRetry(
+          () => {
+            const params = {
+              userId: 'me',
+              maxResults: batchSize,
+              ...(providerToken ? { pageToken: providerToken } : {}),
+              ...(gq.q ? { q: gq.q } : {}),
+              ...(gq.labelIds ? { labelIds: gq.labelIds } : {}),
+              ...(gq.includeSpamTrash ? { includeSpamTrash: true } : {}),
+            };
+            return page?.signal
+              ? this.gmail.users.messages.list(params, { signal: page.signal })
+              : this.gmail.users.messages.list(params);
+          },
+          3,
+          undefined,
+          page?.signal,
         );
         ids = (res.data.messages ?? []).map((message) => message.id!).filter(Boolean);
         providerToken = res.data.nextPageToken ?? undefined;
       }
       let processedIds = 0;
       for (let i = 0; i < ids.length; i += HYDRATE_CONCURRENCY) {
+        page?.signal?.throwIfAborted();
+        if (page?.softDeadlineAt !== undefined && Date.now() >= page.softDeadlineAt) {
+          timeLimited = true;
+          break;
+        }
         const chunk = ids.slice(i, i + HYDRATE_CONCURRENCY);
         const fetched = await Promise.allSettled(
           chunk.map((id) =>
-            withRetry(() =>
-              this.gmail.users.messages.get({
-                userId: 'me',
-                id,
-                format: q.hasAttachment !== undefined ? 'full' : 'metadata',
-                metadataHeaders: METADATA_HEADERS,
-              }),
+            withRetry(
+              () => {
+                const params = {
+                  userId: 'me',
+                  id,
+                  format: q.hasAttachment !== undefined ? ('full' as const) : ('metadata' as const),
+                  metadataHeaders: METADATA_HEADERS,
+                };
+                return page?.signal
+                  ? this.gmail.users.messages.get(params, { signal: page.signal })
+                  : this.gmail.users.messages.get(params);
+              },
+              3,
+              undefined,
+              page?.signal,
             ),
           ),
         );
@@ -386,6 +431,7 @@ export class GmailProvider implements EmailProvider {
             includeBody: false,
             includeAttachments: q.hasAttachment !== undefined,
           });
+          if (page?.includeSnippet === false) delete message.snippet;
           if (q.after && message.date < `${q.after}T00:00:00.000Z`) continue;
           if (q.before && message.date >= `${q.before}T00:00:00.000Z`) continue;
           if (q.hasAttachment !== undefined) {
@@ -396,28 +442,35 @@ export class GmailProvider implements EmailProvider {
           items.push(message);
           if (items.length === pageSize) break;
         }
-        if (items.length === pageSize || inspectedCandidates >= 1_000) break;
+        if (timeLimited || items.length === pageSize || inspectedCandidates >= 1_000) break;
       }
       remainingIds = ids.slice(processedIds);
-      if (items.length === pageSize || inspectedCandidates >= 1_000) break;
+      if (timeLimited || items.length === pageSize || inspectedCandidates >= 1_000) break;
       if (!providerToken) break;
     } while (items.length < pageSize && inspectedCandidates < 1_000);
 
-    await this.attachDraftIds(items);
-    const out: Page<Message> = {
+    await this.attachDraftIds(items, page?.signal);
+    const out: MessageSearchPage = {
       items,
+      exhausted: false,
       ...(localFilter ? { inspectedCandidates } : {}),
     };
-    const nextPageToken = localFilter
-      ? remainingIds.length || providerToken
-        ? encodeFilteredPageToken(remainingIds, providerToken)
-        : undefined
-      : providerToken;
+    const nextPageToken =
+      localFilter || timeLimited
+        ? remainingIds.length || providerToken
+          ? encodeFilteredPageToken(remainingIds, providerToken)
+          : undefined
+        : providerToken;
     if (nextPageToken) out.nextPageToken = nextPageToken;
     if (items.length < pageSize && inspectedCandidates >= 1_000 && nextPageToken) {
       out.incomplete = true;
       out.incompleteReason = 'scan_limit';
     }
+    if (timeLimited && nextPageToken) {
+      out.incomplete = true;
+      out.incompleteReason = 'time_limit';
+    }
+    out.exhausted = !nextPageToken && out.incompleteReason !== 'provider_limit';
     return out;
   }
 

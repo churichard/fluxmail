@@ -13,6 +13,8 @@ Every event contains a random installation ID, the Fluxmail version, the Node.js
 
 The `operation` property contains the CLI command path, MCP tool name, or REST OpenAPI operation ID. This keeps the event schema consistent while preserving the name used by each interface. The browser callback that finishes a hosted OAuth connection reports `completeHostedConnection` on the `rest` surface, because that request, not the command that printed the link, is where the mailbox is connected.
 
+Batch search reports `emails search-batch`, `search_emails_batch`, or `searchMessages`, depending on the surface. Its outcome is `error` when any account group fails, including mixed results. The event does not contain account IDs, query text, page tokens, or provider error text.
+
 ## Mailbox connection properties
 
 Mailbox connection and removal events may add these properties to `operation completed`:

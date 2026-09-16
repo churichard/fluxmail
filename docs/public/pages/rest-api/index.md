@@ -112,6 +112,7 @@ If a reverse proxy terminates TLS and connects to Fluxmail from a non-loopback a
 | [List sender addresses](/docs/rest-api/list-send-as) | List sender addresses available for an email account. |
 | [Replace configured sender addresses](/docs/rest-api/replace-send-as) | Replace the configured Outlook or IMAP aliases for an email account. |
 | [List messages](/docs/rest-api/list-messages) | List and filter messages in an email account. |
+| [Search multiple accounts](/docs/rest-api/search-messages) | Search up to 20 email accounts with one portable query. |
 | [Get a message](/docs/rest-api/get-message) | Get one message by its provider ID. |
 | [Get a thread](/docs/rest-api/get-thread) | Get a complete email thread by its provider ID. |
 | [Create a draft](/docs/rest-api/create-draft) | Create a new draft or a reply draft in an email account. |

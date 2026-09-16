@@ -17,7 +17,7 @@ Pass a Fluxmail member session or API key as a bearer token. API keys apply thei
 ## Request
 
 ```bash
-curl 'http://localhost:8977/api/v1/accounts/acct_123/messages/msg_123/attachments/attachment_123' \
+curl 'http://localhost:8977/api/v1/accounts/acct_123/messages/msg_123/attachments/part%3A1.2' \
   -H "Authorization: Bearer $FLUXMAIL_API_KEY"
 ```
 
@@ -27,7 +27,7 @@ curl 'http://localhost:8977/api/v1/accounts/acct_123/messages/msg_123/attachment
 | --- | --- | --- | --- | --- |
 | `accountId` | path | Yes | `string` | Minimum length: 1. |
 | `messageId` | path | Yes | `string` | Minimum length: 1. |
-| `attachmentId` | path | Yes | `string` | Minimum length: 1. |
+| `attachmentId` | path | Yes | `string` | Opaque attachment ID returned by message metadata Minimum length: 1. |
 
 ## Responses
 

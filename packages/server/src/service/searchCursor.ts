@@ -12,6 +12,7 @@ interface SearchCursorPayload {
   provider: Provider;
   queryHash: string;
   pageSize: number;
+  includeSnippet?: boolean;
   providerToken: string;
   issuedAt: number;
   expiresAt: number;
@@ -45,6 +46,7 @@ export class SearchCursorCodec {
       provider: Provider;
       query: EmailQuery;
       pageSize: number;
+      includeSnippet?: boolean;
       providerToken: string;
     },
     now = Date.now(),
@@ -55,6 +57,7 @@ export class SearchCursorCodec {
       provider: binding.provider,
       queryHash: emailQueryHash(binding.query),
       pageSize: binding.pageSize,
+      ...(binding.includeSnippet !== undefined ? { includeSnippet: binding.includeSnippet } : {}),
       providerToken: binding.providerToken,
       issuedAt: now,
       expiresAt: now + CURSOR_LIFETIME_MS,
@@ -70,7 +73,13 @@ export class SearchCursorCodec {
 
   decode(
     token: string,
-    binding: { accountId: string; provider: Provider; query: EmailQuery; pageSize: number },
+    binding: {
+      accountId: string;
+      provider: Provider;
+      query: EmailQuery;
+      pageSize: number;
+      includeSnippet?: boolean;
+    },
     now = Date.now(),
   ): string {
     if (Buffer.byteLength(token) > MAX_CURSOR_BYTES) throw invalidCursor();
@@ -107,6 +116,7 @@ export class SearchCursorCodec {
       !['gmail', 'outlook', 'imap'].includes(payload.provider) ||
       typeof payload.queryHash !== 'string' ||
       !Number.isInteger(payload.pageSize) ||
+      (payload.includeSnippet !== undefined && typeof payload.includeSnippet !== 'boolean') ||
       typeof payload.providerToken !== 'string' ||
       !payload.providerToken ||
       !Number.isFinite(payload.issuedAt) ||
@@ -121,7 +131,8 @@ export class SearchCursorCodec {
       payload.accountId !== binding.accountId ||
       payload.provider !== binding.provider ||
       payload.queryHash !== emailQueryHash(binding.query) ||
-      payload.pageSize !== binding.pageSize
+      payload.pageSize !== binding.pageSize ||
+      payload.includeSnippet !== binding.includeSnippet
     ) {
       throw invalidCursor();
     }

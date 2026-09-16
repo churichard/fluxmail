@@ -107,9 +107,20 @@ describe('ImapProvider attachment limits', () => {
     const { provider, download } = attachmentProvider(11, [Buffer.alloc(8)], 'base64');
 
     await expect(provider.getAttachment('m1', '1', { maxBytes: 10 })).resolves.toMatchObject({
+      meta: { id: 'part:1' },
       content: Buffer.alloc(8),
     });
-    expect(download).toHaveBeenCalledOnce();
+    expect(download).toHaveBeenCalledWith(7, '1', { uid: true });
+  });
+
+  it('accepts the canonical part prefix for downloads', async () => {
+    const { provider, download } = attachmentProvider(4, [Buffer.from('data')]);
+
+    await expect(provider.getAttachment('m1', 'part:1')).resolves.toMatchObject({
+      meta: { id: 'part:1' },
+      content: Buffer.from('data'),
+    });
+    expect(download).toHaveBeenCalledWith(7, '1', { uid: true });
   });
 
   it('stops a streamed download after it crosses the limit', async () => {
@@ -664,10 +675,41 @@ describe('ImapProvider connection and pagination state', () => {
     expect(factory).toHaveBeenCalledOnce();
   });
 
+  it('closes a dedicated search connection when setup is canceled', async () => {
+    let rejectConnect!: (error: Error) => void;
+    const fake = {
+      capabilities: new Map(),
+      on: vi.fn(),
+      connect: vi.fn(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectConnect = reject;
+          }),
+      ),
+      close: vi.fn(() => rejectConnect?.(new Error('connection closed'))),
+    };
+    const provider = new ImapProvider({
+      accountId: 'a1',
+      email: 'me@example.com',
+      credentials: testCredentials(),
+      store: new MemoryStore(),
+      imapFactory: () => fake as unknown as ImapFlow,
+    });
+    const controller = new AbortController();
+    const search = provider.listMessages({}, { signal: controller.signal });
+    await vi.waitFor(() => expect(fake.connect).toHaveBeenCalledOnce());
+
+    controller.abort(new Error('search deadline'));
+
+    await expect(search).rejects.toThrow('search deadline');
+    expect(fake.close).toHaveBeenCalled();
+  });
+
   function paginationProvider(initialUids: number[], listedFolders = [folder('INBOX'), folder('Sent')]) {
     const store = new MemoryStore();
     let selected = 'INBOX';
     let uids = initialUids;
+    let uidValidity = 1n;
     const fake = {
       usable: true,
       mailbox: false,
@@ -678,10 +720,12 @@ describe('ImapProvider connection and pagination state', () => {
       list: vi.fn().mockResolvedValue(listedFolders),
       getMailboxLock: vi.fn(async (path: string) => {
         selected = path;
-        fake.mailbox = { uidValidity: 1n } as never;
+        fake.mailbox = { uidValidity } as never;
         return { release: vi.fn() };
       }),
       search: vi.fn(async (_query: unknown) => uids),
+      download: vi.fn(),
+      messageFlagsAdd: vi.fn(),
       fetchOne: vi.fn(async (uid: number) => ({
         uid,
         envelope: { subject: `${selected}-${uid}`, messageId: `<${selected}-${uid}@example.com>` },
@@ -701,8 +745,13 @@ describe('ImapProvider connection and pagination state', () => {
       setUids(next: number[]) {
         uids = next;
       },
+      setUidValidity(next: bigint) {
+        uidValidity = next;
+      },
       search: fake.search,
       fetchOne: fake.fetchOne,
+      download: fake.download,
+      messageFlagsAdd: fake.messageFlagsAdd,
     };
   }
 
@@ -723,6 +772,16 @@ describe('ImapProvider connection and pagination state', () => {
 
     expect(first.items.map((message) => message.subject)).toEqual(['INBOX-3', 'INBOX-2']);
     expect(second.items.map((message) => message.subject)).toEqual(['INBOX-1']);
+  });
+
+  it('rejects a resumed mailbox after its UIDVALIDITY changes', async () => {
+    const { provider, setUidValidity } = paginationProvider([3, 2]);
+    const first = await provider.listMessages({ folder: 'INBOX' }, { pageSize: 1 });
+    setUidValidity(2n);
+
+    await expect(
+      provider.listMessages({ folder: 'INBOX' }, { pageSize: 1, pageToken: first.nextPageToken }),
+    ).rejects.toMatchObject({ code: 'invalid_request' });
   });
 
   it('does not return a page token when the page consumes every match', async () => {
@@ -808,6 +867,79 @@ describe('ImapProvider connection and pagination state', () => {
     expect(second.nextPageToken).toBeUndefined();
     expect(second.incomplete).toBeUndefined();
     expect(second.inspectedCandidates).toBe(1);
+  });
+
+  it('stops after ten empty folders and resumes at the next folder', async () => {
+    const folders = Array.from({ length: 12 }, (_, index) => folder(`Folder ${index + 1}`));
+    const { provider, search } = paginationProvider([], folders);
+
+    const first = await provider.listMessages({}, { pageSize: 1 });
+    expect(first).toMatchObject({ exhausted: false, incomplete: true, incompleteReason: 'scan_limit', items: [] });
+    expect(first.nextPageToken).toBeTruthy();
+    expect(search).toHaveBeenCalledTimes(10);
+
+    const second = await provider.listMessages({}, { pageSize: 1, pageToken: first.nextPageToken });
+    expect(second).toMatchObject({ exhausted: true, items: [] });
+    expect(second.nextPageToken).toBeUndefined();
+    expect(search).toHaveBeenCalledTimes(12);
+  });
+
+  it('returns a resumable page when the soft deadline is already reached', async () => {
+    const { provider, search } = paginationProvider([2, 1], [folder('INBOX')]);
+
+    const first = await provider.listMessages({ folder: 'INBOX' }, { pageSize: 1, softDeadlineAt: Date.now() - 1 });
+    expect(first).toMatchObject({ exhausted: false, incomplete: true, incompleteReason: 'time_limit', items: [] });
+    expect(search).not.toHaveBeenCalled();
+
+    const second = await provider.listMessages({ folder: 'INBOX' }, { pageSize: 2, pageToken: first.nextPageToken });
+    expect(second.items.map((message) => message.subject)).toEqual(['INBOX-2', 'INBOX-1']);
+    expect(second.exhausted).toBe(true);
+  });
+
+  it('preserves the resumed mailbox position when the soft deadline is already reached', async () => {
+    const { provider, search } = paginationProvider([3, 2, 1], [folder('INBOX')]);
+
+    const first = await provider.listMessages({ folder: 'INBOX' }, { pageSize: 1 });
+    const timedOut = await provider.listMessages(
+      { folder: 'INBOX' },
+      { pageSize: 1, pageToken: first.nextPageToken, softDeadlineAt: Date.now() - 1 },
+    );
+    const resumed = await provider.listMessages(
+      { folder: 'INBOX' },
+      { pageSize: 1, pageToken: timedOut.nextPageToken },
+    );
+
+    expect(first.items.map((message) => message.subject)).toEqual(['INBOX-3']);
+    expect(timedOut).toMatchObject({
+      exhausted: false,
+      incomplete: true,
+      incompleteReason: 'time_limit',
+      items: [],
+    });
+    expect(timedOut.nextPageToken).toBe(first.nextPageToken);
+    expect(resumed.items.map((message) => message.subject)).toEqual(['INBOX-2']);
+    expect(search).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps metadata and unread state when an IMAP preview fails', async () => {
+    const { provider, fetchOne, download, messageFlagsAdd } = paginationProvider([1], [folder('INBOX')]);
+    fetchOne.mockResolvedValue({
+      uid: 1,
+      envelope: { subject: 'Preview failure', messageId: '<preview@example.com>' },
+      headers: Buffer.from('Message-ID: <preview@example.com>\r\n'),
+      flags: new Set<string>(),
+      internalDate: new Date('2026-01-01T00:00:00Z'),
+      bodyStructure: { part: '1', type: 'text/plain', encoding: '7bit', size: 12 },
+    });
+    download.mockRejectedValue(new Error('private provider failure'));
+
+    const page = await provider.listMessages({ folder: 'INBOX' }, { includeSnippet: true });
+
+    expect(page.items[0]).toMatchObject({ subject: 'Preview failure', flags: { read: false } });
+    expect(page.items[0]?.snippet).toBeUndefined();
+    expect(page.diagnostics).toEqual([expect.objectContaining({ code: 'snippet_unavailable', severity: 'warning' })]);
+    expect(page.exhausted).toBe(true);
+    expect(messageFlagsAdd).not.toHaveBeenCalled();
   });
 
   it('excludes resolved Spam and Trash folders when the server has no All mailbox', async () => {

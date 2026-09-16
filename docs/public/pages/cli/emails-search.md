@@ -38,3 +38,4 @@ fluxmail emails search <query> [options]
 | `--raw-provider-query <query>` | No | Pass a provider-native query | None |
 | `--page-size <number>` | No | Return 1 to 100 messages | None |
 | `--page-token <token>` | No | Continue from a previous response | None |
+| `--include-snippet <boolean>` | No | Request or suppress message previews | None |

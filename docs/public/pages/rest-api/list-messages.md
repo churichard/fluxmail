@@ -40,6 +40,7 @@ curl 'http://localhost:8977/api/v1/accounts/acct_123/messages' \
 | `rawProviderQuery` | query | No | `string` | Provider-native Gmail syntax or Outlook KQL |
 | `pageSize` | query | No | `string` | Pattern: `^(?:[1-9]\|[1-9][0-9]\|100)$`. |
 | `pageToken` | query | No | `string` | Minimum length: 1. |
+| `includeSnippet` | query | No | `true` or `false` | None |
 
 ## Responses
 
@@ -330,6 +331,9 @@ curl 'http://localhost:8977/api/v1/accounts/acct_123/messages' \
         "nextPageToken": {
           "type": "string"
         },
+        "exhausted": {
+          "type": "boolean"
+        },
         "diagnostics": {
           "type": "array",
           "items": {
@@ -378,7 +382,8 @@ curl 'http://localhost:8977/api/v1/accounts/acct_123/messages' \
           "type": "string",
           "enum": [
             "scan_limit",
-            "provider_limit"
+            "provider_limit",
+            "time_limit"
           ]
         },
         "inspectedCandidates": {
@@ -386,6 +391,9 @@ curl 'http://localhost:8977/api/v1/accounts/acct_123/messages' \
           "minimum": 0
         }
       },
+      "required": [
+        "exhausted"
+      ],
       "additionalProperties": false
     },
     "warnings": {

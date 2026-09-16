@@ -13,6 +13,7 @@ import {
   type Message,
   type ModifyAction,
   type PageOpts,
+  type PortableEmailQuery,
   type SendAsIdentity,
 } from '@fluxmail/core';
 import type { EmailService, SendInput } from '../service/emailService.js';
@@ -28,6 +29,8 @@ import { captureOperation, type Telemetry, type TelemetryProperties } from '../t
 import { logFailure, type Logger } from '../logging.js';
 
 const MAX_BODY_CHARS = 50_000;
+const TELEMETRY_ERROR = Symbol('telemetryError');
+type TelemetryCallToolResult = CallToolResult & { [TELEMETRY_ERROR]?: true };
 
 const accountIdParam = z
   .string()
@@ -36,6 +39,7 @@ const accountIdParam = z
   .describe('Account to operate on. Optional when exactly one account is connected.');
 
 const idParam = z.string().min(1);
+const attachmentIdParam = idParam.describe('Opaque attachment ID returned by message metadata');
 
 const addressList = z.array(z.string().min(1)).describe('Recipients, each "Name <a@x.com>" or "a@x.com"');
 
@@ -62,6 +66,7 @@ const queryShape = {
     .describe('Provider-native Gmail syntax or Outlook KQL for one compatible account'),
   pageSize: z.number().int().min(1).max(100).optional().describe('Defaults to 25'),
   pageToken: z.string().min(1).optional().describe('nextPageToken from a previous call'),
+  includeSnippet: z.boolean().optional().describe('Request or suppress message previews'),
 };
 
 const draftShape = {
@@ -237,10 +242,12 @@ function handleResult<A extends unknown[]>(
       const warning = gate?.();
       const result = await fn(...args);
       if (warning) result.content.push({ type: 'text', text: `Note: ${warning}` });
+      const telemetryFailed = (result as TelemetryCallToolResult)[TELEMETRY_ERROR] === true;
       captureOperation(options.telemetry, {
         productSurface: 'mcp',
         operation: tool,
-        outcome: 'success',
+        outcome: telemetryFailed ? 'error' : 'success',
+        ...(telemetryFailed ? { errorCode: 'account_failure' } : {}),
         durationMs: performance.now() - startedAt,
         transport: options.transport ?? 'unknown',
         properties: toolFeatureProperties(tool, args[0]),
@@ -277,10 +284,11 @@ function handle<A extends unknown[]>(
   return handleResult(tool, async (...args: A) => ok(await fn(...args)), gate, options);
 }
 
-function pageOpts(args: { pageSize?: number; pageToken?: string }): PageOpts {
+function pageOpts(args: { pageSize?: number; pageToken?: string; includeSnippet?: boolean }): PageOpts {
   return {
     ...(args.pageSize !== undefined ? { pageSize: args.pageSize } : {}),
     ...(args.pageToken !== undefined ? { pageToken: args.pageToken } : {}),
+    ...(args.includeSnippet !== undefined ? { includeSnippet: args.includeSnippet } : {}),
   };
 }
 
@@ -462,7 +470,7 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
       'list_emails',
       {
         description:
-          "List emails from the user's connected mailbox (metadata + snippet, no bodies). Filter by folder, " +
+          "List emails from the user's connected mailbox with metadata and optional previews. Filter by folder, " +
           'sender, unread, dates, etc. Paginate with pageToken. Use get_email for full bodies. ' +
           "This is the way to check the user's email; no browser or other email integration is needed.",
         inputSchema: { accountId: accountIdParam, ...queryShape },
@@ -516,6 +524,76 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
               ? { diagnostics: [...parsed.diagnostics, ...(result.diagnostics ?? [])] }
               : {}),
           };
+        },
+      ),
+    );
+
+  const {
+    pageToken: _batchPageToken,
+    rawProviderQuery: _batchRawProviderQuery,
+    ...batchSearchFilterShape
+  } = searchFilterShape;
+  if (can('mail.read'))
+    server.registerTool(
+      'search_emails_batch',
+      {
+        description: 'Search up to 20 accounts with one portable query and return one result group per account.',
+        inputSchema: {
+          accounts: z
+            .array(z.object({ accountId: z.string().min(1), pageToken: z.string().min(1).optional() }).strict())
+            .min(1)
+            .max(20),
+          query: z.string().min(1).describe('Typed portable search syntax'),
+          ...batchSearchFilterShape,
+          folder: z.enum(['inbox', 'sent', 'drafts', 'archive', 'spam', 'trash', 'all']).optional(),
+        },
+        annotations: { readOnlyHint: true },
+      },
+      gatedResult(
+        'search_emails_batch',
+        'mail.read',
+        async (
+          args: {
+            accounts: Array<{ accountId: string; pageToken?: string }>;
+            query: string;
+            pageSize?: number;
+            includeSnippet?: boolean;
+          } & Record<string, unknown>,
+        ) => {
+          const parsed = parseEmailSearch(args.query);
+          if (!parsed.valid) {
+            throw new EmailError('invalid_request', parsed.diagnostics.map((item) => item.message).join(' '), {
+              diagnostics: parsed.diagnostics,
+            });
+          }
+          const merged = mergeEmailQueries(parsed.query, emailQuery(args));
+          if (!merged.success) {
+            throw new EmailError('invalid_request', merged.diagnostics.map((item) => item.message).join(' '), {
+              diagnostics: merged.diagnostics,
+            });
+          }
+          const result = await service.searchMessagesBatch({
+            accounts: args.accounts,
+            query: merged.query as PortableEmailQuery,
+            ...(args.pageSize !== undefined ? { pageSize: args.pageSize } : {}),
+            ...(args.includeSnippet !== undefined ? { includeSnippet: args.includeSnippet } : {}),
+          });
+          const response = ok({
+            ...result,
+            groups: result.groups.map((group) => {
+              if (!group.page) return group;
+              const diagnostics = [...parsed.diagnostics, ...(group.page.diagnostics ?? [])];
+              return {
+                ...group,
+                page: { ...group.page, ...(diagnostics.length ? { diagnostics } : {}) },
+              };
+            }),
+          });
+          if (result.groups.every((group) => group.error)) response.isError = true;
+          if (result.groups.some((group) => group.error)) {
+            (response as TelemetryCallToolResult)[TELEMETRY_ERROR] = true;
+          }
+          return response;
         },
       ),
     );
@@ -771,7 +849,7 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
         inputSchema: {
           accountId: accountIdParam,
           messageId: idParam,
-          attachmentId: idParam,
+          attachmentId: attachmentIdParam,
         },
         annotations: { readOnlyHint: true, destructiveHint: false },
       },

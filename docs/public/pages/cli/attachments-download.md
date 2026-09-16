@@ -21,7 +21,7 @@ fluxmail attachments download <message-id> <attachment-id> [options]
 | Name | Required | Details | Default |
 | --- | --- | --- | --- |
 | `message-id` | Yes | Provider message ID | None |
-| `attachment-id` | Yes | Provider attachment ID | None |
+| `attachment-id` | Yes | Opaque attachment ID from message metadata | None |
 
 ## Options
 

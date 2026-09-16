@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { Readable } from 'node:stream';
+import { describe, expect, it, vi } from 'vitest';
 import type { MessageStructureObject } from 'imapflow';
-import { inspectStructure } from '../src/body.js';
+import { downloadSnippet, inspectStructure } from '../src/body.js';
 
 describe('IMAP body structure', () => {
   it('uses part 1 for a single-part message', () => {
@@ -25,7 +26,7 @@ describe('IMAP body structure', () => {
 
     expect(inspectStructure(structure)).toMatchObject({
       html: '1',
-      attachments: [{ id: '2', mimeType: 'image/png', disposition: 'inline', contentId: 'logo' }],
+      attachments: [{ id: 'part:2', mimeType: 'image/png', disposition: 'inline', contentId: 'logo' }],
     });
   });
 
@@ -47,8 +48,38 @@ describe('IMAP body structure', () => {
     expect(inspectStructure(structure)).toEqual({
       text: '1',
       attachments: [
-        { id: '2', filename: 'attachment', mimeType: 'message/rfc822', sizeBytes: 40, disposition: 'attachment' },
+        {
+          id: 'part:2',
+          filename: 'attachment',
+          mimeType: 'message/rfc822',
+          sizeBytes: 40,
+          disposition: 'attachment',
+        },
       ],
     });
+  });
+
+  it('creates a bounded plain-text snippet from one partial download', async () => {
+    const download = vi.fn().mockResolvedValue({
+      meta: { charset: 'utf-8' },
+      content: Readable.from([Buffer.from(`  Hello\n\nworld  ${'é'.repeat(400)}`)]),
+    });
+
+    const snippet = await downloadSnippet({ download } as never, 7, { text: '1', attachments: [] });
+
+    expect(snippet).toHaveLength(300);
+    expect(snippet).toMatch(/^Hello world é+/);
+    expect(download).toHaveBeenCalledWith(7, '1', { uid: true, maxBytes: 16 * 1024 });
+  });
+
+  it('uses HTML only when no plain-text part is available', async () => {
+    const download = vi.fn().mockResolvedValue({
+      meta: { charset: 'utf-8' },
+      content: Readable.from([Buffer.from('<p>Hello&nbsp;<strong>world</strong></p><script>ignore()</script>')]),
+    });
+
+    await expect(downloadSnippet({ download } as never, 8, { html: '2', attachments: [] })).resolves.toBe(
+      'Hello world',
+    );
   });
 });

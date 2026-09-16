@@ -51,6 +51,7 @@
     "list-send-as",
     "replace-send-as",
     "list-messages",
+    "search-messages",
     "get-message",
     "get-thread",
     "create-draft",

@@ -25,12 +25,13 @@ import {
   type Label,
   type Message,
   type ModifyAction,
-  type Page,
+  type MessageSearchPage,
   type PageOpts,
+  type SearchDiagnostic,
   type SendResult,
   type Thread,
 } from '@fluxmail/core';
-import { downloadBody, inspectStructure } from './body.js';
+import { downloadBody, downloadSnippet, inspectStructure } from './body.js';
 import { mapImapError } from './errors.js';
 import { resolveFolders, type ResolvedFolders } from './folders.js';
 import { composeMessage, stripBccHeader, type ThreadingHeaders } from './mime.js';
@@ -112,10 +113,12 @@ interface ParsedHeaders {
 }
 
 interface Cursor {
-  v: 2;
+  v: 2 | 3;
   hash: string;
   folder: number;
   upperUid?: number;
+  mailbox?: string;
+  uidValidity?: string;
 }
 
 function parseHeaders(raw: Buffer | undefined, includeSelected = false): ParsedHeaders {
@@ -176,15 +179,18 @@ function encodeCursor(cursor: Cursor): string {
 }
 
 function decodeCursor(value: string | undefined, hash: string): Cursor {
-  if (!value) return { v: 2, hash, folder: 0 };
+  if (!value) return { v: 3, hash, folder: 0 };
   try {
     const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Cursor;
     if (
-      parsed.v !== 2 ||
+      (parsed.v !== 2 && parsed.v !== 3) ||
       parsed.hash !== hash ||
       !Number.isInteger(parsed.folder) ||
       parsed.folder < 0 ||
-      (parsed.upperUid !== undefined && (!Number.isInteger(parsed.upperUid) || parsed.upperUid < 1))
+      (parsed.upperUid !== undefined && (!Number.isInteger(parsed.upperUid) || parsed.upperUid < 1)) ||
+      (parsed.mailbox !== undefined && typeof parsed.mailbox !== 'string') ||
+      (parsed.uidValidity !== undefined && typeof parsed.uidValidity !== 'string') ||
+      (parsed.v === 3 && parsed.upperUid !== undefined && (!parsed.mailbox || !parsed.uidValidity))
     ) {
       throw new Error();
     }
@@ -307,9 +313,9 @@ export class ImapProvider implements EmailProvider {
     return this.imapConnection;
   }
 
-  private async refreshFolders(): Promise<ResolvedFolders> {
+  private async refreshFolders(clientOverride?: ImapFlow): Promise<ResolvedFolders> {
     try {
-      const client = await this.client();
+      const client = clientOverride ?? (await this.client());
       const listing = await client.list({ statusQuery: { unseen: true } });
       this.resolved = resolveFolders(listing, this.options.credentials.folderOverrides);
       return this.resolved;
@@ -358,8 +364,12 @@ export class ImapProvider implements EmailProvider {
     );
   }
 
-  private async withMailbox<T>(path: string, fn: (client: ImapFlow, uidValidity: string) => Promise<T>): Promise<T> {
-    const client = await this.client();
+  private async withMailbox<T>(
+    path: string,
+    fn: (client: ImapFlow, uidValidity: string) => Promise<T>,
+    clientOverride?: ImapFlow,
+  ): Promise<T> {
+    const client = clientOverride ?? (await this.client());
     let lock;
     try {
       lock = await client.getMailboxLock(path);
@@ -379,7 +389,15 @@ export class ImapProvider implements EmailProvider {
     path: string,
     uidValidity: string,
     fetched: FetchMessageObject,
-    options: { body?: boolean; includeHeaders?: boolean; draftId?: string; threadId?: string } = {},
+    options: {
+      body?: boolean;
+      snippet?: boolean;
+      snippetDiagnostics?: SearchDiagnostic[];
+      signal?: AbortSignal;
+      includeHeaders?: boolean;
+      draftId?: string;
+      threadId?: string;
+    } = {},
   ): Promise<Message> {
     const envelope = fetched.envelope ?? {};
     const parsed = parseHeaders(fetched.headers, options.includeHeaders);
@@ -424,6 +442,19 @@ export class ImapProvider implements EmailProvider {
       ...(fetched.bodyStructure ? { attachments: parts.attachments } : {}),
       ...(options.includeHeaders && parsed.selected ? { headers: parsed.selected } : {}),
     };
+    if (options.snippet && fetched.bodyStructure) {
+      try {
+        const snippet = await downloadSnippet(client, fetched.uid, parts);
+        if (snippet !== undefined) message.snippet = snippet;
+      } catch {
+        options.signal?.throwIfAborted();
+        options.snippetDiagnostics?.push({
+          code: 'snippet_unavailable',
+          severity: 'warning',
+          message: 'A message preview could not be loaded. Message metadata is still available.',
+        });
+      }
+    }
     if (options.body) {
       if (fetched.bodyStructure) {
         message.body = await downloadBody(client, fetched.uid, parts);
@@ -451,7 +482,31 @@ export class ImapProvider implements EmailProvider {
     return message;
   }
 
-  async listMessages(query: EmailQuery, page?: PageOpts): Promise<Page<Message>> {
+  async listMessages(query: EmailQuery, page?: PageOpts): Promise<MessageSearchPage> {
+    if (!page?.signal) return this.listMessagesWithClient(query, page);
+    const client = this.options.imapFactory?.(this.imapOptions()) ?? new ImapFlow(this.imapOptions());
+    client.on('error', () => {});
+    const close = () => client.close();
+    page.signal.addEventListener('abort', close, { once: true });
+    try {
+      page.signal.throwIfAborted();
+      await client.connect();
+      page.signal.throwIfAborted();
+      return await this.listMessagesWithClient(query, page, client);
+    } catch (error) {
+      page.signal.throwIfAborted();
+      throw mapImapError(error);
+    } finally {
+      page.signal.removeEventListener('abort', close);
+      client.close();
+    }
+  }
+
+  private async listMessagesWithClient(
+    query: EmailQuery,
+    page?: PageOpts,
+    searchClient?: ImapFlow,
+  ): Promise<MessageSearchPage> {
     const normalized = normalizeEmailQuery(query);
     if (!normalized.success) {
       throw new EmailError('invalid_request', normalized.diagnostics.map((item) => item.message).join(' '), {
@@ -459,7 +514,7 @@ export class ImapProvider implements EmailProvider {
       });
     }
     query = normalized.query;
-    const folders = await this.refreshFolders();
+    const folders = await this.refreshFolders(searchClient);
     const explicit = query.folder;
     let paths: string[];
     if (explicit) {
@@ -480,57 +535,101 @@ export class ImapProvider implements EmailProvider {
     let upperUid = cursor.upperUid;
     let nextCursor: Cursor | undefined;
     let inspectedCandidates = 0;
+    let foldersScanned = 0;
+    let incompleteReason: 'scan_limit' | 'time_limit' | undefined;
+    const diagnostics: SearchDiagnostic[] = [];
     const localFilter = query.hasAttachment !== undefined || query.after !== undefined || query.before !== undefined;
 
     searchFolders: for (; folderIndex < paths.length; folderIndex++, upperUid = undefined) {
+      page?.signal?.throwIfAborted();
+      if (page?.softDeadlineAt !== undefined && Date.now() >= page.softDeadlineAt) {
+        nextCursor = folderIndex === cursor.folder ? cursor : { v: 3, hash, folder: folderIndex };
+        incompleteReason = 'time_limit';
+        break;
+      }
+      if (foldersScanned >= 10) {
+        nextCursor = { v: 3, hash, folder: folderIndex };
+        incompleteReason = 'scan_limit';
+        break;
+      }
       const path = paths[folderIndex]!;
-      await this.withMailbox(path, async (client, uidValidity) => {
-        let found: number[] | undefined;
-        for (const search of toImapSearches(normalizedQuery, client.capabilities.has('X-GM-EXT-1'))) {
-          const matches = (await client.search(search, { uid: true })) || [];
-          if (found === undefined) {
-            found = matches;
-          } else {
-            const matchingUids = new Set(matches);
-            found = found.filter((uid) => matchingUids.has(uid));
+      await this.withMailbox(
+        path,
+        async (client, uidValidity) => {
+          if (
+            folderIndex === cursor.folder &&
+            ((cursor.mailbox && cursor.mailbox !== path) || (cursor.uidValidity && cursor.uidValidity !== uidValidity))
+          ) {
+            throw new EmailError('invalid_request', 'The mailbox changed after this IMAP page token was issued.');
           }
-          if (!found.length) break;
-        }
-        const uids = (found ?? []).sort((a, b) => b - a).filter((uid) => upperUid === undefined || uid <= upperUid);
-        for (const uid of uids) {
-          if (inspectedCandidates >= 1_000) {
-            nextCursor = { v: 2, hash, folder: folderIndex, upperUid: uid };
-            return;
+          let found: number[] | undefined;
+          for (const search of toImapSearches(normalizedQuery, client.capabilities.has('X-GM-EXT-1'))) {
+            page?.signal?.throwIfAborted();
+            const matches = (await client.search(search, { uid: true })) || [];
+            if (found === undefined) {
+              found = matches;
+            } else {
+              const matchingUids = new Set(matches);
+              found = found.filter((uid) => matchingUids.has(uid));
+            }
+            if (!found.length) break;
           }
-          inspectedCandidates += 1;
-          const fetched = await client.fetchOne(
-            uid,
-            { envelope: true, flags: true, internalDate: true, bodyStructure: true, headers: HEADER_NAMES },
-            { uid: true },
-          );
-          if (!fetched) continue;
-          const hasAttachment = inspectStructure(fetched.bodyStructure).attachments.some(
-            (attachment) => attachment.disposition !== 'inline',
-          );
-          if (query.hasAttachment !== undefined && hasAttachment !== query.hasAttachment) continue;
-          const receivedAt = isoDate(fetched.internalDate ?? fetched.envelope?.date);
-          if (query.after && receivedAt < `${query.after}T00:00:00.000Z`) continue;
-          if (query.before && receivedAt >= `${query.before}T00:00:00.000Z`) continue;
-          if (items.length === pageSize) {
-            nextCursor = { v: 2, hash, folder: folderIndex, upperUid: uid };
-            return;
+          const uids = (found ?? []).sort((a, b) => b - a).filter((uid) => upperUid === undefined || uid <= upperUid);
+          for (const uid of uids) {
+            page?.signal?.throwIfAborted();
+            if (page?.softDeadlineAt !== undefined && Date.now() >= page.softDeadlineAt) {
+              nextCursor = { v: 3, hash, folder: folderIndex, upperUid: uid, mailbox: path, uidValidity };
+              incompleteReason = 'time_limit';
+              return;
+            }
+            if (inspectedCandidates >= 1_000) {
+              nextCursor = { v: 3, hash, folder: folderIndex, upperUid: uid, mailbox: path, uidValidity };
+              incompleteReason = 'scan_limit';
+              return;
+            }
+            inspectedCandidates += 1;
+            const fetched = await client.fetchOne(
+              uid,
+              { envelope: true, flags: true, internalDate: true, bodyStructure: true, headers: HEADER_NAMES },
+              { uid: true },
+            );
+            if (!fetched) continue;
+            const hasAttachment = inspectStructure(fetched.bodyStructure).attachments.some(
+              (attachment) => attachment.disposition !== 'inline',
+            );
+            if (query.hasAttachment !== undefined && hasAttachment !== query.hasAttachment) continue;
+            const receivedAt = isoDate(fetched.internalDate ?? fetched.envelope?.date);
+            if (query.after && receivedAt < `${query.after}T00:00:00.000Z`) continue;
+            if (query.before && receivedAt >= `${query.before}T00:00:00.000Z`) continue;
+            if (items.length === pageSize) {
+              nextCursor = { v: 3, hash, folder: folderIndex, upperUid: uid, mailbox: path, uidValidity };
+              return;
+            }
+            items.push(
+              await this.toMessage(client, path, uidValidity, fetched, {
+                snippet: page?.includeSnippet === true,
+                snippetDiagnostics: diagnostics,
+                signal: page?.signal,
+              }),
+            );
           }
-          items.push(await this.toMessage(client, path, uidValidity, fetched));
-        }
-      });
+        },
+        searchClient,
+      );
+      foldersScanned += 1;
       if (nextCursor) break searchFolders;
     }
 
-    const out: Page<Message> = { items, ...(localFilter ? { inspectedCandidates } : {}) };
+    const out: MessageSearchPage = {
+      items,
+      exhausted: !nextCursor && folderIndex >= paths.length,
+      ...(diagnostics.length ? { diagnostics } : {}),
+      ...(localFilter ? { inspectedCandidates } : {}),
+    };
     if (nextCursor) out.nextPageToken = encodeCursor(nextCursor);
-    if (items.length < pageSize && inspectedCandidates >= 1_000 && nextCursor) {
+    if (nextCursor && incompleteReason) {
       out.incomplete = true;
-      out.incompleteReason = 'scan_limit';
+      out.incompleteReason = incompleteReason;
     }
     return out;
   }
@@ -976,8 +1075,12 @@ export class ImapProvider implements EmailProvider {
       if (uidValidity !== location.uidValidity) throw new EmailError('not_found', 'The message location is stale');
       const fetched = await client.fetchOne(location.uid, { bodyStructure: true }, { uid: true });
       if (!fetched) throw new EmailError('not_found', `No message with id "${messageId}"`);
-      const meta = inspectStructure(fetched.bodyStructure).attachments.find((item) => item.id === attachmentId);
-      const structurePart = findStructurePart(fetched.bodyStructure, attachmentId);
+      const canonicalAttachmentId = attachmentId.startsWith('part:') ? attachmentId : `part:${attachmentId}`;
+      const mimePart = canonicalAttachmentId.slice('part:'.length);
+      const meta = inspectStructure(fetched.bodyStructure).attachments.find(
+        (item) => item.id === canonicalAttachmentId,
+      );
+      const structurePart = findStructurePart(fetched.bodyStructure, mimePart);
       if (meta && isDecodedBodyStructureSize(structurePart)) {
         assertAttachmentSize(meta.sizeBytes, opts.maxBytes);
       }
@@ -1008,7 +1111,7 @@ export class ImapProvider implements EmailProvider {
         };
       }
       if (!meta) throw new EmailError('not_found', `No attachment with id "${attachmentId}"`);
-      const downloaded = await client.download(location.uid, attachmentId, { uid: true });
+      const downloaded = await client.download(location.uid, mimePart, { uid: true });
       const chunks: Buffer[] = [];
       let sizeBytes = 0;
       for await (const chunk of downloaded.content) {

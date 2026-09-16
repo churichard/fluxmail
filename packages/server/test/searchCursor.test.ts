@@ -6,6 +6,7 @@ const binding = {
   provider: 'gmail' as const,
   query: { folder: 'inbox', read: false, text: 'quarterly report' },
   pageSize: 25,
+  includeSnippet: true,
 };
 
 describe('SearchCursorCodec', () => {
@@ -27,6 +28,7 @@ describe('SearchCursorCodec', () => {
       { ...binding, provider: 'outlook' as const },
       { ...binding, query: { ...binding.query, read: true } },
       { ...binding, pageSize: 50 },
+      { ...binding, includeSnippet: false },
     ]) {
       expect(() => codec.decode(token, changed, 2_000)).toThrow(/Invalid or expired/);
     }

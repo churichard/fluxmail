@@ -1,10 +1,10 @@
 ---
 title: 'Email search'
 description: 'Use the same portable search syntax with Fluxmail CLI, MCP, and REST clients.'
-updated: '2026-07-24'
+updated: '2026-09-16'
 ---
 
-Fluxmail has one portable search syntax for Gmail, Outlook, and IMAP mailboxes. You can use it with `fluxmail emails search`, the `search_emails` MCP tool, or the REST `query` parameter.
+Fluxmail has one portable search syntax for Gmail, Outlook, and IMAP mailboxes. You can use it with `fluxmail emails search`, `fluxmail emails search-batch`, the `search_emails` and `search_emails_batch` MCP tools, or the REST search operations.
 
 ```text
 from:ann@example.com in:archive is:unread after:2026-07-01 quarterly report
@@ -62,7 +62,9 @@ Gmail's `has:attachment` operator has different behavior, so Fluxmail does not u
 
 ## Pagination
 
-Pass `nextPageToken` back with the same account, query, and page size. Search page tokens expire after one hour. They are signed to prevent changes, but their contents are not encrypted. Replacing the Fluxmail instance encryption key also invalidates existing tokens.
+Pass `nextPageToken` back with the same account, query, page size, and snippet setting. Search page tokens expire after one hour. They are signed to prevent changes, but their contents are not encrypted. Replacing the Fluxmail instance encryption key also invalidates existing tokens.
+
+Every search page includes `exhausted`. A value of `true` means Fluxmail searched the full requested scope. When you omit the folder, that scope is all mail except Spam and Trash. An IMAP server's `\All` mailbox can define its own scope.
 
 Some filters require local checks after Fluxmail receives provider candidates. A response can include:
 
@@ -70,6 +72,7 @@ Some filters require local checks after Fluxmail receives provider candidates. A
 {
   "meta": {
     "nextPageToken": "...",
+    "exhausted": false,
     "incomplete": true,
     "incompleteReason": "scan_limit",
     "inspectedCandidates": 1000
@@ -77,4 +80,18 @@ Some filters require local checks after Fluxmail receives provider candidates. A
 }
 ```
 
-An empty incomplete page does not mean that no matches exist. A client can follow up to three empty incomplete pages automatically, then offer a "Continue searching" action.
+An empty page confirms that there are no matches only when `exhausted` is `true`. Continue with `nextPageToken` when `incompleteReason` is `scan_limit` or `time_limit`. A provider can also return `provider_limit` when it cannot search beyond its own result cap.
+
+Search work has a 10-second soft budget and a 15-second deadline. Fluxmail returns a continuation at a safe boundary when it can. If the provider stalls before Fluxmail has a continuation point, the request fails with `provider_unavailable` and `reason: "search_timeout"`.
+
+## Message previews
+
+Set `includeSnippet` to `true` to request previews or `false` to suppress them. If you omit it, Gmail and Outlook return their native previews while IMAP avoids extra body downloads.
+
+For IMAP, Fluxmail downloads up to 16 KiB from the preferred text part and returns at most 300 characters. It prefers plain text and converts HTML when needed. A preview failure leaves the message metadata available and adds a warning to the page.
+
+## Search several accounts
+
+Use `search_emails_batch`, `POST /api/v1/messages/search`, or `fluxmail emails search-batch` to run the same portable search against several accounts. A batch accepts 1 through 20 distinct accounts and searches up to three at a time. Each account has its own page and continuation token.
+
+The response keeps account groups in request order. One account can fail without discarding successful groups. The aggregate `exhausted` value is `true` only when every group is exhausted. To continue, send only the unfinished accounts with their tokens. Batch search accepts portable folder roles and rejects provider-native queries.

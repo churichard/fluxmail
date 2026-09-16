@@ -26,6 +26,7 @@ This command has no command-specific options.
 | --- | --- |
 | [`fluxmail emails list`](/docs/cli/emails-list) | List and filter messages |
 | [`fluxmail emails search`](/docs/cli/emails-search) | Search messages |
+| [`fluxmail emails search-batch`](/docs/cli/emails-search-batch) | Search multiple email accounts |
 | [`fluxmail emails get`](/docs/cli/emails-get) | Get a complete message |
 | [`fluxmail emails send`](/docs/cli/emails-send) | Send or schedule a message |
 | [`fluxmail emails forward`](/docs/cli/emails-forward) | Forward a message |

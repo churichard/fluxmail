@@ -221,6 +221,12 @@ export interface PortableEmailQuery extends Omit<EmailQuery, 'folder' | 'rawProv
 export interface PageOpts {
   pageSize?: number;
   pageToken?: string;
+  /** Include or suppress message snippets. Omission preserves the provider default. */
+  includeSnippet?: boolean;
+  /** Internal cancellation signal used to stop provider work at the request deadline. */
+  signal?: AbortSignal;
+  /** Internal soft deadline. Providers return a resumable page at the next safe boundary. */
+  softDeadlineAt?: number;
 }
 
 export type SearchDiagnosticSeverity = 'error' | 'warning';
@@ -239,6 +245,11 @@ export interface Page<T> {
   nextPageToken?: string;
   diagnostics?: SearchDiagnostic[];
   incomplete?: true;
-  incompleteReason?: 'scan_limit' | 'provider_limit';
+  incompleteReason?: 'scan_limit' | 'provider_limit' | 'time_limit';
   inspectedCandidates?: number;
+}
+
+export interface MessageSearchPage extends Page<Message> {
+  /** True only when the complete requested search scope has been examined. */
+  exhausted: boolean;
 }

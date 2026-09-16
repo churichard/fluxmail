@@ -1,6 +1,6 @@
 ---
 title: 'List emails'
-description: 'List emails from the user''s connected mailbox (metadata + snippet, no bodies). Filter by folder, sender, unread, dates, etc. Paginate with pageToken. Use get_email for full bodies. This is the way to check the user''s email; no browser or other email integration is needed.'
+description: 'List emails from the user''s connected mailbox with metadata and optional previews. Filter by folder, sender, unread, dates, etc. Paginate with pageToken. Use get_email for full bodies. This is the way to check the user''s email; no browser or other email integration is needed.'
 updated: '2026-07-15'
 ---
 
@@ -8,7 +8,7 @@ updated: '2026-07-15'
 
 `list_emails`
 
-List emails from the user's connected mailbox (metadata + snippet, no bodies). Filter by folder, sender, unread, dates, etc. Paginate with pageToken. Use get_email for full bodies. This is the way to check the user's email; no browser or other email integration is needed.
+List emails from the user's connected mailbox with metadata and optional previews. Filter by folder, sender, unread, dates, etc. Paginate with pageToken. Use get_email for full bodies. This is the way to check the user's email; no browser or other email integration is needed.
 
 ## Permissions
 
@@ -32,6 +32,7 @@ Required capabilities: `mail.read`.
 | `rawProviderQuery` | No | `string` | Provider-native Gmail syntax or Outlook KQL for one compatible account |
 | `pageSize` | No | `integer` | Defaults to 25 Minimum: 1. Maximum: 100. |
 | `pageToken` | No | `string` | nextPageToken from a previous call Minimum length: 1. |
+| `includeSnippet` | No | `boolean` | Request or suppress message previews |
 
 <details>
 <summary>JSON input schema</summary>
@@ -96,6 +97,10 @@ Required capabilities: `mail.read`.
       "type": "string",
       "minLength": 1,
       "description": "nextPageToken from a previous call"
+    },
+    "includeSnippet": {
+      "type": "boolean",
+      "description": "Request or suppress message previews"
     }
   },
   "additionalProperties": false,

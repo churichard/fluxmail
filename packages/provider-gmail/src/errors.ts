@@ -103,15 +103,30 @@ export async function withRetry<T>(
   fn: () => Promise<T>,
   maxRetries = 3,
   retryable: (err: unknown) => boolean = isRetryable,
+  signal?: AbortSignal,
 ): Promise<T> {
   let attempt = 0;
   for (;;) {
+    signal?.throwIfAborted();
     try {
       return await fn();
     } catch (err) {
+      signal?.throwIfAborted();
       if (attempt >= maxRetries || !retryable(err)) throw toEmailError(err);
       const delayMs = 500 * 2 ** attempt + Math.floor(Math.random() * 250);
-      await new Promise((r) => setTimeout(r, delayMs));
+      await new Promise<void>((resolve, reject) => {
+        const onAbort = () => {
+          clearTimeout(timer);
+          signal?.removeEventListener('abort', onAbort);
+          reject(signal?.reason);
+        };
+        const timer = setTimeout(() => {
+          signal?.removeEventListener('abort', onAbort);
+          resolve();
+        }, delayMs);
+        signal?.addEventListener('abort', onAbort, { once: true });
+        if (signal?.aborted) onAbort();
+      });
       attempt++;
     }
   }
