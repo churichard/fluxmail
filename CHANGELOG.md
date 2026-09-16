@@ -4,6 +4,25 @@ Fluxmail records user-facing changes in this file. The format follows [Common Ch
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-16
+
+### Changed
+
+- Advance stored data to format 3 for send-as identities; stop processes that share the data directory and keep the migration backup because older Fluxmail releases cannot open the upgraded store; [prepare existing installations before upgrading](https://fluxmail.ai/docs/upgrades/0.9.0/) ([#88](https://github.com/churichard/fluxmail/pull/88))
+- Require custom provider authors to return `MessageSearchPage.exhausted` from `EmailProvider.listMessages`; set it only after the provider has examined the full requested scope, and [update custom providers before upgrading](https://fluxmail.ai/docs/upgrades/0.9.0/) ([#89](https://github.com/churichard/fluxmail/pull/89))
+- [MCP / CLI / REST] Bound searches with a soft time budget and hard deadline, return resumable pages at safe boundaries, and report whether each requested scope is exhausted ([#89](https://github.com/churichard/fluxmail/pull/89))
+
+### Added
+
+- [MCP / CLI / REST] Expose available send-as identities and accept an available sender for draft, forward, immediate send, and scheduled send operations ([#88](https://github.com/churichard/fluxmail/pull/88))
+- [CLI / REST] Configure send-as addresses for Outlook and IMAP accounts while Gmail continues to use provider-managed identities ([#88](https://github.com/churichard/fluxmail/pull/88))
+- [MCP / CLI / REST] Add multi-account search through MCP `search_emails_batch`, CLI `emails search-batch`, and REST `POST /api/v1/messages/search`, with per-account pagination, partial failures, and optional message previews ([#89](https://github.com/churichard/fluxmail/pull/89))
+
+### Fixed
+
+- [MCP / CLI / REST] Keep slow searches resumable without skipping or repeating messages, and preserve successful account results when another account fails ([#89](https://github.com/churichard/fluxmail/pull/89))
+- [MCP / CLI / REST] Keep IMAP attachment IDs stable and treat them as opaque values when downloading attachments ([#89](https://github.com/churichard/fluxmail/pull/89))
+
 ## [0.8.1] - 2026-09-14
 
 ### Fixed
@@ -126,7 +145,7 @@ Only the breaking entries for the interfaces you use apply. An MCP-only integrat
 - Prevent hosted Microsoft OAuth responses from forwarding connection credentials through the HTTP referrer ([#43](https://github.com/churichard/fluxmail/pull/43))
 - Stop a pending IMAP connection immediately when its provider closes during setup ([#49](https://github.com/churichard/fluxmail/pull/49))
 
-[Unreleased]: https://github.com/churichard/fluxmail/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/churichard/fluxmail/compare/v0.9.0...HEAD
 [0.4.0]: https://github.com/churichard/fluxmail/compare/v0.3.0...v0.4.0
 [0.4.1]: https://github.com/churichard/fluxmail/compare/v0.4.0...v0.4.1
 [0.5.0]: https://github.com/churichard/fluxmail/compare/v0.4.1...v0.5.0
@@ -135,3 +154,4 @@ Only the breaking entries for the interfaces you use apply. An MCP-only integrat
 [0.7.0]: https://github.com/churichard/fluxmail/compare/v0.6.1...v0.7.0
 [0.8.0]: https://github.com/churichard/fluxmail/compare/v0.7.0...v0.8.0
 [0.8.1]: https://github.com/churichard/fluxmail/compare/v0.8.0...v0.8.1
+[0.9.0]: https://github.com/churichard/fluxmail/compare/v0.8.1...v0.9.0
