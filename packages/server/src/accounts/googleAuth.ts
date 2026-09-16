@@ -8,7 +8,11 @@ import { DEFAULT_GOOGLE_CLIENT_ID } from './defaultGoogleOAuth.js';
 
 const GOOGLE_IDENTITY_SCOPES = ['openid', 'email', 'profile'];
 
-/** The built-in app uses Fluxmail's approved Gmail permission. */
+/**
+ * The built-in app uses Fluxmail's approved Gmail permission. Google lists
+ * gmail.modify as an allowed scope for users.settings.sendAs.list:
+ * https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.settings.sendAs/list
+ */
 export const GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.modify', ...GOOGLE_IDENTITY_SCOPES];
 
 /** Custom OAuth apps retain full Gmail support, including permanent deletion. */

@@ -6,6 +6,7 @@ import {
   isEmailError,
   isPortableFolderRole,
   normalizeEmailQuery,
+  parseSingleAddress,
   supportsPortableEmailQuery,
   type Account,
   type AttachmentInput,
@@ -22,6 +23,7 @@ import {
   type PortableEmailQuery,
   type SearchCapabilities,
   type SendResult,
+  type SendAsIdentity,
   type Thread,
 } from '@fluxmail/core';
 import { randomBytes } from 'node:crypto';
@@ -43,6 +45,7 @@ import {
   type ScheduledSendStatus,
 } from '../storage/scheduledSends.js';
 import { SearchCursorCodec } from './searchCursor.js';
+import { listConfiguredSendAs, replaceConfiguredSendAs, type ConfiguredSendAsInput } from '../storage/sendAs.js';
 
 export interface SendInput extends DraftInput {
   /** With replyToMessageId: compute recipients from the original (reply-all semantics). */
@@ -56,6 +59,7 @@ export interface ForwardInput {
   /** Optional note placed above the forwarded content. */
   comment?: string;
   includeAttachments?: boolean;
+  from?: string;
 }
 
 export interface ServiceStatus {
@@ -380,6 +384,50 @@ export class EmailService {
     return this.withProvider(accountId, (p) => p.listLabels());
   }
 
+  listSendAs(accountId?: string): Promise<SendAsIdentity[]> {
+    return this.withProvider(accountId, (provider, resolvedId, account) =>
+      this.sendAsIdentities(provider, resolvedId, account),
+    );
+  }
+
+  async replaceSendAs(accountId: string, identities: ConfiguredSendAsInput[]): Promise<SendAsIdentity[]> {
+    if (!this.principal || !canAdminister(this.principal, 'admin.accounts')) {
+      throw new EmailError('permission_denied', 'This operation requires admin.accounts.');
+    }
+    const account = this.registry.getAccount(accountId);
+    if (!canSeeAccountMetadata(this.principal, account)) {
+      throw new EmailError('not_found', `No account with id "${accountId}"`);
+    }
+    const resolvedId = account.id;
+    if (account.provider === 'gmail') {
+      throw new EmailError('unsupported_capability', 'Manage Gmail send-as addresses in Gmail.');
+    }
+    const seen = new Set<string>();
+    const normalized = identities.map((identity) => {
+      const parsed = parseSingleAddress(identity.email.trim());
+      if (!parsed) throw new EmailError('invalid_request', `Could not parse sender address: "${identity.email}"`);
+      const email = parsed.email;
+      const key = email.toLowerCase();
+      if (key === account.email.toLowerCase()) {
+        throw new EmailError('invalid_request', 'Do not include the connected account address in configured aliases.');
+      }
+      if (seen.has(key)) throw new EmailError('invalid_request', `Duplicate sender address: "${email}"`);
+      seen.add(key);
+      const name = identity.name?.trim();
+      return { email, ...(name ? { name } : {}) };
+    });
+    replaceConfiguredSendAs(this.db, resolvedId, normalized);
+    return [
+      {
+        email: account.email,
+        ...(account.displayName ? { name: account.displayName } : {}),
+        isPrimary: true,
+        source: 'configured',
+      },
+      ...listConfiguredSendAs(this.db, resolvedId),
+    ];
+  }
+
   listMessages(accountId: string | undefined, q: EmailQuery, page: PageOpts = {}): Promise<Page<Message>> {
     const normalized = normalizeEmailQuery(q);
     if (!normalized.success) {
@@ -447,6 +495,10 @@ export class EmailService {
   send(accountId: string | undefined, input: SendInput | { draftId: string }): Promise<SendResult> {
     return this.withProvider(accountId, async (p, resolvedId, account) => {
       if ('draftId' in input) {
+        const draft = await p.getDraft(input.draftId);
+        if (draft.from?.email && draft.from.email.toLowerCase() !== account.email.toLowerCase()) {
+          await this.validateSender(p, resolvedId, account, draft.from.email);
+        }
         const result = await p.send({ draftId: input.draftId });
         // Sending a scheduled draft now supersedes its schedule.
         const pending = findPendingByDraft(this.db, resolvedId, input.draftId);
@@ -536,16 +588,102 @@ export class EmailService {
     input: SendInput,
   ): Promise<DraftInput> {
     const { replyAll, ...draft } = input;
-    if (!draft.replyToMessageId || draft.to?.length) return draft;
+    if (!draft.replyToMessageId) {
+      if (draft.from) draft.from = (await this.validateSender(p, account.id, account, draft.from)).email;
+      return draft;
+    }
     const original = await p.getMessage(draft.replyToMessageId);
-    const recipients = computeReplyRecipients(original, account.email, replyAll ?? false);
-    draft.to = recipients.to;
-    if (recipients.cc.length && !draft.cc?.length) draft.cc = recipients.cc;
+    const identities = await this.sendAsIdentities(p, account.id, account);
+    const requestedSender = draft.from;
+    const selected =
+      requestedSender !== undefined
+        ? await this.validateSender(p, account.id, account, requestedSender, identities)
+        : this.selectReplySender(original, identities);
+    if (requestedSender !== undefined || !selected.isPrimary) draft.from = selected.email;
+    else delete draft.from;
+    if (!draft.to?.length) {
+      const recipients = computeReplyRecipients(
+        original,
+        identities.map((identity) => identity.email),
+        replyAll ?? false,
+      );
+      draft.to = recipients.to;
+      if (recipients.cc.length && !draft.cc?.length) draft.cc = recipients.cc;
+    }
     return draft;
   }
 
+  private async sendAsIdentities(
+    provider: ReturnType<AccountRegistry['getProvider']>,
+    accountId: string,
+    account: Account,
+  ): Promise<SendAsIdentity[]> {
+    if (provider.listSendAs) {
+      const discovered = await provider.listSendAs();
+      const primaryIndex = discovered.findIndex(
+        (identity) => identity.email.toLowerCase() === account.email.toLowerCase(),
+      );
+      if (primaryIndex >= 0) {
+        return discovered.map((identity, index) => ({ ...identity, isPrimary: index === primaryIndex }));
+      }
+      return [
+        {
+          email: account.email,
+          ...(account.displayName ? { name: account.displayName } : {}),
+          isPrimary: true,
+          source: 'provider',
+        },
+        ...discovered.map((identity) => ({ ...identity, isPrimary: false })),
+      ];
+    }
+    return [
+      {
+        email: account.email,
+        ...(account.displayName ? { name: account.displayName } : {}),
+        isPrimary: true,
+        source: 'configured',
+      },
+      ...listConfiguredSendAs(this.db, accountId),
+    ];
+  }
+
+  private async validateSender(
+    provider: ReturnType<AccountRegistry['getProvider']>,
+    accountId: string,
+    account: Account,
+    sender: string,
+    known?: SendAsIdentity[],
+  ): Promise<SendAsIdentity> {
+    const parsed = parseSingleAddress(sender.trim());
+    if (!parsed) throw new EmailError('invalid_request', `Could not parse sender address: "${sender}"`);
+    if (parsed.email.toLowerCase() === account.email.toLowerCase()) {
+      return {
+        email: account.email,
+        ...(account.displayName ? { name: account.displayName } : {}),
+        isPrimary: true,
+        source: account.provider === 'gmail' ? 'provider' : 'configured',
+      };
+    }
+    const identity = (known ?? (await this.sendAsIdentities(provider, accountId, account))).find(
+      (candidate) => candidate.email.toLowerCase() === parsed.email.toLowerCase(),
+    );
+    if (!identity) throw new EmailError('invalid_request', `Sender address "${parsed.email}" is not available.`);
+    return identity;
+  }
+
+  private selectReplySender(original: Message, identities: SendAsIdentity[]): SendAsIdentity {
+    const byEmail = new Map(identities.map((identity) => [identity.email.toLowerCase(), identity]));
+    const originalSender = original.from ? byEmail.get(original.from.email.toLowerCase()) : undefined;
+    if (originalSender) return originalSender;
+    for (const recipient of [...original.to, ...(original.cc ?? [])]) {
+      const match = byEmail.get(recipient.email.toLowerCase());
+      if (match) return match;
+    }
+    return identities.find((identity) => identity.isPrimary) ?? identities[0]!;
+  }
+
   forward(accountId: string | undefined, input: ForwardInput): Promise<SendResult> {
-    return this.withProvider(accountId, async (p) => {
+    return this.withProvider(accountId, async (p, resolvedId, account) => {
       const original = await p.getMessage(input.messageId);
       const includeAttachments = input.includeAttachments ?? true;
 
@@ -564,6 +702,7 @@ export class EmailService {
       }
 
       const draft: DraftInput = {
+        ...(input.from ? { from: (await this.validateSender(p, resolvedId, account, input.from)).email } : {}),
         to: input.to,
         ...(input.cc?.length ? { cc: input.cc } : {}),
         subject: forwardSubject(original.subject),

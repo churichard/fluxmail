@@ -43,6 +43,10 @@ Content type: `application/json`
 {
   "type": "object",
   "properties": {
+    "from": {
+      "type": "string",
+      "format": "email"
+    },
     "to": {
       "type": "array",
       "items": {

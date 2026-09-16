@@ -48,6 +48,8 @@
     "list-accounts",
     "list-folders",
     "list-labels",
+    "list-send-as",
+    "replace-send-as",
     "list-messages",
     "get-message",
     "get-thread",

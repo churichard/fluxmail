@@ -10,6 +10,8 @@ This setup works with personal Gmail and Google Workspace mailboxes.
 
 Fluxmail's built-in app requests Google's `gmail.modify` permission. You can read, draft, send, and organize mail, including moving messages to Trash. Gmail does not allow immediate permanent deletion with this permission.
 
+Fluxmail also reads Gmail's Send mail as settings with the same permission. Verified aliases can be used for drafts, replies, forwards, immediate sends, and scheduled messages. See [Send from another address](/docs/send-as-addresses) for sender selection rules.
+
 ## Connect Gmail
 
 Choose the setup that matches how you run Fluxmail.

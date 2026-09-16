@@ -20,6 +20,7 @@ import {
   type Page,
   type PageOpts,
   type SendResult,
+  type SendAsIdentity,
   type Thread,
 } from '@fluxmail/core';
 import { toGmailQuery, ROLE_TO_LABEL } from './query.js';
@@ -56,6 +57,7 @@ const METADATA_HEADERS = [
   'In-Reply-To',
 ];
 const LABEL_CACHE_TTL_MS = 60_000;
+const SEND_AS_CACHE_TTL_MS = 60_000;
 const HYDRATE_CONCURRENCY = 10;
 const DEFAULT_PAGE_SIZE = 25;
 const MAX_PAGE_SIZE = 100;
@@ -156,6 +158,7 @@ export class GmailProvider implements EmailProvider {
   private readonly displayName: string | undefined;
   private readonly auth: OAuth2Client;
   private labelCache: { fetchedAt: number; labels: gmail_v1.Schema$Label[] } | null = null;
+  private sendAsCache: { fetchedAt: number; identities: SendAsIdentity[] } | null = null;
   /** undefined = not resolved yet; null = no name available. */
   private senderName: string | null | undefined;
 
@@ -177,17 +180,14 @@ export class GmailProvider implements EmailProvider {
     let lookupFailed = false;
     let sendAsName: string | undefined;
     try {
-      const res = await withRetry(() => this.gmail.users.settings.sendAs.list({ userId: 'me' }));
-      const primary =
-        res.data.sendAs?.find((s) => s.isPrimary) ?? res.data.sendAs?.find((s) => s.sendAsEmail === this.email);
-      sendAsName = primary?.displayName?.trim() || undefined;
+      const primary = (await this.listSendAs()).find((identity) => identity.isPrimary);
+      sendAsName = primary?.name?.trim() || undefined;
     } catch {
       // Fall through to the profile and stored account name.
       lookupFailed = true;
     }
     if (sendAsName) {
-      this.senderName = sendAsName;
-      return this.senderName;
+      return sendAsName;
     }
 
     try {
@@ -210,6 +210,38 @@ export class GmailProvider implements EmailProvider {
 
   async testConnection(): Promise<void> {
     await withRetry(() => this.gmail.users.getProfile({ userId: 'me' }));
+  }
+
+  async listSendAs(): Promise<SendAsIdentity[]> {
+    if (this.sendAsCache && Date.now() - this.sendAsCache.fetchedAt < SEND_AS_CACHE_TTL_MS) {
+      return this.sendAsCache.identities;
+    }
+    const res = await withRetry(() => this.gmail.users.settings.sendAs.list({ userId: 'me' }));
+    const identities = (res.data.sendAs ?? []).flatMap((identity) => {
+      const email = identity.sendAsEmail?.trim() || (identity.isPrimary ? this.email : undefined);
+      if (!email || (!identity.isPrimary && identity.verificationStatus !== 'accepted')) return [];
+      const name = identity.displayName?.trim();
+      const replyTo = identity.replyToAddress?.trim();
+      return [
+        {
+          email,
+          ...(name ? { name } : {}),
+          ...(replyTo ? { replyTo } : {}),
+          isPrimary: Boolean(identity.isPrimary),
+          source: 'provider' as const,
+        },
+      ];
+    });
+    if (!identities.some((identity) => identity.email.toLowerCase() === this.email.toLowerCase())) {
+      identities.unshift({
+        email: this.email,
+        ...(this.displayName ? { name: this.displayName } : {}),
+        isPrimary: true,
+        source: 'provider',
+      });
+    }
+    this.sendAsCache = { fetchedAt: Date.now(), identities };
+    return identities;
   }
 
   private async labels(forceRefresh = false): Promise<gmail_v1.Schema$Label[]> {
@@ -547,9 +579,20 @@ export class GmailProvider implements EmailProvider {
       threading = existingThreading;
       threadId = existingThreading.threadId;
     }
-    const senderName = await this.resolveSenderName();
-    const from = senderName ? { name: senderName, email: this.email } : { email: this.email };
-    const raw = await buildRawMessage(draft, from, threading);
+    let from = { email: this.email } as { email: string; name?: string };
+    let replyTo: { email: string } | undefined;
+    if (draft.from && draft.from.toLowerCase() !== this.email.toLowerCase()) {
+      const identity = (await this.listSendAs()).find(
+        (candidate) => candidate.email.toLowerCase() === draft.from!.toLowerCase(),
+      );
+      if (!identity) throw new EmailError('invalid_request', `Sender address "${draft.from}" is not available.`);
+      from = { email: identity.email, ...(identity.name ? { name: identity.name } : {}) };
+      if (identity.replyTo) replyTo = { email: identity.replyTo };
+    } else {
+      const senderName = await this.resolveSenderName();
+      from = senderName ? { name: senderName, email: this.email } : { email: this.email };
+    }
+    const raw = await buildRawMessage(draft, from, threading, replyTo);
     const out: { raw: string; threadId?: string } = { raw: encodeBase64Url(raw) };
     if (threadId) out.threadId = threadId;
     return out;
@@ -585,8 +628,12 @@ export class GmailProvider implements EmailProvider {
   async updateDraft(draftId: string, d: DraftInput): Promise<Message> {
     // Replacing a reply draft's content must not detach it from its thread:
     // carry the draft's threading over unless the caller re-derives it.
+    const current = d.from === undefined ? await this.getDraft(draftId) : undefined;
     const existing = d.replyToMessageId ? undefined : await this.resolveExistingDraftThreading(draftId);
-    const { raw, threadId } = await this.composeRaw(d, existing);
+    const { raw, threadId } = await this.composeRaw(
+      d.from === undefined && current?.from?.email ? { ...d, from: current.from.email } : d,
+      existing,
+    );
     const res = await withRetry(() =>
       this.gmail.users.drafts.update({
         userId: 'me',

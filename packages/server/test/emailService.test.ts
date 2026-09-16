@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EmailError, type Message, type SearchCapabilities } from '@fluxmail/core';
 import { buildForwardBody, EmailService, resolveSendAt } from '../src/service/emailService.js';
-import { accounts, members, openDb, type FluxmailDb } from '../src/storage/db.js';
+import { accountSendAs, accounts, members, openDb, type FluxmailDb } from '../src/storage/db.js';
 import { createScheduledSend } from '../src/storage/scheduledSends.js';
 import { FULL_PERMISSION_POLICY, permissionPolicyForProfile, type PermissionPolicy } from '../src/permissions.js';
+import { listConfiguredSendAs, replaceConfiguredSendAs } from '../src/storage/sendAs.js';
 
 function testDb(): FluxmailDb {
   const db = openDb(':memory:');
@@ -111,6 +112,209 @@ describe('EmailService.forward', () => {
         ],
       }),
     );
+  });
+});
+
+describe('EmailService send-as selection', () => {
+  const identities = [
+    { email: 'me@example.com', name: 'Primary', isPrimary: true, source: 'provider' as const },
+    { email: 'sales@example.com', name: 'Sales', isPrimary: false, source: 'provider' as const },
+    { email: 'support@example.com', isPrimary: false, source: 'provider' as const },
+  ];
+
+  function serviceWith(provider: Record<string, unknown>) {
+    const account = {
+      id: 'acct_1',
+      provider: 'gmail',
+      email: 'me@example.com',
+      displayName: 'Primary',
+      status: 'active',
+      capabilities: {},
+      ownerMemberId: 'member_1',
+      sharedWithAll: false,
+      grantedMemberIds: [],
+    };
+    const registry = {
+      getAccount: () => account,
+      listAccounts: () => [account],
+      getProvider: () => provider,
+      markStatus: vi.fn(),
+    };
+    return new EmailService(registry as never, testDb());
+  }
+
+  it('uses the first owned To address before Cc even when explicit recipients are supplied', async () => {
+    const createDraft = vi.fn().mockResolvedValue({});
+    const message = {
+      ...original,
+      to: [{ email: 'SALES@example.com' }],
+      cc: [{ email: 'support@example.com' }],
+    };
+    const service = serviceWith({
+      listSendAs: vi.fn().mockResolvedValue(identities),
+      getMessage: vi.fn().mockResolvedValue(message),
+      createDraft,
+    });
+
+    await service.createDraft('acct_1', {
+      to: [{ email: 'customer@example.com' }],
+      replyToMessageId: message.id,
+      body: { text: 'Reply' },
+    });
+
+    expect(createDraft).toHaveBeenCalledWith(expect.objectContaining({ from: 'sales@example.com' }));
+  });
+
+  it('lets an explicit sender override automatic reply selection', async () => {
+    const send = vi.fn().mockResolvedValue({ id: 'sent_1', threadId: 'thread_1' });
+    const service = serviceWith({
+      listSendAs: vi.fn().mockResolvedValue(identities),
+      getMessage: vi.fn().mockResolvedValue({ ...original, to: [{ email: 'sales@example.com' }] }),
+      send,
+    });
+
+    await service.send('acct_1', {
+      from: 'SUPPORT@example.com',
+      replyToMessageId: original.id,
+      body: { text: 'Reply' },
+    });
+
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ from: 'support@example.com' }));
+  });
+
+  it('keeps an explicit primary sender when updating a reply draft', async () => {
+    const updateDraft = vi.fn().mockResolvedValue({});
+    const service = serviceWith({
+      listSendAs: vi.fn().mockResolvedValue(identities),
+      getMessage: vi.fn().mockResolvedValue({ ...original, to: [{ email: 'sales@example.com' }] }),
+      updateDraft,
+    });
+
+    await service.updateDraft('acct_1', 'draft_1', {
+      from: 'ME@example.com',
+      replyToMessageId: original.id,
+      body: { text: 'Reply' },
+    });
+
+    expect(updateDraft).toHaveBeenCalledWith('draft_1', expect.objectContaining({ from: 'me@example.com' }));
+  });
+
+  it('reuses an owned sender when replying to a sent message', async () => {
+    const createDraft = vi.fn().mockResolvedValue({});
+    const service = serviceWith({
+      listSendAs: vi.fn().mockResolvedValue(identities),
+      getMessage: vi.fn().mockResolvedValue({
+        ...original,
+        from: { email: 'support@example.com' },
+        to: [{ email: 'customer@example.com' }],
+      }),
+      createDraft,
+    });
+
+    await service.createDraft('acct_1', { replyToMessageId: original.id, body: { text: 'Follow up' } });
+
+    expect(createDraft).toHaveBeenCalledWith(
+      expect.objectContaining({ from: 'support@example.com', to: [{ email: 'customer@example.com' }] }),
+    );
+  });
+
+  it('ignores an owned address that appears only in Bcc', async () => {
+    const createDraft = vi.fn().mockResolvedValue({});
+    const service = serviceWith({
+      listSendAs: vi.fn().mockResolvedValue(identities),
+      getMessage: vi.fn().mockResolvedValue({
+        ...original,
+        to: [{ email: 'customer@example.com' }],
+        cc: [],
+        bcc: [{ email: 'sales@example.com' }],
+      }),
+      createDraft,
+    });
+
+    await service.createDraft('acct_1', { replyToMessageId: original.id, body: { text: 'Reply' } });
+
+    expect(createDraft).toHaveBeenCalledWith(expect.not.objectContaining({ from: expect.anything() }));
+  });
+
+  it('removes every owned identity from reply-all recipients', async () => {
+    const createDraft = vi.fn().mockResolvedValue({});
+    const service = serviceWith({
+      listSendAs: vi.fn().mockResolvedValue(identities),
+      getMessage: vi.fn().mockResolvedValue({
+        ...original,
+        to: [{ email: 'sales@example.com' }, { email: 'customer@example.com' }],
+        cc: [{ email: 'support@example.com' }, { email: 'other@example.com' }],
+      }),
+      createDraft,
+    });
+
+    await service.createDraft('acct_1', {
+      replyToMessageId: original.id,
+      replyAll: true,
+      body: { text: 'Reply' },
+    });
+
+    expect(createDraft).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: [{ name: 'Ann', email: 'ann@example.com' }, { email: 'customer@example.com' }],
+        cc: [{ email: 'other@example.com' }],
+      }),
+    );
+  });
+
+  it('keeps ordinary new mail available when identity discovery fails', async () => {
+    const send = vi.fn().mockResolvedValue({ id: 'sent_1', threadId: 'thread_1' });
+    const listSendAs = vi.fn().mockRejectedValue(new Error('discovery unavailable'));
+    const service = serviceWith({ listSendAs, send });
+
+    await service.send('acct_1', {
+      to: [{ email: 'customer@example.com' }],
+      body: { text: 'Hello' },
+    });
+
+    expect(send).toHaveBeenCalledWith(expect.not.objectContaining({ from: expect.anything() }));
+    expect(listSendAs).not.toHaveBeenCalled();
+  });
+
+  it('surfaces identity discovery failures for replies', async () => {
+    const service = serviceWith({
+      listSendAs: vi.fn().mockRejectedValue(new Error('discovery unavailable')),
+      getMessage: vi.fn().mockResolvedValue(original),
+      createDraft: vi.fn(),
+    });
+
+    await expect(
+      service.createDraft('acct_1', { replyToMessageId: original.id, body: { text: 'Reply' } }),
+    ).rejects.toThrow('discovery unavailable');
+  });
+
+  it('rejects an alternate sender when a custom provider cannot discover identities', async () => {
+    const service = serviceWith({ send: vi.fn() });
+
+    await expect(
+      service.send('acct_1', {
+        from: 'unknown@example.com',
+        to: [{ email: 'customer@example.com' }],
+        body: { text: 'Hello' },
+      }),
+    ).rejects.toMatchObject({ code: 'invalid_request' });
+  });
+});
+
+describe('configured send-as storage', () => {
+  it('replaces aliases and removes them with their account', () => {
+    const db = testDb();
+    replaceConfiguredSendAs(db, 'acct_1', [
+      { email: 'sales@example.com', name: 'Sales' },
+      { email: 'support@example.com' },
+    ]);
+    expect(listConfiguredSendAs(db, 'acct_1')).toHaveLength(2);
+
+    replaceConfiguredSendAs(db, 'acct_1', [{ email: 'support@example.com' }]);
+    expect(listConfiguredSendAs(db, 'acct_1').map((identity) => identity.email)).toEqual(['support@example.com']);
+
+    db.delete(accounts).run();
+    expect(db.select().from(accountSendAs).all()).toEqual([]);
   });
 });
 
@@ -745,6 +949,7 @@ describe('EmailService scheduling', () => {
 
   const draftMessage: Message = {
     ...original,
+    from: { email: 'me@example.com' },
     draftId: 'draft_1',
     to: [{ email: 'bob@example.com' }],
     subject: 'Later',
@@ -845,6 +1050,18 @@ describe('EmailService scheduling', () => {
     const [row] = service.listScheduled();
     expect(row).toMatchObject({ scheduleId: info.scheduleId, status: 'sent', sentMessageId: 'sent_1' });
     expect(onScheduleChanged).toHaveBeenCalled();
+  });
+
+  it('rejects a scheduled draft when its alternate sender is no longer available', async () => {
+    const getDraft = vi.fn().mockResolvedValue({ ...draftMessage, from: { email: 'removed@example.com' } });
+    const send = vi.fn();
+    const { service } = schedulingService({ getDraft, send });
+
+    await service.scheduleSend(undefined, { draftId: 'draft_1' }, soon);
+    await expect(service.send(undefined, { draftId: 'draft_1' })).rejects.toMatchObject({
+      code: 'invalid_request',
+    });
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('cancels a pending schedule and keeps the draft', async () => {

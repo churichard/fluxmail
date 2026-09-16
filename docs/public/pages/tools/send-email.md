@@ -20,6 +20,7 @@ Required capabilities: `mail.send`.
 | --- | --- | --- | --- |
 | `draftId` | No | `string` | Send this existing draft Minimum length: 1. |
 | `accountId` | No | `string` | Account to operate on. Optional when exactly one account is connected. Minimum length: 1. |
+| `from` | No | `string` | Connected address or an available send-as address Format: `email`. |
 | `to` | No | array of `string` | Recipients, each "Name <a@x.com>" or "a@x.com" |
 | `cc` | No | array of `string` | Recipients, each "Name <a@x.com>" or "a@x.com" |
 | `bcc` | No | array of `string` | Recipients, each "Name <a@x.com>" or "a@x.com" |
@@ -47,6 +48,11 @@ Required capabilities: `mail.send`.
       "type": "string",
       "minLength": 1,
       "description": "Account to operate on. Optional when exactly one account is connected."
+    },
+    "from": {
+      "type": "string",
+      "format": "email",
+      "description": "Connected address or an available send-as address"
     },
     "to": {
       "type": "array",

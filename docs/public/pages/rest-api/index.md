@@ -36,7 +36,7 @@ Routes under `/api/v1/admin` accept a member session or API key. A session must 
 
 | Capability | Access |
 | --- | --- |
-| `admin.accounts` | Connect or reauthorize mailboxes and update IMAP settings. |
+| `admin.accounts` | Connect or reauthorize mailboxes, update IMAP settings, and configure Outlook or IMAP sender addresses. |
 | `admin.api_keys` | List, create, update, and revoke API keys. |
 | `admin.members` | Manage members, invitations, roles, statuses, and sessions. |
 | `admin.audit` | Read security audit events. |
@@ -109,6 +109,8 @@ If a reverse proxy terminates TLS and connects to Fluxmail from a non-loopback a
 | [List accounts](/docs/rest-api/list-accounts) | List the email accounts available to the API key. |
 | [List folders](/docs/rest-api/list-folders) | List folders in an email account. |
 | [List labels](/docs/rest-api/list-labels) | List Gmail user labels or Outlook categories in an email account. |
+| [List sender addresses](/docs/rest-api/list-send-as) | List sender addresses available for an email account. |
+| [Replace configured sender addresses](/docs/rest-api/replace-send-as) | Replace the configured Outlook or IMAP aliases for an email account. |
 | [List messages](/docs/rest-api/list-messages) | List and filter messages in an email account. |
 | [Get a message](/docs/rest-api/get-message) | Get one message by its provider ID. |
 | [Get a thread](/docs/rest-api/get-thread) | Get a complete email thread by its provider ID. |

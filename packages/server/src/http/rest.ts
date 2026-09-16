@@ -20,7 +20,7 @@ import type { EmailService, SendInput } from '../service/emailService.js';
 import type { FluxmailDb } from '../storage/db.js';
 import { authenticateBearer, isBootstrapComplete, type Principal } from '../auth.js';
 import { completeIdempotencyKey, reserveIdempotencyKey } from '../storage/restIdempotency.js';
-import { type McpCapability } from '../permissions.js';
+import { type Capability, type McpCapability } from '../permissions.js';
 import { allowsCapability } from '../authorization.js';
 import { captureOperation, type OperationOutcome, type Telemetry, type TelemetryProperties } from '../telemetry.js';
 import { VERSION } from '../version.js';
@@ -131,6 +131,24 @@ const LabelSchema = z
   })
   .strict()
   .openapi('Label');
+const SendAsIdentitySchema = z
+  .object({
+    email: z.string().email(),
+    name: z.string().optional(),
+    replyTo: z.string().email().optional(),
+    isPrimary: z.boolean(),
+    source: z.enum(['provider', 'configured']),
+  })
+  .strict()
+  .openapi('SendAsIdentity');
+const ConfiguredSendAsSchema = z
+  .object({ email: z.string().email(), name: z.string().optional() })
+  .strict()
+  .openapi('ConfiguredSendAs');
+const ReplaceSendAsRequestSchema = z
+  .object({ identities: z.array(ConfiguredSendAsSchema) })
+  .strict()
+  .openapi('ReplaceSendAsRequest');
 const MessageSchema = z
   .object({
     id: z.string(),
@@ -309,6 +327,7 @@ const idempotencyHeaders = z.object({
 });
 
 const draftShape = {
+  from: z.string().email().optional(),
   to: z.array(EmailAddressSchema).optional(),
   cc: z.array(EmailAddressSchema).optional(),
   bcc: z.array(EmailAddressSchema).optional(),
@@ -334,6 +353,7 @@ const SendDraftSchema = z.object({ draftId, sendAt: z.string().datetime({ offset
 const SendRequestSchema = z.union([SendDraftSchema, SendContentSchema]).openapi('SendRequest');
 const ForwardRequestSchema = z
   .object({
+    from: z.string().email().optional(),
     to: z.array(EmailAddressSchema).min(1),
     cc: z.array(EmailAddressSchema).optional(),
     comment: z.string().optional(),
@@ -550,7 +570,7 @@ async function runJson(
   deps: RestApiDeps,
   options: {
     operation: string;
-    capabilities: McpCapability[];
+    capabilities: Capability[];
     quota?: boolean;
     successStatus?: number;
     request?: unknown;
@@ -759,6 +779,7 @@ async function runAttachment(
 function toSendInput(input: z.infer<typeof DraftRequestSchema>): SendInput {
   return {
     body: input.body,
+    ...(input.from ? { from: input.from } : {}),
     ...(input.to ? { to: input.to } : {}),
     ...(input.cc ? { cc: input.cc } : {}),
     ...(input.bcc ? { bcc: input.bcc } : {}),
@@ -949,6 +970,36 @@ export function createRestApi(deps: RestApiDeps): OpenAPIHono<RestEnv> {
     }
   });
 
+  app.use('/api/v1/accounts/:accountId/send-as', async (c, next) => {
+    await next();
+    if (c.req.method !== 'PUT') return;
+    const auth = c.get('restAuth');
+    if (!auth) return;
+    let errorCode: string | undefined;
+    if (c.res.status >= 400) {
+      try {
+        const payload = (await c.res.clone().json()) as { error?: { code?: unknown } };
+        if (typeof payload.error?.code === 'string') errorCode = payload.error.code;
+      } catch {
+        errorCode = 'internal';
+      }
+    }
+    try {
+      recordAdminAuditEvent(deps.db, {
+        operation: 'put /api/v1/accounts/:id/send-as',
+        outcome: c.res.status < 400 ? 'success' : 'error',
+        actorKeyId: auth.kind === 'api_key' ? auth.keyId : undefined,
+        actorSessionId: auth.kind === 'session' ? auth.sessionId : undefined,
+        actorMemberId: auth.memberId,
+        resourceType: 'account',
+        resourceId: c.req.param('accountId'),
+        ...(errorCode ? { errorCode } : {}),
+      });
+    } catch {
+      // Auditing must not replace the API response.
+    }
+  });
+
   app.use('/api/v1/*', async (c, next) => {
     c.set('restLogger', deps.logger);
     if (
@@ -987,7 +1038,9 @@ export function createRestApi(deps: RestApiDeps): OpenAPIHono<RestEnv> {
       );
     }
     if (publicPaths.has(c.req.path)) return next();
-    const administrative = c.req.path.startsWith('/api/v1/admin/');
+    const administrative =
+      c.req.path.startsWith('/api/v1/admin/') ||
+      (c.req.method === 'PUT' && /^\/api\/v1\/accounts\/[^/]+\/send-as$/.test(c.req.path));
     if (administrative) {
       c.header('cache-control', 'no-store');
       c.header('x-content-type-options', 'nosniff');
@@ -1189,6 +1242,61 @@ export function createRestApi(deps: RestApiDeps): OpenAPIHono<RestEnv> {
     return runJson(c, deps, { operation: 'listLabels', capabilities: ['mail.read'] }, async () => ({
       data: await c.get('restService').listLabels(accountId),
     }));
+  });
+
+  const listSendAsRoute = createRoute({
+    method: 'get',
+    path: '/api/v1/accounts/{accountId}/send-as',
+    operationId: 'listSendAs',
+    summary: 'List sender addresses',
+    description: 'List sender addresses available for an email account.',
+    request: { params: accountParams },
+    ...protectedRoute,
+    responses: {
+      200: {
+        content: { 'application/json': { schema: dataEnvelope(z.array(SendAsIdentitySchema)) } },
+        description: 'Sender addresses',
+      },
+      ...errorResponses,
+    },
+  });
+  app.openapi(listSendAsRoute, (c) => {
+    const { accountId } = c.req.valid('param');
+    return runJson(c, deps, { operation: 'listSendAs', capabilities: ['mail.read'] }, async () => ({
+      data: await c.get('restService').listSendAs(accountId),
+    }));
+  });
+
+  const replaceSendAsRoute = createRoute({
+    method: 'put',
+    path: '/api/v1/accounts/{accountId}/send-as',
+    operationId: 'replaceSendAs',
+    summary: 'Replace configured sender addresses',
+    description: 'Replace the configured Outlook or IMAP aliases for an email account.',
+    request: {
+      params: accountParams,
+      body: { required: true, content: { 'application/json': { schema: ReplaceSendAsRequestSchema } } },
+    },
+    ...protectedRoute,
+    responses: {
+      200: {
+        content: { 'application/json': { schema: dataEnvelope(z.array(SendAsIdentitySchema)) } },
+        description: 'Sender addresses replaced',
+      },
+      ...errorResponses,
+    },
+  });
+  app.openapi(replaceSendAsRoute, (c) => {
+    const { accountId } = c.req.valid('param');
+    const { identities } = c.req.valid('json');
+    return runJson(
+      c,
+      deps,
+      { operation: 'replaceSendAs', capabilities: ['admin.accounts'], quota: false },
+      async () => ({
+        data: await c.get('restService').replaceSendAs(accountId, identities),
+      }),
+    );
   });
 
   const listMessagesRoute = createRoute({

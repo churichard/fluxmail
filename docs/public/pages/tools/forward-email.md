@@ -20,6 +20,7 @@ Required capabilities: `mail.read` + `mail.send`.
 | --- | --- | --- | --- |
 | `accountId` | No | `string` | Account to operate on. Optional when exactly one account is connected. Minimum length: 1. |
 | `messageId` | Yes | `string` | Minimum length: 1. |
+| `from` | No | `string` | Connected address or an available send-as address Format: `email`. |
 | `to` | Yes | array of `string` | Recipients, each "Name <a@x.com>" or "a@x.com" |
 | `cc` | No | array of `string` | Recipients, each "Name <a@x.com>" or "a@x.com" |
 | `comment` | No | `string` | None |
@@ -40,6 +41,11 @@ Required capabilities: `mail.read` + `mail.send`.
     "messageId": {
       "type": "string",
       "minLength": 1
+    },
+    "from": {
+      "type": "string",
+      "format": "email",
+      "description": "Connected address or an available send-as address"
     },
     "to": {
       "type": "array",

@@ -11,11 +11,22 @@ it('advertises portable Gmail search and archive support', () => {
 });
 
 interface ProviderInternals {
+  listSendAs: GmailProvider['listSendAs'];
   gmail: {
     users: {
       settings: {
         sendAs: {
-          list: () => Promise<{ data: { sendAs?: Array<{ isPrimary?: boolean; displayName?: string }> } }>;
+          list: () => Promise<{
+            data: {
+              sendAs?: Array<{
+                sendAsEmail?: string;
+                isPrimary?: boolean;
+                displayName?: string;
+                replyToAddress?: string;
+                verificationStatus?: string;
+              }>;
+            };
+          }>;
         };
       };
     };
@@ -25,7 +36,13 @@ interface ProviderInternals {
 
 function providerWith(
   auth: OAuth2Client,
-  sendAs: Array<{ isPrimary?: boolean; displayName?: string }>,
+  sendAs: Array<{
+    sendAsEmail?: string;
+    isPrimary?: boolean;
+    displayName?: string;
+    replyToAddress?: string;
+    verificationStatus?: string;
+  }>,
   displayName?: string,
 ): ProviderInternals {
   const provider = new GmailProvider({
@@ -392,6 +409,30 @@ describe('GmailProvider getDraft', () => {
 });
 
 describe('GmailProvider sender name', () => {
+  it('lists only the primary and verified aliases with provider metadata', async () => {
+    const provider = providerWith(new OAuth2Client(), [
+      { sendAsEmail: 'me@example.com', isPrimary: true, displayName: 'Primary' },
+      {
+        sendAsEmail: 'sales@example.com',
+        displayName: 'Sales',
+        replyToAddress: 'replies@example.com',
+        verificationStatus: 'accepted',
+      },
+      { sendAsEmail: 'pending@example.com', verificationStatus: 'pending' },
+    ]);
+
+    await expect(provider.listSendAs()).resolves.toEqual([
+      { email: 'me@example.com', name: 'Primary', isPrimary: true, source: 'provider' },
+      {
+        email: 'sales@example.com',
+        name: 'Sales',
+        replyTo: 'replies@example.com',
+        isPrimary: false,
+        source: 'provider',
+      },
+    ]);
+  });
+
   it('uses the primary Gmail send-as display name when configured', async () => {
     const auth = new OAuth2Client();
     const request = vi.spyOn(auth, 'request');
@@ -628,6 +669,55 @@ describe('GmailProvider send', () => {
       provider.send({ bcc: [{ email: 'hidden@example.com' }], subject: 'Hi', body: { text: 'hello' } }),
     ).resolves.toEqual({ id: 'sent_1', threadId: 'thread_1' });
     expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses a verified alias and its Reply-To address in the MIME message', async () => {
+    const send = vi.fn().mockResolvedValue({ data: { id: 'sent_1', threadId: 'thread_1' } });
+    const provider = new GmailProvider({
+      accountId: 'acct_1',
+      email: 'me@example.com',
+      auth: new OAuth2Client(),
+    });
+    const internals = provider as unknown as {
+      gmail: {
+        users: {
+          settings: { sendAs: { list: ReturnType<typeof vi.fn> } };
+          messages: { send: typeof send };
+        };
+      };
+    };
+    internals.gmail = {
+      users: {
+        settings: {
+          sendAs: {
+            list: vi.fn().mockResolvedValue({
+              data: {
+                sendAs: [
+                  { sendAsEmail: 'me@example.com', isPrimary: true },
+                  {
+                    sendAsEmail: 'sales@example.com',
+                    displayName: 'Sales',
+                    replyToAddress: 'replies@example.com',
+                    verificationStatus: 'accepted',
+                  },
+                ],
+              },
+            }),
+          },
+        },
+        messages: { send },
+      },
+    };
+
+    await provider.send({
+      from: 'sales@example.com',
+      to: [{ email: 'customer@example.com' }],
+      body: { text: 'Hello' },
+    });
+
+    const raw = Buffer.from(send.mock.calls[0]![0].requestBody.raw, 'base64url').toString();
+    expect(raw).toContain('From: Sales <sales@example.com>');
+    expect(raw).toContain('Reply-To: replies@example.com');
   });
 
   it('rejects a message with no recipients in any header', async () => {

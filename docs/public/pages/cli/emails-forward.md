@@ -26,6 +26,7 @@ fluxmail emails forward <message-id> [options]
 
 | Option | Required | Details | Default |
 | --- | --- | --- | --- |
+| `--from <address>` | No | Send from an available address | None |
 | `--to <address>` | No | Add a To recipient; repeat as needed | None |
 | `--cc <address>` | No | Add a Cc recipient; repeat as needed | None |
 | `--comment <text>` | No | Add a comment above the forwarded message | None |

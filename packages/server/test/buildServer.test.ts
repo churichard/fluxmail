@@ -56,6 +56,7 @@ describe('toSendRequest', () => {
 
   it('rejects content fields combined with an existing draft id', () => {
     expect(() => toSendRequest({ draftId: 'draft_1', bodyText: 'replacement' })).toThrow(/update the draft/);
+    expect(() => toSendRequest({ draftId: 'draft_1', from: 'sales@example.com' })).toThrow(/update the draft/);
   });
 
   it('rejects replyAll without a reply target', () => {
@@ -74,6 +75,7 @@ describe('MCP permissions', () => {
     'list_folders',
     'list_labels',
     'list_scheduled_emails',
+    'list_send_as',
     'search_emails',
   ];
 
@@ -459,6 +461,39 @@ describe('reply permissions', () => {
 });
 
 describe('tool telemetry', () => {
+  it('records sanitized send-as discovery success and errors', async () => {
+    const { telemetry, capture } = telemetrySpy();
+    const listSendAs = vi
+      .fn()
+      .mockResolvedValueOnce([{ email: 'private-alias@example.com', isPrimary: false, source: 'provider' as const }])
+      .mockRejectedValueOnce(new EmailError('provider_unavailable', 'private discovery response'));
+    const client = await connectMcp({ enforceQuota: () => undefined, listSendAs } as Partial<EmailService>, {
+      telemetry,
+      transport: 'http',
+    });
+
+    await client.callTool({ name: 'list_send_as', arguments: { accountId: 'private-account' } });
+    await client.callTool({ name: 'list_send_as', arguments: { accountId: 'private-account' } });
+
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({ product_surface: 'mcp', operation: 'list_send_as', outcome: 'success' }),
+    );
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({
+        product_surface: 'mcp',
+        operation: 'list_send_as',
+        outcome: 'error',
+        error_code: 'provider_unavailable',
+      }),
+    );
+    const captured = JSON.stringify(capture.mock.calls);
+    expect(captured).not.toContain('private-alias@example.com');
+    expect(captured).not.toContain('private-account');
+    expect(captured).not.toContain('private discovery response');
+  });
+
   it('lists labels and records sanitized success telemetry', async () => {
     const { telemetry, capture } = telemetrySpy();
     const listLabels = vi.fn().mockResolvedValue([{ id: 'private-id', name: 'private-project' }]);

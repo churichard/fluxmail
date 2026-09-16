@@ -101,6 +101,7 @@ export interface ImapProviderOptions {
   store: ImapStateStore;
   imapFactory?: (options: ImapFlowOptions) => ImapFlow;
   smtpFactory?: (credentials: ImapCredentials['smtp']) => Transporter;
+  resolveSender?: (email: string) => EmailAddress | undefined;
 }
 
 interface ParsedHeaders {
@@ -640,11 +641,10 @@ export class ImapProvider implements EmailProvider {
 
   private async compose(input: DraftInput, existingThreading?: ThreadingHeaders): Promise<Buffer> {
     const resolved = input.replyToMessageId ? await this.threadingFor(input) : { input, headers: existingThreading };
-    return composeMessage(
-      resolved.input,
-      { ...(this.options.displayName ? { name: this.options.displayName } : {}), email: this.options.email },
-      resolved.headers,
-    );
+    const sender = resolved.input.from
+      ? (this.options.resolveSender?.(resolved.input.from) ?? { email: resolved.input.from })
+      : { ...(this.options.displayName ? { name: this.options.displayName } : {}), email: this.options.email };
+    return composeMessage(resolved.input, sender, resolved.headers);
   }
 
   private async appendedLocation(
@@ -712,8 +712,11 @@ export class ImapProvider implements EmailProvider {
   async updateDraft(draftId: string, input: DraftInput): Promise<Message> {
     const location = await this.options.store.findByDraftId(draftId);
     if (!location) throw new EmailError('not_found', `No draft with id "${draftId}"`);
+    const current = input.from === undefined ? await this.fetchLocation(location, true) : undefined;
+    const replacementInput =
+      input.from === undefined && current?.from?.email ? { ...input, from: current.from.email } : input;
     const replacement = await this.appendDraft(
-      await this.compose(input, {
+      await this.compose(replacementInput, {
         ...(location.inReplyTo ? { inReplyTo: location.inReplyTo } : {}),
         ...(location.references?.length ? { references: location.references.join(' ') } : {}),
       }),
@@ -735,12 +738,12 @@ export class ImapProvider implements EmailProvider {
     await this.options.store.remove(location.id);
   }
 
-  private async deliver(raw: Buffer, envelopeRecipients: string[]): Promise<string> {
+  private async deliver(raw: Buffer, envelopeRecipients: string[], envelopeFrom: string): Promise<string> {
     if (!envelopeRecipients.length) throw new EmailError('invalid_request', 'Cannot send a message with no recipients');
     try {
       this.smtp ??= this.buildSmtp();
       const info = await this.smtp.sendMail({
-        envelope: { from: this.options.email, to: envelopeRecipients },
+        envelope: { from: envelopeFrom, to: envelopeRecipients },
         raw: stripBccHeader(raw),
       });
       return info.messageId || `smtp_${randomBytes(9).toString('base64url')}`;
@@ -813,6 +816,7 @@ export class ImapProvider implements EmailProvider {
     let raw: Buffer;
     let draftLocation: ImapMessageLocation | undefined;
     let envelopeRecipients: string[];
+    let envelopeFrom: string;
     if ('draftId' in input) {
       draftLocation = await this.options.store.findByDraftId(input.draftId);
       if (!draftLocation) throw new EmailError('not_found', `No draft with id "${input.draftId}"`);
@@ -827,12 +831,14 @@ export class ImapProvider implements EmailProvider {
         ...postalAddresses(parsed.cc),
         ...postalAddresses(parsed.bcc),
       ].map((value) => value.email);
+      envelopeFrom = postalAddresses(parsed.from)[0]?.email ?? this.options.email;
     } else {
       raw = await this.compose(input);
       envelopeRecipients = recipients(input);
+      envelopeFrom = input.from ?? this.options.email;
     }
 
-    const deliveryId = await this.deliver(raw, envelopeRecipients);
+    const deliveryId = await this.deliver(raw, envelopeRecipients, envelopeFrom);
     const warnings: string[] = [];
     let sent: ImapMessageLocation | undefined;
     if (draftLocation && this.options.credentials.saveSent) {

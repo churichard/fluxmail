@@ -8,6 +8,8 @@ Fluxmail connects to Microsoft 365 and Outlook.com through Microsoft Graph. You 
 
 This integration supports Exchange Online mailboxes in Microsoft 365 and personal Outlook.com accounts, including Hotmail addresses. For an on-premises Exchange server without Microsoft Graph access, use [IMAP and SMTP](/docs/connect-an-imap-mailbox).
 
+Mailbox aliases can be registered in Fluxmail and selected when sending. The alias must already belong to the mailbox in Microsoft 365 or Outlook.com. Fluxmail does not create aliases or grant delegated mailbox access. See [Send from another address](/docs/send-as-addresses).
+
 ## 1. Register the application
 
 1. Open the [Microsoft Entra admin center](https://entra.microsoft.com/).

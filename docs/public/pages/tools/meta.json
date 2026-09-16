@@ -16,6 +16,7 @@
     "list-folders",
     "list-labels",
     "list-scheduled-emails",
+    "list-send-as",
     "modify-emails",
     "search-emails",
     "send-email",

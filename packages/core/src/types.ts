@@ -59,6 +59,14 @@ export interface EmailAddress {
   email: string;
 }
 
+export interface SendAsIdentity {
+  email: string;
+  name?: string;
+  replyTo?: string;
+  isPrimary: boolean;
+  source: 'provider' | 'configured';
+}
+
 export type FolderRole = 'inbox' | 'sent' | 'drafts' | 'trash' | 'spam' | 'archive' | 'starred' | 'all';
 
 export interface Folder {
@@ -150,6 +158,8 @@ export interface AttachmentInput {
 }
 
 export interface DraftInput {
+  /** Sender address. The service validates it against the account's known identities. */
+  from?: string;
   /** Optional when derived from a reply (replyToMessageId). */
   to?: EmailAddress[];
   cc?: EmailAddress[];

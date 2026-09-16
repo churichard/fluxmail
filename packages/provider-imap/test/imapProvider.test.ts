@@ -282,10 +282,12 @@ describe('ImapProvider safe folder fallbacks', () => {
       store: new MemoryStore(),
       imapFactory: () => fake as unknown as ImapFlow,
       smtpFactory: () => ({ sendMail }) as unknown as Transporter,
+      resolveSender: (email) => (email === 'sales@example.com' ? { email, name: 'Sales' } : undefined),
     });
 
     await expect(
       provider.send({
+        from: 'sales@example.com',
         to: [{ email: 'you@example.com' }],
         cc: [{ email: 'copy@example.com' }],
         bcc: [{ email: 'hidden@example.com' }],
@@ -300,12 +302,14 @@ describe('ImapProvider safe folder fallbacks', () => {
     expect(sendMail).toHaveBeenCalledWith(
       expect.objectContaining({
         envelope: {
-          from: 'me@example.com',
+          from: 'sales@example.com',
           to: ['you@example.com', 'copy@example.com', 'hidden@example.com'],
         },
       }),
     );
-    expect((sendMail.mock.calls[0]![0] as { raw: Buffer }).raw.toString()).not.toMatch(/^Bcc:/im);
+    const raw = (sendMail.mock.calls[0]![0] as { raw: Buffer }).raw.toString();
+    expect(raw).toContain('From: Sales <sales@example.com>');
+    expect(raw).not.toMatch(/^Bcc:/im);
   });
 
   it('disables draft creation when Drafts is unresolved', async () => {
