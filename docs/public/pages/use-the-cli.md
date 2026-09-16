@@ -1,7 +1,7 @@
 ---
 title: 'Use the CLI'
 description: 'Read and manage email, then configure the Fluxmail instance from the same command line.'
-updated: '2026-07-18'
+updated: '2026-09-16'
 ---
 
 The Fluxmail CLI can read, draft, send, schedule, and organize email. It also configures and runs the service. Mail commands call the same authenticated REST operations for local and remote instances, so permissions and mailbox access rules stay the same across CLI, MCP, and REST.
@@ -36,11 +36,14 @@ List inbox messages, search across mail, or fetch a complete message or thread:
 ```bash
 fluxmail emails list --folder inbox --read false --page-size 20
 fluxmail emails search "from:ann@example.com is:unread quarterly report"
+fluxmail emails search-batch "subject:invoice is:unread" --account <first-account-id> --account <second-account-id>
 fluxmail emails get <message-id>
 fluxmail threads get <thread-id>
 ```
 
-The search string uses Fluxmail's [portable search syntax](/docs/email-search). List responses include `meta.nextPageToken` when another page is available. Pass it back with `--page-token` and the same query and page size. Mail commands print the complete REST JSON envelope, including `data`, pagination metadata, and warnings.
+The search string uses Fluxmail's [portable search syntax](/docs/email-search). Add `--include-snippet true` to request IMAP previews, or pass `false` to suppress previews. List responses include `meta.nextPageToken` when another page is available. Pass it back with `--page-token` and the same query, page size, and snippet setting. Check `meta.exhausted` before treating an empty page as a confirmed negative result.
+
+`emails search-batch` accepts 1 through 20 repeated `--account` options. It prints every account group and exits nonzero if any group fails. Use `--input <file|->` to send an exact batch request with per-account continuation tokens.
 
 Folders are navigable mailbox locations. Labels are Gmail user labels or Outlook categories:
 
@@ -110,7 +113,7 @@ Choose the destination path explicitly:
 fluxmail attachments download <message-id> <attachment-id> --output ./report.pdf
 ```
 
-Fluxmail will not replace an existing file unless you pass `--force`. The command prints JSON metadata after it writes the attachment.
+Fluxmail will not replace an existing file unless you pass `--force`. Attachment IDs are opaque, so pass them exactly as returned. The command prints JSON metadata after it writes the attachment.
 
 ## Send exact REST JSON
 

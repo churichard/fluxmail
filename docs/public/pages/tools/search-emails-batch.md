@@ -1,14 +1,14 @@
 ---
-title: 'Search emails'
-description: 'Search one account with typed portable syntax. The query supports text, from:, to:, subject:, in:, read and starred states, attachments, and date filters.'
+title: 'Search emails batch'
+description: 'Search up to 20 accounts with one portable query and return one result group per account.'
 updated: '2026-07-15'
 ---
 
 <!-- This page is generated from the MCP tool definitions. Run pnpm docs:generate to update it. -->
 
-`search_emails`
+`search_emails_batch`
 
-Search one account with typed portable syntax. The query supports text, from:, to:, subject:, in:, read and starred states, attachments, and date filters.
+Search up to 20 accounts with one portable query and return one result group per account.
 
 ## Permissions
 
@@ -18,9 +18,9 @@ Required capabilities: `mail.read`.
 
 | Name | Required | Type | Details |
 | --- | --- | --- | --- |
-| `accountId` | No | `string` | Account to operate on. Optional when exactly one account is connected. Minimum length: 1. |
+| `accounts` | Yes | array of `object` | None |
 | `query` | Yes | `string` | Typed portable search syntax Minimum length: 1. |
-| `folder` | No | `string` | Folder role (inbox, sent, drafts, trash, spam, starred, archive, all) or a label/folder name. Use all or omit this field to search all mail except Spam and Trash. An IMAP server's \All mailbox may use different rules. Minimum length: 1. |
+| `folder` | No | `inbox` or `sent` or `drafts` or `archive` or `spam` or `trash` or `all` | None |
 | `from` | No | `string` | None |
 | `to` | No | `string` | None |
 | `subject` | No | `string` | None |
@@ -29,9 +29,7 @@ Required capabilities: `mail.read`.
 | `hasAttachment` | No | `boolean` | None |
 | `after` | No | `string` | YYYY-MM-DD received date, inclusive in UTC Minimum length: 1. |
 | `before` | No | `string` | YYYY-MM-DD received date, exclusive in UTC Minimum length: 1. |
-| `rawProviderQuery` | No | `string` | Provider-native Gmail syntax or Outlook KQL for one compatible account |
 | `pageSize` | No | `integer` | Defaults to 25 Minimum: 1. Maximum: 100. |
-| `pageToken` | No | `string` | nextPageToken from a previous call Minimum length: 1. |
 | `includeSnippet` | No | `boolean` | Request or suppress message previews |
 
 <details>
@@ -41,10 +39,27 @@ Required capabilities: `mail.read`.
 {
   "type": "object",
   "properties": {
-    "accountId": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Account to operate on. Optional when exactly one account is connected."
+    "accounts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "accountId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "pageToken": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "accountId"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "maxItems": 20
     },
     "query": {
       "type": "string",
@@ -53,8 +68,15 @@ Required capabilities: `mail.read`.
     },
     "folder": {
       "type": "string",
-      "minLength": 1,
-      "description": "Folder role (inbox, sent, drafts, trash, spam, starred, archive, all) or a label/folder name. Use all or omit this field to search all mail except Spam and Trash. An IMAP server's \\All mailbox may use different rules."
+      "enum": [
+        "inbox",
+        "sent",
+        "drafts",
+        "archive",
+        "spam",
+        "trash",
+        "all"
+      ]
     },
     "from": {
       "type": "string"
@@ -84,20 +106,11 @@ Required capabilities: `mail.read`.
       "minLength": 1,
       "description": "YYYY-MM-DD received date, exclusive in UTC"
     },
-    "rawProviderQuery": {
-      "type": "string",
-      "description": "Provider-native Gmail syntax or Outlook KQL for one compatible account"
-    },
     "pageSize": {
       "type": "integer",
       "minimum": 1,
       "maximum": 100,
       "description": "Defaults to 25"
-    },
-    "pageToken": {
-      "type": "string",
-      "minLength": 1,
-      "description": "nextPageToken from a previous call"
     },
     "includeSnippet": {
       "type": "boolean",
@@ -105,6 +118,7 @@ Required capabilities: `mail.read`.
     }
   },
   "required": [
+    "accounts",
     "query"
   ],
   "additionalProperties": false,

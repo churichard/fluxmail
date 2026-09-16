@@ -68,7 +68,17 @@ function fixture() {
       { email: 'private-alias@example.com', isPrimary: false, source: 'provider' as const },
     ]),
     replaceSendAs: vi.fn(async () => [{ email: 'me@example.com', isPrimary: true, source: 'configured' as const }]),
-    listMessages: vi.fn(async () => ({ items: [message], nextPageToken: 'next_1' })),
+    listMessages: vi.fn(async () => ({ items: [message], nextPageToken: 'next_1', exhausted: false })),
+    searchMessagesBatch: vi.fn(async () => ({
+      groups: [
+        { accountId: 'acct_1', page: { items: [message], exhausted: true } },
+        {
+          accountId: 'acct_2',
+          error: { code: 'provider_unavailable', message: 'Search timed out.', exhausted: false as const },
+        },
+      ],
+      exhausted: false,
+    })),
     getMessage: vi.fn(async () => message),
     getThread: vi.fn(async () => ({ id: 'thread_1', subject: 'Hello', messages: [message] })),
     createDraft: vi.fn(async () => ({ ...message, draftId: 'draft_1', flags: { ...message.flags, draft: true } })),
@@ -252,6 +262,33 @@ describe('REST email operations', () => {
     expect(await listed.json()).toMatchObject({ data: [{ id: 'msg_1' }], meta: { nextPageToken: 'next_1' } });
     expect(service.listMessages).toHaveBeenCalledWith('acct_1', { read: false }, { pageSize: 25 });
 
+    const batch = await app.request(
+      '/api/v1/messages/search',
+      jsonRequest(
+        'POST',
+        {
+          accounts: [{ accountId: 'acct_1' }, { accountId: 'acct_2', pageToken: 'continue_2' }],
+          query: 'subject:report',
+          folder: 'inbox',
+          includeSnippet: true,
+        },
+        auth,
+      ),
+    );
+    expect(batch.status).toBe(200);
+    expect(await batch.json()).toMatchObject({
+      data: [
+        { accountId: 'acct_1', meta: { exhausted: true } },
+        { accountId: 'acct_2', error: { code: 'provider_unavailable', exhausted: false } },
+      ],
+      meta: { exhausted: false },
+    });
+    expect(service.searchMessagesBatch).toHaveBeenCalledWith({
+      accounts: [{ accountId: 'acct_1' }, { accountId: 'acct_2', pageToken: 'continue_2' }],
+      query: { subject: 'report', folder: 'inbox' },
+      includeSnippet: true,
+    });
+
     expect((await app.request('/api/v1/accounts/acct_1/messages/msg_1', { headers: auth })).status).toBe(200);
     expect((await app.request('/api/v1/accounts/acct_1/threads/thread_1', { headers: auth })).status).toBe(200);
 
@@ -401,6 +438,12 @@ describe('REST email operations', () => {
     expect((await app.request('/api/v1/status', { headers: auth })).status).toBe(200);
     const accounts = await app.request('/api/v1/accounts', { headers: auth });
     expect(accounts.status).toBe(403);
+    const batch = await app.request(
+      '/api/v1/messages/search',
+      jsonRequest('POST', { accounts: [{ accountId: 'acct_1' }], query: 'invoice' }, auth),
+    );
+    expect(batch.status).toBe(403);
+    expect(service.searchMessagesBatch).not.toHaveBeenCalled();
   });
 
   it('returns JSON errors for malformed bodies and oversized attachments', async () => {
@@ -472,11 +515,54 @@ describe('REST email operations', () => {
         })
       ).status,
     ).toBe(400);
+    const successfulBatchQuery = 'subject:private-success-search';
+    service.searchMessagesBatch.mockResolvedValueOnce({
+      groups: [{ accountId: 'acct_1', page: { items: [], exhausted: true } }],
+      exhausted: true,
+    });
+    expect(
+      (
+        await app.request(
+          '/api/v1/messages/search',
+          jsonRequest('POST', { accounts: [{ accountId: 'acct_1' }], query: successfulBatchQuery }, auth),
+        )
+      ).status,
+    ).toBe(200);
+    const privateBatchQuery = 'subject:private-batch-search';
+    expect(
+      (
+        await app.request(
+          '/api/v1/messages/search',
+          jsonRequest(
+            'POST',
+            { accounts: [{ accountId: 'acct_1' }, { accountId: 'acct_2' }], query: privateBatchQuery },
+            auth,
+          ),
+        )
+      ).status,
+    ).toBe(200);
     service.listLabels.mockRejectedValueOnce(new EmailError('permission_denied', 'private-project denied'));
     expect((await app.request('/api/v1/accounts/acct_1/labels', { headers: auth })).status).toBe(403);
     expect(capture).toHaveBeenCalledWith(
       'operation completed',
       expect.objectContaining({ product_surface: 'rest', operation: 'getApiInfo', outcome: 'success' }),
+    );
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({
+        product_surface: 'rest',
+        operation: 'searchMessages',
+        outcome: 'success',
+      }),
+    );
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({
+        product_surface: 'rest',
+        operation: 'searchMessages',
+        outcome: 'error',
+        error_code: 'account_failure',
+      }),
     );
     expect(capture).toHaveBeenCalledWith(
       'operation completed',
@@ -512,6 +598,9 @@ describe('REST email operations', () => {
     expect(JSON.stringify(capture.mock.calls)).not.toContain('private-project');
     expect(JSON.stringify(capture.mock.calls)).not.toContain('private-alias@example.com');
     expect(JSON.stringify(capture.mock.calls)).not.toContain(privateQuery);
+    expect(JSON.stringify(capture.mock.calls)).not.toContain(privateBatchQuery);
+    expect(JSON.stringify(capture.mock.calls)).not.toContain(successfulBatchQuery);
+    expect(JSON.stringify(capture.mock.calls)).not.toContain('acct_2');
     expect(warn).toHaveBeenCalledWith(
       'rest.operation_failed',
       'private-project denied',

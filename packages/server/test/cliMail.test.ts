@@ -214,6 +214,80 @@ describe('CLI email commands', () => {
     expect(requests.at(-1)?.url.searchParams.get('query')).toBe('-has:attachment quarterly');
   });
 
+  it('posts grouped searches and exits nonzero when one account fails', async () => {
+    const { requests } = setupRemote((request) => {
+      if (request.url.pathname !== '/api/v1/messages/search') return envelope([]);
+      if ((request.body as { query?: string } | undefined)?.query === 'subject:complete') {
+        return envelope([{ accountId: 'acct_1', data: [], meta: { exhausted: true } }], {
+          meta: { exhausted: true },
+        });
+      }
+      return envelope(
+        [
+          { accountId: 'acct_1', data: [], meta: { exhausted: true } },
+          {
+            accountId: 'acct_2',
+            error: { code: 'provider_unavailable', message: 'Search timed out.', exhausted: false },
+          },
+        ],
+        { meta: { exhausted: false } },
+      );
+    });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const capture = vi.fn();
+    const telemetry = { capture, shutdown: vi.fn().mockResolvedValue(undefined) };
+
+    await run(['emails', 'search-batch', 'subject:complete', '--account', 'acct_1'], telemetry);
+
+    await run(
+      [
+        'emails',
+        'search-batch',
+        'subject:report',
+        '--account',
+        'acct_1',
+        '--account',
+        'acct_2',
+        '--folder',
+        'inbox',
+        '--include-snippet',
+        'true',
+      ],
+      telemetry,
+    );
+
+    const request = requests.at(-1)!;
+    expect(request.url.pathname).toBe('/api/v1/messages/search');
+    expect(request.method).toBe('POST');
+    expect(request.body).toEqual({
+      accounts: [{ accountId: 'acct_1' }, { accountId: 'acct_2' }],
+      query: 'subject:report',
+      folder: 'inbox',
+      includeSnippet: true,
+    });
+    expect(process.exitCode).toBe(1);
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({
+        product_surface: 'cli',
+        operation: 'emails search-batch',
+        outcome: 'error',
+        error_code: 'account_failure',
+      }),
+    );
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({
+        product_surface: 'cli',
+        operation: 'emails search-batch',
+        outcome: 'success',
+      }),
+    );
+    expect(JSON.stringify(capture.mock.calls)).not.toContain('subject:report');
+    expect(JSON.stringify(capture.mock.calls)).not.toContain('subject:complete');
+    expect(JSON.stringify(capture.mock.calls)).not.toContain('acct_1');
+  });
+
   it('resolves a global account selector by email', async () => {
     const { requests } = setupRemote();
     vi.spyOn(console, 'log').mockImplementation(() => {});

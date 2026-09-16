@@ -11,6 +11,7 @@ import {
   type EmailQuery,
   type ModifyAction,
   type PageOpts,
+  type PortableEmailQuery,
   type SearchDiagnostic,
 } from '@fluxmail/core';
 import type { ConfigurationService, FluxmailConfig } from '../config.js';
@@ -57,7 +58,7 @@ const messageId = id.openapi({ example: 'msg_123' });
 const threadId = id.openapi({ example: 'thread_123' });
 const draftId = id.openapi({ example: 'draft_123' });
 const scheduleId = id.openapi({ example: 'schedule_123' });
-const attachmentId = id.openapi({ example: 'attachment_123' });
+const attachmentId = id.describe('Opaque attachment ID returned by message metadata').openapi({ example: 'part:1.2' });
 const isoDate = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected an ISO date in YYYY-MM-DD format')
@@ -276,23 +277,53 @@ function dataEnvelope<T extends z.ZodTypeAny>(schema: T) {
   return z.object({ data: schema, warnings: z.array(z.string()).optional() }).strict();
 }
 
+const SearchPageMetaSchema = z
+  .object({
+    nextPageToken: z.string().optional(),
+    exhausted: z.boolean(),
+    diagnostics: z.array(SearchDiagnosticSchema).optional(),
+    incomplete: z.literal(true).optional(),
+    incompleteReason: z.enum(['scan_limit', 'provider_limit', 'time_limit']).optional(),
+    inspectedCandidates: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .openapi('SearchPageMeta');
+
 function pagedEnvelope<T extends z.ZodTypeAny>(schema: T) {
   return z
     .object({
       data: z.array(schema),
-      meta: z
-        .object({
-          nextPageToken: z.string().optional(),
-          diagnostics: z.array(SearchDiagnosticSchema).optional(),
-          incomplete: z.literal(true).optional(),
-          incompleteReason: z.enum(['scan_limit', 'provider_limit']).optional(),
-          inspectedCandidates: z.number().int().nonnegative().optional(),
-        })
-        .strict(),
+      meta: SearchPageMetaSchema,
       warnings: z.array(z.string()).optional(),
     })
     .strict();
 }
+
+const BatchSearchResponseSchema = z
+  .object({
+    data: z.array(
+      z.union([
+        z.object({ accountId: z.string(), data: z.array(MessageSchema), meta: SearchPageMetaSchema }).strict(),
+        z
+          .object({
+            accountId: z.string(),
+            error: z
+              .object({
+                code: z.string(),
+                message: z.string(),
+                data: z.record(z.unknown()).optional(),
+                exhausted: z.literal(false),
+              })
+              .strict(),
+          })
+          .strict(),
+      ]),
+    ),
+    meta: z.object({ exhausted: z.boolean() }).strict(),
+    warnings: z.array(z.string()).optional(),
+  })
+  .strict()
+  .openapi('BatchSearchResponse');
 
 const errorResponses = {
   400: { content: { 'application/json': { schema: ErrorSchema } }, description: 'Invalid request' },
@@ -436,8 +467,33 @@ const messageQuerySchema = z
       .regex(/^(?:[1-9]|[1-9][0-9]|100)$/)
       .optional(),
     pageToken: z.string().min(1).optional(),
+    includeSnippet: z.enum(['true', 'false']).optional(),
   })
   .strict();
+
+const portableFolder = z.enum(['inbox', 'sent', 'drafts', 'archive', 'spam', 'trash', 'all']);
+const BatchSearchRequestSchema = z
+  .object({
+    accounts: z
+      .array(z.object({ accountId, pageToken: z.string().min(1).optional() }).strict())
+      .min(1)
+      .max(20),
+    query: z.string().min(1),
+    folder: portableFolder.optional(),
+    text: z.string().optional(),
+    from: z.string().optional(),
+    to: z.string().optional(),
+    subject: z.string().optional(),
+    read: z.boolean().optional(),
+    starred: z.boolean().optional(),
+    hasAttachment: z.boolean().optional(),
+    after: isoDate.optional(),
+    before: isoDate.optional(),
+    pageSize: z.number().int().min(1).max(100).optional(),
+    includeSnippet: z.boolean().optional(),
+  })
+  .strict()
+  .openapi('BatchSearchRequest');
 
 const MODIFY_CAPABILITIES: Record<ModifyActionName, McpCapability> = {
   markRead: 'mail.organize',
@@ -563,6 +619,7 @@ function safeAttachmentFilename(filename: string): string {
 interface JsonResult {
   data: unknown;
   meta?: Record<string, unknown>;
+  operationFailed?: boolean;
 }
 
 async function runJson(
@@ -662,7 +719,8 @@ async function runJson(
       if (reservation) {
         completeIdempotencyKey(deps.db, { ...reservation, responseStatus: status, responseBody: body });
       }
-      outcome = 'success';
+      outcome = result.operationFailed ? 'error' : 'success';
+      if (result.operationFailed) errorCode = 'account_failure';
       return new Response(body, {
         status,
         headers: { 'content-type': 'application/json; charset=UTF-8', 'cache-control': 'no-store' },
@@ -826,6 +884,7 @@ function toEmailQuery(input: z.infer<typeof messageQuerySchema>): {
     page: {
       ...(input.pageSize ? { pageSize: Number(input.pageSize) } : {}),
       ...(input.pageToken ? { pageToken: input.pageToken } : {}),
+      ...(input.includeSnippet !== undefined ? { includeSnippet: input.includeSnippet === 'true' } : {}),
     },
   };
 }
@@ -1321,6 +1380,7 @@ export function createRestApi(deps: RestApiDeps): OpenAPIHono<RestEnv> {
         data: result.items,
         meta: {
           ...(result.nextPageToken ? { nextPageToken: result.nextPageToken } : {}),
+          exhausted: result.exhausted,
           ...([...diagnostics, ...(result.diagnostics ?? [])].length
             ? { diagnostics: [...diagnostics, ...(result.diagnostics ?? [])] }
             : {}),
@@ -1331,6 +1391,77 @@ export function createRestApi(deps: RestApiDeps): OpenAPIHono<RestEnv> {
       };
     });
   });
+
+  const batchSearchRoute = createRoute({
+    method: 'post',
+    path: '/api/v1/messages/search',
+    operationId: 'searchMessages',
+    summary: 'Search multiple accounts',
+    description: 'Search up to 20 email accounts with one portable query.',
+    request: {
+      body: { content: { 'application/json': { schema: BatchSearchRequestSchema } }, required: true },
+    },
+    ...protectedRoute,
+    responses: {
+      200: {
+        content: { 'application/json': { schema: BatchSearchResponseSchema } },
+        description: 'Grouped search results',
+      },
+      ...errorResponses,
+    },
+  });
+  app.openapi(batchSearchRoute, (c) =>
+    runJson(c, deps, { operation: 'searchMessages', capabilities: ['mail.read'] }, async () => {
+      const input = c.req.valid('json');
+      const parsed = parseEmailSearch(input.query);
+      if (!parsed.valid) {
+        throw new EmailError('invalid_request', parsed.diagnostics.map((item) => item.message).join(' '), {
+          diagnostics: parsed.diagnostics,
+        });
+      }
+      const structured: EmailQuery = {};
+      for (const key of ['folder', 'text', 'from', 'to', 'subject', 'after', 'before'] as const) {
+        if (input[key] !== undefined) structured[key] = input[key];
+      }
+      for (const key of ['read', 'starred', 'hasAttachment'] as const) {
+        if (input[key] !== undefined) structured[key] = input[key];
+      }
+      const merged = mergeEmailQueries(parsed.query, structured);
+      if (!merged.success) {
+        throw new EmailError('invalid_request', merged.diagnostics.map((item) => item.message).join(' '), {
+          diagnostics: merged.diagnostics,
+        });
+      }
+      const result = await c.get('restService').searchMessagesBatch({
+        accounts: input.accounts,
+        query: merged.query as PortableEmailQuery,
+        ...(input.pageSize !== undefined ? { pageSize: input.pageSize } : {}),
+        ...(input.includeSnippet !== undefined ? { includeSnippet: input.includeSnippet } : {}),
+      });
+      return {
+        data: result.groups.map((group) =>
+          group.page
+            ? {
+                accountId: group.accountId,
+                data: group.page.items,
+                meta: {
+                  exhausted: group.page.exhausted,
+                  ...(group.page.nextPageToken ? { nextPageToken: group.page.nextPageToken } : {}),
+                  ...(group.page.diagnostics ? { diagnostics: group.page.diagnostics } : {}),
+                  ...(group.page.incomplete ? { incomplete: true as const } : {}),
+                  ...(group.page.incompleteReason ? { incompleteReason: group.page.incompleteReason } : {}),
+                  ...(group.page.inspectedCandidates !== undefined
+                    ? { inspectedCandidates: group.page.inspectedCandidates }
+                    : {}),
+                },
+              }
+            : { accountId: group.accountId, error: group.error },
+        ),
+        meta: { exhausted: result.exhausted },
+        operationFailed: result.groups.some((group) => group.error !== undefined),
+      };
+    }),
+  );
 
   const getMessageRoute = createRoute({
     method: 'get',

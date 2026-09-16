@@ -1,7 +1,7 @@
 ---
 title: 'Build with REST'
 description: 'Connect an app or script to the Fluxmail REST API and make your first requests.'
-updated: '2026-07-17'
+updated: '2026-09-16'
 ---
 
 Fluxmail provides the same REST API for Gmail, Outlook, and IMAP/SMTP mailboxes. This guide follows a common workflow: find a mailbox, list its messages, fetch one message, and mark it as read.
@@ -56,9 +56,26 @@ curl "$FLUXMAIL_API_URL/accounts/<account-id>/messages?folder=inbox&pageSize=10"
   -H "Authorization: Bearer $FLUXMAIL_API_KEY"
 ```
 
-List responses contain message metadata and snippets. Add filters such as `read=false`, `from=person@example.com`, or `text=invoice` when needed. The `query` parameter accepts [portable search syntax](/docs/email-search).
+List responses contain message metadata. Gmail and Outlook include their native snippets by default. Add `includeSnippet=true` to request IMAP previews, or use `includeSnippet=false` to suppress previews from every provider. Filters such as `read=false`, `from=person@example.com`, or `text=invoice` narrow the results. The `query` parameter accepts [portable search syntax](/docs/email-search).
 
-If the response includes `meta.nextPageToken`, pass it as `pageToken` with the same account, query, and page size. Check `meta.incomplete` before treating an empty page as no matches. See [List messages](/docs/rest-api/list-messages) for all filters.
+If the response includes `meta.nextPageToken`, pass it as `pageToken` with the same account, query, page size, and snippet setting. Treat an empty page as a confirmed negative result only when `meta.exhausted` is `true`. See [List messages](/docs/rest-api/list-messages) for all filters.
+
+Search several accounts with one request:
+
+```bash
+curl "$FLUXMAIL_API_URL/messages/search" \
+  -X POST \
+  -H "Authorization: Bearer $FLUXMAIL_API_KEY" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "accounts": [{"accountId": "<first-account-id>"}, {"accountId": "<second-account-id>"}],
+    "query": "subject:invoice is:unread",
+    "pageSize": 25,
+    "includeSnippet": true
+  }'
+```
+
+The response has one group per account. Account errors stay in their group, so successful results remain available. See [Search multiple accounts](/docs/rest-api/search-messages) for the request and response schemas.
 
 ## Get the complete message
 
@@ -70,6 +87,8 @@ curl "$FLUXMAIL_API_URL/accounts/<account-id>/messages/<message-id>" \
 ```
 
 Use [Get a thread](/docs/rest-api/get-thread) instead when you need the complete conversation.
+
+Treat attachment IDs as opaque strings. Keep the ID exactly as returned and pass it to the download operation. For example, an IMAP attachment ID can look like `part:1.2`.
 
 ## Mark the message as read
 

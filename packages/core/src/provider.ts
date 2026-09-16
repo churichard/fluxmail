@@ -6,8 +6,8 @@ import type {
   Folder,
   Label,
   Message,
+  MessageSearchPage,
   ModifyAction,
-  Page,
   PageOpts,
   SendResult,
   SendAsIdentity,
@@ -39,7 +39,7 @@ export interface EmailProvider {
   listSendAs?(): Promise<SendAsIdentity[]>;
 
   /** Metadata-level listing (no bodies). */
-  listMessages(q: EmailQuery, page?: PageOpts): Promise<Page<Message>>;
+  listMessages(q: EmailQuery, page?: PageOpts): Promise<MessageSearchPage>;
   /** Full message including body and attachment metadata. */
   getMessage(id: string, opts?: GetMessageOpts): Promise<Message>;
   getThread(threadId: string): Promise<Thread>;

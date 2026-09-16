@@ -77,6 +77,7 @@ describe('MCP permissions', () => {
     'list_scheduled_emails',
     'list_send_as',
     'search_emails',
+    'search_emails_batch',
   ];
 
   async function toolNames(options: McpServerOptions): Promise<string[]> {
@@ -249,6 +250,85 @@ describe('MCP typed search', () => {
     });
     expect(duplicate.isError).toBe(true);
     expect(listMessages).not.toHaveBeenCalled();
+  });
+
+  it('returns mixed batch results and marks all-account failures as tool errors', async () => {
+    const searchMessagesBatch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        groups: [
+          { accountId: 'acct_1', page: { items: [], exhausted: true } },
+          {
+            accountId: 'acct_2',
+            error: { code: 'provider_unavailable', message: 'Search timed out.', exhausted: false },
+          },
+        ],
+        exhausted: false,
+      })
+      .mockResolvedValueOnce({
+        groups: [
+          {
+            accountId: 'acct_2',
+            error: { code: 'provider_unavailable', message: 'Search timed out.', exhausted: false },
+          },
+        ],
+        exhausted: false,
+      })
+      .mockResolvedValueOnce({
+        groups: [{ accountId: 'acct_1', page: { items: [], exhausted: true } }],
+        exhausted: true,
+      });
+    const capture = vi.fn();
+    const client = await connectMcp({ enforceQuota: () => undefined, searchMessagesBatch } as Partial<EmailService>, {
+      permissions: permissionPolicyForProfile('read-only'),
+      telemetry: { capture, shutdown: async () => undefined },
+    });
+
+    const mixed = await client.callTool({
+      name: 'search_emails_batch',
+      arguments: {
+        accounts: [{ accountId: 'acct_1' }, { accountId: 'acct_2' }],
+        query: 'subject:report',
+        includeSnippet: true,
+      },
+    });
+    expect(mixed.isError).toBeFalsy();
+    expect(searchMessagesBatch).toHaveBeenNthCalledWith(1, {
+      accounts: [{ accountId: 'acct_1' }, { accountId: 'acct_2' }],
+      query: { subject: 'report' },
+      includeSnippet: true,
+    });
+
+    const failed = await client.callTool({
+      name: 'search_emails_batch',
+      arguments: { accounts: [{ accountId: 'acct_2' }], query: 'subject:report' },
+    });
+    expect(failed.isError).toBe(true);
+    const succeeded = await client.callTool({
+      name: 'search_emails_batch',
+      arguments: { accounts: [{ accountId: 'acct_1' }], query: 'subject:complete' },
+    });
+    expect(succeeded.isError).toBeFalsy();
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({
+        product_surface: 'mcp',
+        operation: 'search_emails_batch',
+        outcome: 'error',
+        error_code: 'account_failure',
+      }),
+    );
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({
+        product_surface: 'mcp',
+        operation: 'search_emails_batch',
+        outcome: 'success',
+      }),
+    );
+    expect(JSON.stringify(capture.mock.calls)).not.toContain('subject:report');
+    expect(JSON.stringify(capture.mock.calls)).not.toContain('subject:complete');
+    expect(JSON.stringify(capture.mock.calls)).not.toContain('acct_1');
   });
 });
 

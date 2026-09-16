@@ -17,8 +17,8 @@ import {
   type Folder,
   type Label,
   type Message,
+  type MessageSearchPage,
   type ModifyAction,
-  type Page,
   type PageOpts,
   type PortableEmailQuery,
   type SearchCapabilities,
@@ -93,8 +93,64 @@ export interface ScheduledSendInfo {
   sentThreadId?: string;
 }
 
+export interface BatchSearchAccount {
+  accountId: string;
+  pageToken?: string;
+}
+
+export interface BatchSearchInput {
+  accounts: BatchSearchAccount[];
+  query: PortableEmailQuery;
+  pageSize?: number;
+  includeSnippet?: boolean;
+}
+
+export interface BatchSearchError {
+  code: string;
+  message: string;
+  data?: Record<string, unknown>;
+  exhausted: false;
+}
+
+export interface BatchSearchGroup {
+  accountId: string;
+  page?: MessageSearchPage;
+  error?: BatchSearchError;
+}
+
+export interface BatchSearchResult {
+  groups: BatchSearchGroup[];
+  exhausted: boolean;
+}
+
 const SCHEDULE_GRACE_MS = 60_000;
 const SCHEDULE_MAX_HORIZON_MS = 365 * 24 * 3_600_000;
+const SEARCH_SOFT_BUDGET_MS = 10_000;
+const SEARCH_HARD_DEADLINE_MS = 15_000;
+const BATCH_SEARCH_CONCURRENCY = 3;
+
+function searchTimeoutError(): EmailError {
+  return new EmailError('provider_unavailable', 'The search did not finish before the provider deadline.', {
+    reason: 'search_timeout',
+    exhausted: false,
+  });
+}
+
+function batchError(error: unknown): BatchSearchError {
+  if (isEmailError(error)) {
+    return {
+      code: error.code,
+      message: error.message,
+      ...(error.data ? { data: error.data } : {}),
+      exhausted: false,
+    };
+  }
+  return {
+    code: 'provider_unavailable',
+    message: 'The email provider could not complete the search.',
+    exhausted: false,
+  };
+}
 
 function assertSearchCapabilities(capabilities: SearchCapabilities, query: EmailQuery): void {
   const portableQuery: PortableEmailQuery = {
@@ -428,7 +484,7 @@ export class EmailService {
     ];
   }
 
-  listMessages(accountId: string | undefined, q: EmailQuery, page: PageOpts = {}): Promise<Page<Message>> {
+  async listMessages(accountId: string | undefined, q: EmailQuery, page: PageOpts = {}): Promise<MessageSearchPage> {
     const normalized = normalizeEmailQuery(q);
     if (!normalized.success) {
       throw new EmailError('invalid_request', normalized.diagnostics.map((item) => item.message).join(' '), {
@@ -437,35 +493,121 @@ export class EmailService {
     }
     const query = normalized.query;
     const pageSize = Math.min(Math.max(page.pageSize ?? 25, 1), 100);
-    return this.withProvider(accountId, async (provider, resolvedId, account) => {
-      assertSearchCapabilities(provider.capabilities.search, query);
-      const providerToken = page.pageToken
-        ? this.cursorCodec.decode(page.pageToken, {
-            accountId: resolvedId,
-            provider: account.provider,
-            query,
-            pageSize,
-          })
-        : undefined;
-      const result = await provider.listMessages(query, {
-        pageSize,
-        ...(providerToken ? { pageToken: providerToken } : {}),
+    const ownsController = page.signal === undefined;
+    const controller = ownsController ? new AbortController() : undefined;
+    const signal = page.signal ?? controller!.signal;
+    const startedAt = Date.now();
+    const softDeadlineAt = page.softDeadlineAt ?? startedAt + SEARCH_SOFT_BUDGET_MS;
+    const hardDeadlineAt = startedAt + SEARCH_HARD_DEADLINE_MS;
+    const timeout = ownsController
+      ? setTimeout(() => controller!.abort(searchTimeoutError()), Math.max(0, hardDeadlineAt - Date.now()))
+      : undefined;
+    let rejectOnAbort: (() => void) | undefined;
+    try {
+      const operation = this.withProvider(accountId, async (provider, resolvedId, account) => {
+        assertSearchCapabilities(provider.capabilities.search, query);
+        const providerToken = page.pageToken
+          ? this.cursorCodec.decode(page.pageToken, {
+              accountId: resolvedId,
+              provider: account.provider,
+              query,
+              pageSize,
+              ...(page.includeSnippet !== undefined ? { includeSnippet: page.includeSnippet } : {}),
+            })
+          : undefined;
+        const result = await provider.listMessages(query, {
+          pageSize,
+          ...(providerToken ? { pageToken: providerToken } : {}),
+          ...(page.includeSnippet !== undefined ? { includeSnippet: page.includeSnippet } : {}),
+          signal,
+          softDeadlineAt,
+        });
+        return {
+          ...result,
+          exhausted: result.exhausted ?? (!result.nextPageToken && !result.incomplete),
+          ...(result.nextPageToken
+            ? {
+                nextPageToken: this.cursorCodec.encode({
+                  accountId: resolvedId,
+                  provider: account.provider,
+                  query,
+                  pageSize,
+                  ...(page.includeSnippet !== undefined ? { includeSnippet: page.includeSnippet } : {}),
+                  providerToken: result.nextPageToken,
+                }),
+              }
+            : { nextPageToken: undefined }),
+        };
       });
-      return {
-        ...result,
-        ...(result.nextPageToken
-          ? {
-              nextPageToken: this.cursorCodec.encode({
-                accountId: resolvedId,
-                provider: account.provider,
-                query,
-                pageSize,
-                providerToken: result.nextPageToken,
-              }),
-            }
-          : { nextPageToken: undefined }),
-      };
-    });
+      const aborted = new Promise<never>((_, reject) => {
+        rejectOnAbort = () => reject(searchTimeoutError());
+        signal.addEventListener('abort', rejectOnAbort, { once: true });
+        if (signal.aborted) rejectOnAbort();
+      });
+      return await Promise.race([operation, aborted]);
+    } catch (error) {
+      if (signal.aborted) throw searchTimeoutError();
+      throw error;
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      if (rejectOnAbort) signal.removeEventListener('abort', rejectOnAbort);
+    }
+  }
+
+  async searchMessagesBatch(input: BatchSearchInput): Promise<BatchSearchResult> {
+    if (input.accounts.length < 1 || input.accounts.length > 20) {
+      throw new EmailError('invalid_request', 'Batch search requires between 1 and 20 accounts.');
+    }
+    const seen = new Set<string>();
+    for (const account of input.accounts) {
+      if (seen.has(account.accountId)) throw new EmailError('invalid_request', 'Batch account IDs must be distinct.');
+      seen.add(account.accountId);
+      this.assertAccountAccess(account.accountId);
+    }
+    const normalized = normalizeEmailQuery(input.query);
+    if (!normalized.success) {
+      throw new EmailError('invalid_request', normalized.diagnostics.map((item) => item.message).join(' '), {
+        diagnostics: normalized.diagnostics,
+      });
+    }
+    const pageSize = Math.min(Math.max(input.pageSize ?? 25, 1), 100);
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    const softDeadlineAt = startedAt + SEARCH_SOFT_BUDGET_MS;
+    const timeout = setTimeout(() => controller.abort(searchTimeoutError()), SEARCH_HARD_DEADLINE_MS);
+    const groups: BatchSearchGroup[] = [];
+    let nextIndex = 0;
+    const worker = async () => {
+      for (;;) {
+        const index = nextIndex++;
+        if (index >= input.accounts.length) return;
+        const account = input.accounts[index]!;
+        if (controller.signal.aborted) {
+          groups[index] = { accountId: account.accountId, error: batchError(searchTimeoutError()) };
+          continue;
+        }
+        try {
+          const page = await this.listMessages(account.accountId, normalized.query, {
+            pageSize,
+            ...(account.pageToken ? { pageToken: account.pageToken } : {}),
+            ...(input.includeSnippet !== undefined ? { includeSnippet: input.includeSnippet } : {}),
+            signal: controller.signal,
+            softDeadlineAt,
+          });
+          groups[index] = { accountId: account.accountId, page };
+        } catch (error) {
+          groups[index] = { accountId: account.accountId, error: batchError(error) };
+        }
+      }
+    };
+    try {
+      await Promise.all(
+        Array.from({ length: Math.min(BATCH_SEARCH_CONCURRENCY, input.accounts.length) }, () => worker()),
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
+    return { groups, exhausted: groups.every((group) => group.page?.exhausted === true) };
   }
 
   getMessage(accountId: string | undefined, id: string): Promise<Message> {

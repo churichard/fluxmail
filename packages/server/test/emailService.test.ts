@@ -658,8 +658,8 @@ describe('EmailService search pagination', () => {
   it('normalizes queries and wraps provider cursors in a signed server token', async () => {
     const listMessages = vi
       .fn()
-      .mockResolvedValueOnce({ items: [], nextPageToken: 'provider-page-2' })
-      .mockResolvedValueOnce({ items: [] });
+      .mockResolvedValueOnce({ items: [], nextPageToken: 'provider-page-2', exhausted: false })
+      .mockResolvedValueOnce({ items: [], exhausted: true });
     const account = {
       id: 'acct_1',
       provider: 'gmail' as const,
@@ -677,7 +677,11 @@ describe('EmailService search pagination', () => {
     const first = await service.listMessages(account.id, { text: '  quarterly   report ' }, { pageSize: 10 });
     expect(first.nextPageToken).toMatch(/^[^.]+\.[^.]+$/);
     expect(first.nextPageToken).not.toContain('provider-page-2');
-    expect(listMessages).toHaveBeenNthCalledWith(1, { text: 'quarterly report' }, { pageSize: 10 });
+    expect(listMessages).toHaveBeenNthCalledWith(
+      1,
+      { text: 'quarterly report' },
+      expect.objectContaining({ pageSize: 10 }),
+    );
 
     await service.listMessages(
       account.id,
@@ -690,10 +694,7 @@ describe('EmailService search pagination', () => {
     expect(listMessages).toHaveBeenNthCalledWith(
       2,
       { text: 'quarterly report' },
-      {
-        pageSize: 10,
-        pageToken: 'provider-page-2',
-      },
+      expect.objectContaining({ pageSize: 10, pageToken: 'provider-page-2' }),
     );
   });
 
@@ -815,6 +816,158 @@ describe('EmailService search pagination', () => {
     await service.listMessages(account.id, { rawProviderQuery: 'has:attachment' });
 
     expect(listMessages).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps successful batch groups when another account fails', async () => {
+    const accounts = ['acct_1', 'acct_2', 'acct_3'].map((id) => ({
+      id,
+      provider: 'gmail' as const,
+      email: `${id}@example.com`,
+      status: 'active' as const,
+    }));
+    const providers = new Map(
+      accounts.map((account, index) => [
+        account.id,
+        {
+          capabilities: { search: supportedSearch },
+          listMessages: vi.fn(async () => {
+            if (index === 1) throw new EmailError('provider_unavailable', 'temporary provider failure');
+            return { items: [], exhausted: index === 0, ...(index === 2 ? { nextPageToken: 'next' } : {}) };
+          }),
+        },
+      ]),
+    );
+    const registry = {
+      getAccount: (id: string) => accounts.find((account) => account.id === id)!,
+      getProvider: (id: string) => providers.get(id)!,
+      markStatus: vi.fn(),
+    };
+    const service = new EmailService(registry as never, testDb(), undefined, Buffer.alloc(32, 7));
+
+    const result = await service.searchMessagesBatch({
+      accounts: accounts.map((account) => ({ accountId: account.id })),
+      query: { subject: 'quarterly report' },
+      includeSnippet: true,
+    });
+
+    expect(result.groups.map((group) => group.accountId)).toEqual(accounts.map((account) => account.id));
+    expect(result.groups[0]?.page?.exhausted).toBe(true);
+    expect(result.groups[1]?.error).toMatchObject({ code: 'provider_unavailable', exhausted: false });
+    expect(result.groups[2]?.page?.exhausted).toBe(false);
+    expect(result.exhausted).toBe(false);
+
+    const continued = await service.searchMessagesBatch({
+      accounts: [{ accountId: 'acct_3', pageToken: result.groups[2]!.page!.nextPageToken! }],
+      query: { subject: 'quarterly report' },
+      includeSnippet: true,
+    });
+    expect(continued.groups).toHaveLength(1);
+    expect(providers.get('acct_3')?.listMessages).toHaveBeenLastCalledWith(
+      { subject: 'quarterly report' },
+      expect.objectContaining({ pageToken: 'next', includeSnippet: true }),
+    );
+  });
+
+  it('rejects duplicate batch accounts before calling a provider', async () => {
+    const account = {
+      id: 'acct_1',
+      provider: 'gmail' as const,
+      email: 'me@example.com',
+      status: 'active' as const,
+    };
+    const listMessages = vi.fn();
+    const service = new EmailService(
+      {
+        getAccount: () => account,
+        getProvider: () => ({ capabilities: { search: supportedSearch }, listMessages }),
+        markStatus: vi.fn(),
+      } as never,
+      testDb(),
+    );
+
+    await expect(
+      service.searchMessagesBatch({
+        accounts: [{ accountId: account.id }, { accountId: account.id }],
+        query: { text: 'invoice' },
+      }),
+    ).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(listMessages).not.toHaveBeenCalled();
+  });
+
+  it('searches nine accounts with at most three provider calls active', async () => {
+    const accounts = Array.from({ length: 9 }, (_, index) => ({
+      id: `acct_${index + 1}`,
+      provider: 'gmail' as const,
+      email: `person${index + 1}@example.com`,
+      status: 'active' as const,
+    }));
+    let active = 0;
+    let maxActive = 0;
+    const providers = new Map(
+      accounts.map((account) => [
+        account.id,
+        {
+          capabilities: { search: supportedSearch },
+          listMessages: vi.fn(async () => {
+            active += 1;
+            maxActive = Math.max(maxActive, active);
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            active -= 1;
+            return { items: [], exhausted: true };
+          }),
+        },
+      ]),
+    );
+    const service = new EmailService(
+      {
+        getAccount: (id: string) => accounts.find((account) => account.id === id)!,
+        getProvider: (id: string) => providers.get(id)!,
+        markStatus: vi.fn(),
+      } as never,
+      testDb(),
+    );
+
+    const result = await service.searchMessagesBatch({
+      accounts: accounts.map((account) => ({ accountId: account.id })),
+      query: { text: 'invoice' },
+    });
+
+    expect(result.groups.map((group) => group.accountId)).toEqual(accounts.map((account) => account.id));
+    expect(result.exhausted).toBe(true);
+    expect(maxActive).toBe(3);
+  });
+
+  it('returns a machine-readable timeout when a provider never reaches a checkpoint', async () => {
+    vi.useFakeTimers();
+    const account = {
+      id: 'acct_1',
+      provider: 'gmail' as const,
+      email: 'me@example.com',
+      status: 'active' as const,
+    };
+    const service = new EmailService(
+      {
+        getAccount: () => account,
+        getProvider: () => ({
+          capabilities: { search: supportedSearch },
+          listMessages: vi.fn(() => new Promise(() => {})),
+        }),
+        markStatus: vi.fn(),
+      } as never,
+      testDb(),
+    );
+
+    try {
+      const search = service.listMessages(account.id, { text: 'private search' });
+      const expected = expect(search).rejects.toMatchObject({
+        code: 'provider_unavailable',
+        data: { reason: 'search_timeout', exhausted: false },
+      });
+      await vi.advanceTimersByTimeAsync(15_000);
+      await expected;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

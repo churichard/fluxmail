@@ -1,7 +1,7 @@
 ---
 title: 'Architecture'
 description: 'Where Fluxmail keeps your data and how MCP, REST, and CLI requests reach each email provider.'
-updated: '2026-07-25'
+updated: '2026-09-16'
 ---
 
 ## Where your data lives
@@ -34,6 +34,6 @@ Administrative REST routes add a second check. A session owner must currently be
 
 Authentication and management operations append rows to `admin_audit_events`. Database triggers prevent these rows from being changed or deleted. The table stores stable identifiers and outcome codes, not passwords, tokens, request bodies, or provider credentials. Fluxmail does not send actor or resource identifiers through anonymous telemetry.
 
-Attachments are returned as embedded MCP resources or raw REST responses. Every provider enforces the configured decoded-size limit before returning the file. The default limit is 10 MB, and the hard maximum is 25 MB.
+Attachments are returned as embedded MCP resources or raw REST responses. Attachment IDs are opaque strings and can contain punctuation such as `part:1.2`. Every provider enforces the configured decoded-size limit before returning the file. The default limit is 10 MB, and the hard maximum is 25 MB.
 
 REST send, scheduled-send, and forward requests use idempotency records in SQLite. Each record is scoped to the authenticated session or API key and retained for 24 hours. This prevents a client retry from repeating the provider call during that period.

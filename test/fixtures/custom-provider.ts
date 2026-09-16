@@ -9,8 +9,8 @@ import {
   type GetMessageOpts,
   type Label,
   type Message,
+  type MessageSearchPage,
   type ModifyAction,
-  type Page,
   type PageOpts,
   type SendResult,
   type Thread,
@@ -41,13 +41,13 @@ class CustomProvider implements EmailProvider {
 
   async testConnection(): Promise<void> {}
 
-  async listMessages(query: EmailQuery, _page?: PageOpts): Promise<Page<Message>> {
+  async listMessages(query: EmailQuery, _page?: PageOpts): Promise<MessageSearchPage> {
     // A listed boolean filter handles both values. The fixture deliberately
     // reads false as a meaningful filter value instead of treating it as absent.
     if (query.read !== undefined || query.starred !== undefined || query.hasAttachment !== undefined) {
-      return { items: [] };
+      return { items: [], exhausted: true };
     }
-    return { items: [] };
+    return { items: [], exhausted: true };
   }
 
   async getMessage(_id: string, _opts?: GetMessageOpts): Promise<Message> {

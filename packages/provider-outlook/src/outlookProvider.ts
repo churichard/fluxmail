@@ -16,7 +16,7 @@ import {
   type Label,
   type Message,
   type ModifyAction,
-  type Page,
+  type MessageSearchPage,
   type PageOpts,
   type SendResult,
   type Thread,
@@ -111,6 +111,7 @@ interface FolderSnapshot {
 interface RequestOptions {
   nonIdempotent?: boolean;
   includeAuth?: boolean;
+  signal?: AbortSignal;
 }
 
 interface LocalMessageFilter {
@@ -128,8 +129,20 @@ interface PageTokenPayload {
   offset?: number;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+  });
 }
 
 function assertAttachmentSize(sizeBytes: number, maxBytes: number | undefined): void {
@@ -301,7 +314,8 @@ export class OutlookProvider implements EmailProvider {
           headers.set('authorization', `Bearer ${await this.tokenProvider.getAccessToken(forceRefresh)}`);
         }
         if (init.body !== undefined && !headers.has('content-type')) headers.set('content-type', 'application/json');
-        const response = await this.fetchImpl(url, { ...init, headers });
+        options.signal?.throwIfAborted();
+        const response = await this.fetchImpl(url, { ...init, headers, signal: options.signal });
         if (response.ok) {
           if (response.status === 202 || response.status === 204) return undefined as T;
           const text = await response.text();
@@ -333,7 +347,7 @@ export class OutlookProvider implements EmailProvider {
           isRetryableGraphError(error) && (!options.nonIdempotent || (error as GraphHttpError).status === 429);
         if (!retryable || attempt === MAX_RETRIES) break;
         const retryAfterMs = (error as GraphHttpError).retryAfterMs;
-        await sleep(retryAfterMs ?? 250 * 2 ** attempt);
+        await sleep(retryAfterMs ?? 250 * 2 ** attempt, options.signal);
       }
     }
     throw toEmailError(lastError);
@@ -343,18 +357,18 @@ export class OutlookProvider implements EmailProvider {
     await this.request('/me/mailFolders/inbox?$select=id');
   }
 
-  private async collection<T>(pathOrUrl: string): Promise<T[]> {
+  private async collection<T>(pathOrUrl: string, signal?: AbortSignal): Promise<T[]> {
     const items: T[] = [];
     let next: string | undefined = pathOrUrl;
     while (next) {
-      const page: GraphCollection<T> = await this.request(next);
+      const page: GraphCollection<T> = await this.request(next, {}, { signal });
       items.push(...(page.value ?? []));
       next = page['@odata.nextLink'];
     }
     return items;
   }
 
-  private async folderSnapshot(forceRefresh = false): Promise<FolderSnapshot> {
+  private async folderSnapshot(forceRefresh = false, signal?: AbortSignal): Promise<FolderSnapshot> {
     if (!forceRefresh && this.folderCache && Date.now() - this.folderCache.fetchedAt < FOLDER_CACHE_TTL_MS) {
       return this.folderCache.snapshot;
     }
@@ -363,7 +377,7 @@ export class OutlookProvider implements EmailProvider {
     await Promise.all(
       WELL_KNOWN_FOLDERS.map(async (known) => {
         try {
-          const raw = await this.request<GraphFolder>(`/me/mailFolders/${known.id}?$select=id`);
+          const raw = await this.request<GraphFolder>(`/me/mailFolders/${known.id}?$select=id`, {}, { signal });
           if (raw.id) roleById.set(raw.id, known.role);
         } catch (error) {
           if (!(error instanceof EmailError) || error.code !== 'not_found' || known.role !== 'archive') throw error;
@@ -387,7 +401,7 @@ export class OutlookProvider implements EmailProvider {
       insideTrash = false,
       insideAllMailExcluded = false,
     ): Promise<void> => {
-      const children = await this.collection<GraphFolder>(path);
+      const children = await this.collection<GraphFolder>(path, signal);
       for (const raw of children) {
         if (!raw.id || !raw.displayName || visited.has(raw.id)) continue;
         visited.add(raw.id);
@@ -477,9 +491,9 @@ export class OutlookProvider implements EmailProvider {
     });
   }
 
-  private async resolveFolder(value: string): Promise<Folder> {
+  private async resolveFolder(value: string, signal?: AbortSignal): Promise<Folder> {
     const normalized = value.toLowerCase();
-    const folders = await this.folderSnapshot();
+    const folders = await this.folderSnapshot(false, signal);
     const wellKnownRole = WELL_KNOWN_FOLDERS.find((folder) => folder.id === normalized)?.role;
     const role = folders.byRole.get(wellKnownRole ?? (normalized as FolderRole));
     const match =
@@ -488,7 +502,8 @@ export class OutlookProvider implements EmailProvider {
     return match;
   }
 
-  async listMessages(input: EmailQuery, page: PageOpts = {}): Promise<Page<Message>> {
+  async listMessages(input: EmailQuery, page: PageOpts = {}): Promise<MessageSearchPage> {
+    page.signal?.throwIfAborted();
     const normalized = normalizeEmailQuery(input);
     if (!normalized.success) {
       throw new EmailError('invalid_request', normalized.diagnostics.map((item) => item.message).join(' '), {
@@ -496,12 +511,12 @@ export class OutlookProvider implements EmailProvider {
       });
     }
     const query = normalized.query;
-    const resolvedFolder = query.folder ? await this.resolveFolder(query.folder) : undefined;
+    const resolvedFolder = query.folder ? await this.resolveFolder(query.folder, page.signal) : undefined;
     const starredFolder = resolvedFolder?.role === 'starred';
     const folder = resolvedFolder?.role === 'all' || starredFolder ? undefined : resolvedFolder;
     const normalizedQuery = { ...query, ...(starredFolder ? { starred: true } : {}), folder: undefined };
     const graphQuery = toGraphQuery(normalizedQuery);
-    const folders = await this.folderSnapshot();
+    const folders = await this.folderSnapshot(false, page.signal);
     const allMailScope = !folder;
     const excludedRootFolderIds = allMailScope ? [...folders.allMailExcludedRootFolderIds] : [];
     const allMailFilter = excludedRootFolderIds.map((id) => `parentFolderId ne '${escapeOData(id)}'`).join(' and ');
@@ -531,14 +546,20 @@ export class OutlookProvider implements EmailProvider {
     const items: Message[] = [];
     let inspectedCandidates = 0;
     let nextPageToken: string | undefined;
+    let timeLimited = false;
     do {
-      const response = await this.request<GraphCollection<GraphMessage>>(requestUrl);
+      const response = await this.request<GraphCollection<GraphMessage>>(requestUrl, {}, { signal: page.signal });
       const candidates = response.value ?? [];
       if (candidateOffset > candidates.length) {
         throw new EmailError('invalid_request', 'Invalid Microsoft Graph page token');
       }
       let processedCandidates = 0;
       for (const raw of candidates.slice(candidateOffset)) {
+        page.signal?.throwIfAborted();
+        if (page.softDeadlineAt !== undefined && Date.now() >= page.softDeadlineAt) {
+          timeLimited = true;
+          break;
+        }
         if (inspectedCandidates >= 1_000) break;
         inspectedCandidates += 1;
         processedCandidates += 1;
@@ -547,23 +568,24 @@ export class OutlookProvider implements EmailProvider {
           if (!raw.id) continue;
           const attachments = await this.collection<GraphAttachment>(
             `/me/messages/${encodeURIComponent(raw.id)}/attachments?$select=${ATTACHMENT_METADATA_SELECT}`,
+            page.signal,
           );
           const hasAttachment = attachments.some((attachment) => attachment.isInline !== true);
           if (hasAttachment !== localFilter.hasAttachment) continue;
         }
-        items.push(
-          parseGraphMessage(raw, {
-            accountId: this.accountId,
-            ...(raw.parentFolderId && folders.byId.get(raw.parentFolderId)
-              ? { folder: folders.byId.get(raw.parentFolderId) }
-              : {}),
-          }),
-        );
+        const message = parseGraphMessage(raw, {
+          accountId: this.accountId,
+          ...(raw.parentFolderId && folders.byId.get(raw.parentFolderId)
+            ? { folder: folders.byId.get(raw.parentFolderId) }
+            : {}),
+        });
+        if (page.includeSnippet === false) delete message.snippet;
+        items.push(message);
         if (items.length === pageSize) break;
       }
       const next = response['@odata.nextLink'];
       const consumedOffset = candidateOffset + processedCandidates;
-      if (items.length === pageSize || inspectedCandidates >= 1_000) {
+      if (timeLimited || items.length === pageSize || inspectedCandidates >= 1_000) {
         nextPageToken =
           consumedOffset < candidates.length
             ? encodePageToken(this.url(requestUrl), localFilter, consumedOffset)
@@ -581,13 +603,16 @@ export class OutlookProvider implements EmailProvider {
       Boolean(graphQuery.search) && items.length < pageSize && inspectedCandidates >= 1_000 && !nextPageToken;
     return {
       items,
+      exhausted: !nextPageToken && !providerLimited,
       ...(nextPageToken ? { nextPageToken } : {}),
       ...(localFilter ? { inspectedCandidates } : {}),
       ...(items.length < pageSize && inspectedCandidates >= 1_000 && nextPageToken
         ? { incomplete: true as const, incompleteReason: 'scan_limit' as const }
         : providerLimited
           ? { incomplete: true as const, incompleteReason: 'provider_limit' as const }
-          : {}),
+          : timeLimited && nextPageToken
+            ? { incomplete: true as const, incompleteReason: 'time_limit' as const }
+            : {}),
     };
   }
 

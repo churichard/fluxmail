@@ -70,6 +70,7 @@
     "emails",
     "emails-list",
     "emails-search",
+    "emails-search-batch",
     "emails-get",
     "emails-send",
     "emails-forward",

@@ -2140,6 +2140,10 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
       console.error(`Error [${code}]: ${error instanceof Error ? error.message : String(error)}`);
       process.exitCode = 1;
     },
+    reportPartialFailure: (code) => {
+      finishCliOperation(program, 'error', code);
+      process.exitCode = 1;
+    },
   });
 
   program

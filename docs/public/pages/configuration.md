@@ -1,7 +1,7 @@
 ---
 title: 'Configuration'
 description: 'Deployment configuration, encrypted instance settings, local logging, secret files, and telemetry controls.'
-updated: '2026-07-19'
+updated: '2026-09-16'
 ---
 
 Fluxmail has two configuration domains. Deployment configuration controls how the process starts. Instance settings control OAuth applications and the license used by a running instance.
@@ -116,6 +116,8 @@ Fluxmail sends anonymous operation events to its PostHog project by default. Eve
 After Fluxmail connects or removes a mailbox, telemetry records its provider and the installation's mailbox totals. OAuth connection events also record whether the callback used your public URL or the local port, and whether Google used Fluxmail's built-in application or one you registered. Connection events report whether they replaced credentials for an existing mailbox.
 
 Fluxmail never sends command arguments, email or mailbox data, identifiers, search text, file paths, credentials, configuration values, request payloads, provider responses, stack traces, or error text. PostHog person profiles and GeoIP lookup are disabled.
+
+For batch search, telemetry records the surface operation and marks the outcome as an error when any account group fails. It does not include account IDs, queries, page tokens, or group errors.
 
 Turn telemetry off for the installation:
 
