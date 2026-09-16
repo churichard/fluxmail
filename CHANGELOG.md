@@ -6,8 +6,6 @@ Fluxmail records user-facing changes in this file. The format follows [Common Ch
 
 ## [0.9.0] - 2026-09-16
 
-Upgrade scope: installations with existing stored data need the format 3 rollback step, custom provider authors need a code change, and MCP, CLI, and REST clients do not need a migration.
-
 ### Changed
 
 - Advance stored data to format 3 for send-as identities; stop processes that share the data directory and keep the migration backup because older Fluxmail releases cannot open the upgraded store; [prepare existing installations before upgrading](https://fluxmail.ai/docs/upgrades/0.9.0/) ([#88](https://github.com/churichard/fluxmail/pull/88))
