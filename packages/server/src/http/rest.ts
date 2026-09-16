@@ -1439,24 +1439,24 @@ export function createRestApi(deps: RestApiDeps): OpenAPIHono<RestEnv> {
         ...(input.includeSnippet !== undefined ? { includeSnippet: input.includeSnippet } : {}),
       });
       return {
-        data: result.groups.map((group) =>
-          group.page
-            ? {
-                accountId: group.accountId,
-                data: group.page.items,
-                meta: {
-                  exhausted: group.page.exhausted,
-                  ...(group.page.nextPageToken ? { nextPageToken: group.page.nextPageToken } : {}),
-                  ...(group.page.diagnostics ? { diagnostics: group.page.diagnostics } : {}),
-                  ...(group.page.incomplete ? { incomplete: true as const } : {}),
-                  ...(group.page.incompleteReason ? { incompleteReason: group.page.incompleteReason } : {}),
-                  ...(group.page.inspectedCandidates !== undefined
-                    ? { inspectedCandidates: group.page.inspectedCandidates }
-                    : {}),
-                },
-              }
-            : { accountId: group.accountId, error: group.error },
-        ),
+        data: result.groups.map((group) => {
+          if (!group.page) return { accountId: group.accountId, error: group.error };
+          const diagnostics = [...parsed.diagnostics, ...(group.page.diagnostics ?? [])];
+          return {
+            accountId: group.accountId,
+            data: group.page.items,
+            meta: {
+              exhausted: group.page.exhausted,
+              ...(group.page.nextPageToken ? { nextPageToken: group.page.nextPageToken } : {}),
+              ...(diagnostics.length ? { diagnostics } : {}),
+              ...(group.page.incomplete ? { incomplete: true as const } : {}),
+              ...(group.page.incompleteReason ? { incompleteReason: group.page.incompleteReason } : {}),
+              ...(group.page.inspectedCandidates !== undefined
+                ? { inspectedCandidates: group.page.inspectedCandidates }
+                : {}),
+            },
+          };
+        }),
         meta: { exhausted: result.exhausted },
         operationFailed: result.groups.some((group) => group.error !== undefined),
       };

@@ -413,6 +413,35 @@ describe('REST email operations', () => {
     expect(duplicate.status).toBe(400);
   });
 
+  it('returns typed-query warnings in successful batch group metadata', async () => {
+    const { app, auth, service } = fixture();
+    const response = await app.request(
+      '/api/v1/messages/search',
+      jsonRequest('POST', { accounts: [{ accountId: 'acct_1' }], query: 'form:ann@example.com' }, auth),
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      data: Array<{ accountId: string; meta?: { diagnostics?: unknown[] } }>;
+    };
+    expect(body.data[0]).toMatchObject({
+      accountId: 'acct_1',
+      meta: {
+        diagnostics: [
+          {
+            code: 'possible_operator_typo',
+            severity: 'warning',
+            suggestion: 'from',
+          },
+        ],
+      },
+    });
+    expect(service.searchMessagesBatch).toHaveBeenCalledWith({
+      accounts: [{ accountId: 'acct_1' }],
+      query: { text: 'form:ann@example.com' },
+    });
+  });
+
   it('maps provider errors without exposing internal failures', async () => {
     const { app, auth, service } = fixture();
     service.getMessage.mockRejectedValueOnce(new EmailError('provider_unavailable', 'Gmail is unavailable.'));

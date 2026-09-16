@@ -330,6 +330,28 @@ describe('MCP typed search', () => {
     expect(JSON.stringify(capture.mock.calls)).not.toContain('subject:complete');
     expect(JSON.stringify(capture.mock.calls)).not.toContain('acct_1');
   });
+
+  it('includes parser warnings in successful batch groups', async () => {
+    const searchMessagesBatch = vi.fn().mockResolvedValue({
+      groups: [{ accountId: 'acct_1', page: { items: [], exhausted: true } }],
+      exhausted: true,
+    });
+    const client = await connectMcp({ enforceQuota: () => undefined, searchMessagesBatch } as Partial<EmailService>, {
+      permissions: permissionPolicyForProfile('read-only'),
+    });
+
+    const result = await client.callTool({
+      name: 'search_emails_batch',
+      arguments: { accounts: [{ accountId: 'acct_1' }], query: 'form:ann@example.com' },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(searchMessagesBatch).toHaveBeenCalledWith({
+      accounts: [{ accountId: 'acct_1' }],
+      query: { text: 'form:ann@example.com' },
+    });
+    expect(JSON.stringify(result.content)).toContain('possible_operator_typo');
+  });
 });
 
 describe('attachment tool', () => {

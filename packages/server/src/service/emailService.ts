@@ -562,7 +562,6 @@ export class EmailService {
     for (const account of input.accounts) {
       if (seen.has(account.accountId)) throw new EmailError('invalid_request', 'Batch account IDs must be distinct.');
       seen.add(account.accountId);
-      this.assertAccountAccess(account.accountId);
     }
     const normalized = normalizeEmailQuery(input.query);
     if (!normalized.success) {
@@ -587,6 +586,7 @@ export class EmailService {
           continue;
         }
         try {
+          this.assertAccountAccess(account.accountId);
           const page = await this.listMessages(account.accountId, normalized.query, {
             pageSize,
             ...(account.pageToken ? { pageToken: account.pageToken } : {}),

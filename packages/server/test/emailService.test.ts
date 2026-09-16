@@ -868,6 +868,36 @@ describe('EmailService search pagination', () => {
     );
   });
 
+  it('keeps successful batch groups when another account is unavailable', async () => {
+    const account = {
+      id: 'acct_1',
+      provider: 'gmail' as const,
+      email: 'me@example.com',
+      status: 'active' as const,
+    };
+    const listMessages = vi.fn(async () => ({ items: [], exhausted: true }));
+    const service = new EmailService(
+      {
+        getAccount: (id: string) => {
+          if (id !== account.id) throw new EmailError('not_found', `No account with id "${id}"`);
+          return account;
+        },
+        getProvider: () => ({ capabilities: { search: supportedSearch }, listMessages }),
+        markStatus: vi.fn(),
+      } as never,
+      testDb(),
+    );
+
+    const result = await service.searchMessagesBatch({
+      accounts: [{ accountId: account.id }, { accountId: 'acct_missing' }],
+      query: { text: 'invoice' },
+    });
+
+    expect(result.groups[0]?.page).toMatchObject({ exhausted: true, items: [] });
+    expect(result.groups[1]?.error).toMatchObject({ code: 'not_found', exhausted: false });
+    expect(listMessages).toHaveBeenCalledOnce();
+  });
+
   it('rejects duplicate batch accounts before calling a provider', async () => {
     const account = {
       id: 'acct_1',

@@ -578,7 +578,17 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
             ...(args.pageSize !== undefined ? { pageSize: args.pageSize } : {}),
             ...(args.includeSnippet !== undefined ? { includeSnippet: args.includeSnippet } : {}),
           });
-          const response = ok(result);
+          const response = ok({
+            ...result,
+            groups: result.groups.map((group) => {
+              if (!group.page) return group;
+              const diagnostics = [...parsed.diagnostics, ...(group.page.diagnostics ?? [])];
+              return {
+                ...group,
+                page: { ...group.page, ...(diagnostics.length ? { diagnostics } : {}) },
+              };
+            }),
+          });
           if (result.groups.every((group) => group.error)) response.isError = true;
           if (result.groups.some((group) => group.error)) {
             (response as TelemetryCallToolResult)[TELEMETRY_ERROR] = true;
