@@ -10,8 +10,8 @@ Upgrade scope: installations with existing stored data need the format 3 rollbac
 
 ### Changed
 
-- **Breaking:** Advance stored data to format 3 for send-as identities; stop processes that share the data directory and keep the migration backup because older Fluxmail releases cannot open the upgraded store; [prepare existing installations before upgrading](https://fluxmail.ai/docs/upgrades/0.9.0/) ([#88](https://github.com/churichard/fluxmail/pull/88))
-- **Breaking:** Require custom provider authors to return `MessageSearchPage.exhausted` from `EmailProvider.listMessages`; set it only after the provider has examined the full requested scope, and [update custom providers before upgrading](https://fluxmail.ai/docs/upgrades/0.9.0/) ([#89](https://github.com/churichard/fluxmail/pull/89))
+- Advance stored data to format 3 for send-as identities; stop processes that share the data directory and keep the migration backup because older Fluxmail releases cannot open the upgraded store; [prepare existing installations before upgrading](https://fluxmail.ai/docs/upgrades/0.9.0/) ([#88](https://github.com/churichard/fluxmail/pull/88))
+- Require custom provider authors to return `MessageSearchPage.exhausted` from `EmailProvider.listMessages`; set it only after the provider has examined the full requested scope, and [update custom providers before upgrading](https://fluxmail.ai/docs/upgrades/0.9.0/) ([#89](https://github.com/churichard/fluxmail/pull/89))
 - [MCP / CLI / REST] Bound searches with a soft time budget and hard deadline, return resumable pages at safe boundaries, and report whether each requested scope is exhausted ([#89](https://github.com/churichard/fluxmail/pull/89))
 
 ### Added

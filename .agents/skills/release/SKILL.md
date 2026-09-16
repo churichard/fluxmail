@@ -45,13 +45,17 @@ If npm reports that login is required, start `npm login` and let the user comple
 
 Find the nearest eligible published release that is an ancestor of the candidate. Use published, stable releases for a stable candidate and include published prereleases for a prerelease candidate. Inspect the complete first-parent log and diff from that tag through the candidate.
 
-Review CLI behavior, configuration and environment variables, MCP tools and schemas, REST behavior, package exports and types, stored data, authentication, defaults, and runtime requirements. Choose the minimum compatible semantic version:
+Review CLI behavior, configuration and environment variables, MCP tools and schemas, REST behavior, package exports and types, stored data, authentication, defaults, and runtime requirements.
 
-- At `1.0.0` or later, use a major bump for a breaking public contract.
-- At `0.y.z` where `y` is at least 1, use a minor bump for a breaking public contract.
+Treat MCP, CLI, and REST as Fluxmail's supported client contracts. A change is breaking only when an existing integration using at least one of those interfaces must change to keep working. Package exports and types, custom provider APIs, stored data formats, server configuration, licensing, and runtime requirements can need upgrade notes, but they do not count as breaking on their own and do not determine a breaking version bump. If one of those changes also forces an MCP, CLI, or REST client to change, classify only the affected client interfaces as breaking.
+
+Choose the minimum compatible semantic version:
+
+- At `1.0.0` or later, use a major bump for a breaking MCP, CLI, or REST contract.
+- At `0.y.z` where `y` is at least 1, use a minor bump for a breaking MCP, CLI, or REST contract.
 - Use a minor bump for backward-compatible functionality.
 - Use a patch bump for backward-compatible fixes only.
-- Do not release internal work, tests, documentation, or release tooling unless it changes a public contract.
+- Do not release internal work, tests, documentation, or release tooling unless it changes user-visible behavior on a supported product surface.
 
 Choose the version without asking when the evidence is clear. Report the baseline, audited range, compatibility findings, and selected version before editing files. Stop if there is no release-worthy change.
 
@@ -69,10 +73,10 @@ Curate the generated `CHANGELOG.md` entry for users. Follow Common Changelog:
 - Write imperative, single-line bullets that end with the best pull request, issue, or commit link.
 - Begin every bullet that affects MCP, CLI, or REST with one bracketed interface label. Use only `MCP`, `CLI`, and `REST`, in that order, such as `[MCP]`, `[MCP / CLI]`, or `[MCP / CLI / REST]`. Leave bullets that do not affect these interfaces untagged.
 - Include only affected interfaces in the label. Combine interfaces only when one bullet accurately describes the same change for each one, and split the bullet when their behavior or migration differs.
-- Put breaking entries first, place `**Breaking:**` immediately after the interface label when present, and include a migration step or link.
-- Name the affected documented public surface or audience in every breaking entry, such as CLI, MCP, REST, custom providers, configuration, stored data, authentication, or runtime.
+- Reserve `**Breaking:**` for changes that require an existing MCP, CLI, or REST client to change. Put those entries first, place `**Breaking:**` immediately after the interface label, and include a migration step or link.
+- Every breaking entry must begin with the affected MCP, CLI, or REST interface label. Do not mark stored data, custom provider APIs, package exports or types, server configuration, licensing, or runtime requirements as breaking on their own. Describe any required operator or developer action under `Changed` and link its upgrade guide.
 - Use the names from public documentation. Do not present an internal package as a supported interface or recommend direct use unless the public docs explicitly support it.
-- Split breaking entries when interfaces require different migration steps. Combine interfaces only when the same break and migration apply to each one.
+- Split breaking entries when client interfaces require different migration steps. Combine interfaces only when the same break and migration apply to each one.
 - Name every affected interface for shared breaks such as invalid page tokens, and state that users of other interfaces do not need that migration.
 - When a release has several interface-specific migrations, add the same compact surface map to the public upgrade guide and preserve the scoping in the approval packet.
 - Merge related changes within a surface and omit empty groups, authors for this single-contributor project, and internal work.
