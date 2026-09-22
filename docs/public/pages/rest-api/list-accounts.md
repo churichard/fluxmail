@@ -224,6 +224,10 @@ This endpoint has no parameters or request body.
               },
               "snippets": {
                 "type": "boolean"
+              },
+              "searchContext": {
+                "type": "boolean",
+                "description": "Supports optional match-centered body excerpts."
               }
             },
             "required": [

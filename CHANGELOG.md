@@ -4,6 +4,10 @@ Fluxmail records user-facing changes in this file. The format follows [Common Ch
 
 ## [Unreleased]
 
+### Added
+
+- [MCP / CLI / REST] Add optional match-centered search context for Gmail, Outlook, and IMAP results, with a 256 KiB scan limit and explicit match statuses.
+
 ## [0.9.0] - 2026-09-16
 
 ### Changed

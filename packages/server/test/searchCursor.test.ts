@@ -7,6 +7,7 @@ const binding = {
   query: { folder: 'inbox', read: false, text: 'quarterly report' },
   pageSize: 25,
   includeSnippet: true,
+  includeSearchContext: true,
 };
 
 describe('SearchCursorCodec', () => {
@@ -29,9 +30,19 @@ describe('SearchCursorCodec', () => {
       { ...binding, query: { ...binding.query, read: true } },
       { ...binding, pageSize: 50 },
       { ...binding, includeSnippet: false },
+      { ...binding, includeSearchContext: false },
     ]) {
       expect(() => codec.decode(token, changed, 2_000)).toThrow(/Invalid or expired/);
     }
+  });
+
+  it('accepts tokens without a search-context binding when the option stays omitted', () => {
+    const codec = new SearchCursorCodec(Buffer.alloc(32, 1));
+    const { includeSearchContext: _includeSearchContext, ...legacyBinding } = binding;
+    const token = codec.encode({ ...legacyBinding, providerToken: 'next' }, 1_000);
+
+    expect(codec.decode(token, legacyBinding, 2_000)).toBe('next');
+    expect(codec.decode(token, { ...legacyBinding, includeSearchContext: false }, 2_000)).toBe('next');
   });
 
   it('rejects tampering, legacy tokens, malformed payloads, and rotated keys', () => {

@@ -8,6 +8,7 @@ it('advertises portable Gmail search and archive support', () => {
     nativeQuery: { syntax: 'gmail', availability: 'available' },
   });
   expect(GMAIL_CAPABILITIES.search.filters).toEqual(expect.arrayContaining(['read', 'starred', 'hasAttachment']));
+  expect(GMAIL_CAPABILITIES.searchContext).toBe(true);
 });
 
 interface ProviderInternals {
@@ -311,6 +312,207 @@ describe('GmailProvider list hydration', () => {
     expect(second.inspectedCandidates).toBe(1);
     expect(list).toHaveBeenCalledTimes(11);
     expect(get).toHaveBeenCalledTimes(1_001);
+  });
+
+  it('fetches one full body for an accepted result when search context is requested', async () => {
+    const provider = new GmailProvider({
+      accountId: 'acct_1',
+      email: 'me@example.com',
+      auth: new OAuth2Client(),
+    });
+    const get = vi.fn(({ format }: { format: string }) =>
+      Promise.resolve({
+        data: {
+          id: 'message-1',
+          threadId: 'thread-1',
+          internalDate: '1767225600000',
+          snippet: 'Opening preview',
+          payload: {
+            mimeType: 'text/plain',
+            headers: [{ name: 'Subject', value: 'Invoice' }],
+            ...(format === 'full'
+              ? { body: { data: Buffer.from('Opening line\nInvoice [ORDER_ID] is ready.').toString('base64url') } }
+              : {}),
+          },
+        },
+      }),
+    );
+    const internals = provider as unknown as {
+      gmail: {
+        users: {
+          labels: { list: ReturnType<typeof vi.fn> };
+          messages: { list: ReturnType<typeof vi.fn>; get: typeof get };
+        };
+      };
+    };
+    internals.gmail = {
+      users: {
+        labels: { list: vi.fn().mockResolvedValue({ data: { labels: [] } }) },
+        messages: { list: vi.fn().mockResolvedValue({ data: { messages: [{ id: 'message-1' }] } }), get },
+      },
+    };
+
+    const page = await provider.listMessages(
+      { text: 'invoice [ORDER_ID]' },
+      { includeSnippet: true, includeSearchContext: true },
+    );
+
+    expect(page.items[0]).toMatchObject({
+      snippet: 'Opening preview',
+      searchContext: { status: 'matched', excerpt: 'Invoice [ORDER_ID] is ready.' },
+    });
+    expect(get.mock.calls.map(([input]) => input.format)).toEqual(['metadata', 'full']);
+  });
+
+  it('loads search context for a chunk of results concurrently', async () => {
+    const provider = new GmailProvider({
+      accountId: 'acct_1',
+      email: 'me@example.com',
+      auth: new OAuth2Client(),
+    });
+    const ids = ['message-1', 'message-2', 'message-3'];
+    const pendingFull: Array<() => void> = [];
+    const get = vi.fn(({ id, format }: { id: string; format: string }) => {
+      const data = {
+        id,
+        threadId: id,
+        internalDate: '1767225600000',
+        payload: {
+          mimeType: 'text/plain',
+          headers: [{ name: 'Subject', value: id }],
+          ...(format === 'full' ? { body: { data: Buffer.from(`Invoice for ${id}`).toString('base64url') } } : {}),
+        },
+      };
+      if (format !== 'full') return Promise.resolve({ data });
+      return new Promise((resolve) => pendingFull.push(() => resolve({ data })));
+    });
+    const internals = provider as unknown as {
+      gmail: {
+        users: {
+          labels: { list: ReturnType<typeof vi.fn> };
+          messages: { list: ReturnType<typeof vi.fn>; get: typeof get };
+        };
+      };
+    };
+    internals.gmail = {
+      users: {
+        labels: { list: vi.fn().mockResolvedValue({ data: { labels: [] } }) },
+        messages: { list: vi.fn().mockResolvedValue({ data: { messages: ids.map((id) => ({ id })) } }), get },
+      },
+    };
+
+    const pageRequest = provider.listMessages({ text: 'invoice' }, { includeSearchContext: true });
+    await vi.waitFor(() => expect(pendingFull).toHaveLength(ids.length));
+    for (const resolve of pendingFull) resolve();
+    const page = await pageRequest;
+
+    expect(page.items.map((message) => message.searchContext)).toEqual(
+      ids.map((id) => ({ status: 'matched', excerpt: `Invoice for ${id}` })),
+    );
+  });
+
+  it('reuses a full MIME response when local attachment filtering already required it', async () => {
+    const provider = new GmailProvider({
+      accountId: 'acct_1',
+      email: 'me@example.com',
+      auth: new OAuth2Client(),
+    });
+    const get = vi.fn().mockResolvedValue({
+      data: {
+        id: 'message-1',
+        threadId: 'thread-1',
+        internalDate: '1767225600000',
+        payload: {
+          mimeType: 'multipart/mixed',
+          headers: [{ name: 'Subject', value: 'Invoice' }],
+          parts: [
+            {
+              partId: '1',
+              mimeType: 'text/plain',
+              body: { data: Buffer.from('Invoice [ORDER_ID] is ready.').toString('base64url') },
+            },
+            {
+              partId: '2',
+              filename: 'receipt.pdf',
+              mimeType: 'application/pdf',
+              headers: [{ name: 'Content-Disposition', value: 'attachment' }],
+              body: { attachmentId: 'attachment-1', size: 12 },
+            },
+          ],
+        },
+      },
+    });
+    const internals = provider as unknown as {
+      gmail: {
+        users: {
+          labels: { list: ReturnType<typeof vi.fn> };
+          messages: { list: ReturnType<typeof vi.fn>; get: typeof get };
+        };
+      };
+    };
+    internals.gmail = {
+      users: {
+        labels: { list: vi.fn().mockResolvedValue({ data: { labels: [] } }) },
+        messages: { list: vi.fn().mockResolvedValue({ data: { messages: [{ id: 'message-1' }] } }), get },
+      },
+    };
+
+    const page = await provider.listMessages(
+      { text: 'invoice [ORDER_ID]', hasAttachment: true },
+      { includeSearchContext: true },
+    );
+
+    expect(page.items[0]?.searchContext).toEqual({
+      status: 'matched',
+      excerpt: 'Invoice [ORDER_ID] is ready.',
+    });
+    expect(get).toHaveBeenCalledOnce();
+    expect(get).toHaveBeenCalledWith(expect.objectContaining({ format: 'full' }));
+  });
+
+  it('keeps Gmail metadata when optional search-context enrichment fails', async () => {
+    const provider = new GmailProvider({
+      accountId: 'acct_1',
+      email: 'me@example.com',
+      auth: new OAuth2Client(),
+    });
+    const get = vi
+      .fn()
+      .mockResolvedValueOnce({
+        data: {
+          id: 'message-1',
+          threadId: 'thread-1',
+          internalDate: '1767225600000',
+          payload: { headers: [{ name: 'Subject', value: 'Invoice' }] },
+        },
+      })
+      .mockRejectedValueOnce(Object.assign(new Error('private body failure'), { code: 404 }));
+    const internals = provider as unknown as {
+      gmail: {
+        users: {
+          labels: { list: ReturnType<typeof vi.fn> };
+          messages: { list: ReturnType<typeof vi.fn>; get: typeof get };
+        };
+      };
+    };
+    internals.gmail = {
+      users: {
+        labels: { list: vi.fn().mockResolvedValue({ data: { labels: [] } }) },
+        messages: { list: vi.fn().mockResolvedValue({ data: { messages: [{ id: 'message-1' }] } }), get },
+      },
+    };
+
+    const page = await provider.listMessages({ text: 'invoice' }, { includeSearchContext: true });
+
+    expect(page.items[0]).toMatchObject({
+      id: 'message-1',
+      subject: 'Invoice',
+      searchContext: { status: 'unavailable' },
+    });
+    expect(page.diagnostics).toEqual([
+      expect.objectContaining({ code: 'search_context_unavailable', severity: 'warning' }),
+    ]);
+    expect(JSON.stringify(page.diagnostics)).not.toContain('private body failure');
   });
 });
 

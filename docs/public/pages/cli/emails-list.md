@@ -33,4 +33,5 @@ fluxmail emails list [options]
 | `--page-size <number>` | No | Return 1 to 100 messages | None |
 | `--page-token <token>` | No | Continue from a previous response | None |
 | `--include-snippet <boolean>` | No | Request or suppress message previews | None |
+| `--include-search-context <boolean>` | No | Include a body excerpt around the search match | None |
 | `--text <query>` | No | Filter by literal full-text search | None |

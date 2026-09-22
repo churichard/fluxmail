@@ -158,6 +158,7 @@ describe('ImapProvider safe folder fallbacks', () => {
     });
 
     expect(provider.capabilities.search.nativeQuery?.availability).toBe('unknown');
+    expect(provider.capabilities.searchContext).toBe(true);
     await provider.listFolders();
     expect(provider.capabilities.search).toMatchObject({
       folderRoles: { inbox: 'available', archive: 'available', sent: 'unavailable' },
@@ -921,7 +922,7 @@ describe('ImapProvider connection and pagination state', () => {
     expect(search).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps metadata and unread state when an IMAP preview fails', async () => {
+  it('keeps metadata and unread state when shared IMAP enrichment fails', async () => {
     const { provider, fetchOne, download, messageFlagsAdd } = paginationProvider([1], [folder('INBOX')]);
     fetchOne.mockResolvedValue({
       uid: 1,
@@ -933,11 +934,21 @@ describe('ImapProvider connection and pagination state', () => {
     });
     download.mockRejectedValue(new Error('private provider failure'));
 
-    const page = await provider.listMessages({ folder: 'INBOX' }, { includeSnippet: true });
+    const page = await provider.listMessages(
+      { folder: 'INBOX', text: 'needle' },
+      { includeSnippet: true, includeSearchContext: true },
+    );
 
     expect(page.items[0]).toMatchObject({ subject: 'Preview failure', flags: { read: false } });
     expect(page.items[0]?.snippet).toBeUndefined();
-    expect(page.diagnostics).toEqual([expect.objectContaining({ code: 'snippet_unavailable', severity: 'warning' })]);
+    expect(page.items[0]?.searchContext).toEqual({ status: 'unavailable' });
+    expect(page.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'snippet_unavailable', severity: 'warning' }),
+        expect.objectContaining({ code: 'search_context_unavailable', severity: 'warning' }),
+      ]),
+    );
+    expect(download).toHaveBeenCalledOnce();
     expect(page.exhausted).toBe(true);
     expect(messageFlagsAdd).not.toHaveBeenCalled();
   });

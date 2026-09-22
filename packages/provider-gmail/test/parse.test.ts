@@ -199,6 +199,54 @@ describe('walkParts', () => {
       },
     ]);
   });
+
+  it('does not treat text inside an attached message as the outer body', () => {
+    const walked = walkParts({
+      mimeType: 'multipart/mixed',
+      parts: [
+        {
+          mimeType: 'message/rfc822',
+          partId: '2',
+          parts: [{ mimeType: 'text/plain', body: { data: b64url('private attached message') } }],
+        },
+      ],
+    });
+
+    expect(walked.body).toEqual({});
+  });
+
+  it('keeps attachments nested inside an attached message', () => {
+    const walked = walkParts({
+      mimeType: 'multipart/mixed',
+      parts: [
+        { mimeType: 'text/plain', partId: '0', body: { data: b64url('outer body') } },
+        {
+          mimeType: 'message/rfc822',
+          partId: '1',
+          parts: [
+            {
+              mimeType: 'multipart/mixed',
+              partId: '1.0',
+              parts: [
+                { mimeType: 'text/plain', partId: '1.0.0', body: { data: b64url('inner body') } },
+                {
+                  mimeType: 'application/pdf',
+                  partId: '1.0.1',
+                  filename: 'report.pdf',
+                  body: { attachmentId: 'nested-attachment', size: 42 },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(walked.body).toEqual({ text: 'outer body' });
+    expect(walked.attachments).toEqual([
+      expect.objectContaining({ id: 'part:1.0.1', filename: 'report.pdf', mimeType: 'application/pdf' }),
+    ]);
+  });
 });
 
 describe('parseGmailMessage', () => {

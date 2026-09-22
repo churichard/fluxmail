@@ -252,6 +252,8 @@ describe('CLI email commands', () => {
         'inbox',
         '--include-snippet',
         'true',
+        '--include-search-context',
+        'true',
       ],
       telemetry,
     );
@@ -264,6 +266,7 @@ describe('CLI email commands', () => {
       query: 'subject:report',
       folder: 'inbox',
       includeSnippet: true,
+      includeSearchContext: true,
     });
     expect(process.exitCode).toBe(1);
     expect(capture).toHaveBeenCalledWith(

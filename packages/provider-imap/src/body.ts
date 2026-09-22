@@ -1,5 +1,12 @@
 import iconv from 'iconv-lite';
-import type { AttachmentMeta, MessageBody } from '@fluxmail/core';
+import {
+  extractSearchContext,
+  htmlToReadableText,
+  SEARCH_CONTEXT_INPUT_LIMIT,
+  type AttachmentMeta,
+  type Message,
+  type MessageBody,
+} from '@fluxmail/core';
 import type { ImapFlow, MessageStructureObject } from 'imapflow';
 
 export interface BodyParts {
@@ -55,38 +62,53 @@ async function readPart(client: ImapFlow, uid: number, part: string): Promise<st
 const SNIPPET_INPUT_LIMIT = 16 * 1024;
 const SNIPPET_OUTPUT_LIMIT = 300;
 
-function htmlToText(value: string): string {
-  return value
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'");
+export interface DownloadedListBody {
+  snippet?: string;
+  searchContext?: NonNullable<Message['searchContext']>;
 }
 
-/** Download only the preferred text part and return a bounded one-line preview. */
-export async function downloadSnippet(client: ImapFlow, uid: number, parts: BodyParts): Promise<string | undefined> {
+/** Download the preferred text part once for optional list-result enrichment. */
+export async function downloadListBody(
+  client: ImapFlow,
+  uid: number,
+  parts: BodyParts,
+  options: { snippet: boolean; searchContextText?: string },
+): Promise<DownloadedListBody> {
   const part = parts.text ?? parts.html;
-  if (!part) return undefined;
-  const { meta, content } = await client.download(uid, part, { uid: true, maxBytes: SNIPPET_INPUT_LIMIT });
+  if (!part) {
+    return options.searchContextText ? { searchContext: { status: 'unavailable' } } : {};
+  }
+  const inputLimit = options.searchContextText ? SEARCH_CONTEXT_INPUT_LIMIT : SNIPPET_INPUT_LIMIT;
+  const { meta, content } = await client.download(uid, part, { uid: true, maxBytes: inputLimit });
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of content) {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    const remaining = SNIPPET_INPUT_LIMIT - size;
+    const remaining = inputLimit - size;
     if (remaining <= 0) break;
     chunks.push(bytes.subarray(0, remaining));
     size += Math.min(bytes.length, remaining);
-    if (size >= SNIPPET_INPUT_LIMIT) break;
+    if (size >= inputLimit) break;
   }
   const charset = meta.charset && iconv.encodingExists(meta.charset) ? meta.charset : 'utf-8';
   const decoded = iconv.decode(Buffer.concat(chunks, size), charset);
-  const text = (parts.text ? decoded : htmlToText(decoded)).replace(/\s+/gu, ' ').trim();
-  return text ? [...text].slice(0, SNIPPET_OUTPUT_LIMIT).join('') : undefined;
+  const selectedBody = parts.text ? { text: decoded } : { html: decoded };
+  const result: DownloadedListBody = {};
+  if (options.snippet) {
+    const text = (parts.text ? decoded : htmlToReadableText(decoded)).replace(/\s+/gu, ' ').trim();
+    if (text) result.snippet = [...text].slice(0, SNIPPET_OUTPUT_LIMIT).join('');
+  }
+  if (options.searchContextText) {
+    result.searchContext = extractSearchContext(selectedBody, options.searchContextText, {
+      complete: size < inputLimit || meta.expectedSize <= size,
+    });
+  }
+  return result;
+}
+
+/** Download only the preferred text part and return a bounded one-line preview. */
+export async function downloadSnippet(client: ImapFlow, uid: number, parts: BodyParts): Promise<string | undefined> {
+  return (await downloadListBody(client, uid, parts, { snippet: true })).snippet;
 }
 
 export async function downloadBody(client: ImapFlow, uid: number, parts: BodyParts): Promise<MessageBody> {

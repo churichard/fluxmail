@@ -1,5 +1,6 @@
 import {
   EmailError,
+  extractSearchContext,
   normalizeEmailQuery,
   replySubject,
   type AttachmentInput,
@@ -97,6 +98,7 @@ export const OUTLOOK_CAPABILITIES: Capabilities = {
     nativeQuery: { syntax: 'outlook-kql', availability: 'available' },
   },
   snippets: true,
+  searchContext: true,
 };
 
 interface FolderSnapshot {
@@ -309,7 +311,10 @@ export class OutlookProvider implements EmailProvider {
       try {
         const headers = new Headers(init.headers);
         headers.set('accept', 'application/json');
-        headers.set('prefer', 'IdType="ImmutableId"');
+        headers.set(
+          'prefer',
+          [headers.get('prefer'), 'IdType="ImmutableId"'].filter((value): value is string => Boolean(value)).join(', '),
+        );
         if (options.includeAuth !== false) {
           headers.set('authorization', `Bearer ${await this.tokenProvider.getAccessToken(forceRefresh)}`);
         }
@@ -511,6 +516,9 @@ export class OutlookProvider implements EmailProvider {
       });
     }
     const query = normalized.query;
+    if (page.includeSearchContext && !query.text) {
+      throw new EmailError('invalid_request', 'includeSearchContext requires a portable text query.');
+    }
     const resolvedFolder = query.folder ? await this.resolveFolder(query.folder, page.signal) : undefined;
     const starredFolder = resolvedFolder?.role === 'starred';
     const folder = resolvedFolder?.role === 'all' || starredFolder ? undefined : resolvedFolder;
@@ -547,6 +555,7 @@ export class OutlookProvider implements EmailProvider {
     let inspectedCandidates = 0;
     let nextPageToken: string | undefined;
     let timeLimited = false;
+    const diagnostics: NonNullable<MessageSearchPage['diagnostics']> = [];
     do {
       const response = await this.request<GraphCollection<GraphMessage>>(requestUrl, {}, { signal: page.signal });
       const candidates = response.value ?? [];
@@ -580,6 +589,27 @@ export class OutlookProvider implements EmailProvider {
             : {}),
         });
         if (page.includeSnippet === false) delete message.snippet;
+        if (page.includeSearchContext && query.text) {
+          try {
+            const body = await this.request<GraphMessage>(
+              `/me/messages/${encodeURIComponent(message.id)}?$select=body`,
+              { headers: { prefer: 'outlook.body-content-type="text"' } },
+              { signal: page.signal },
+            );
+            message.searchContext =
+              body.body?.content == null
+                ? { status: 'unavailable' }
+                : extractSearchContext({ text: body.body.content }, query.text);
+          } catch {
+            page.signal?.throwIfAborted();
+            message.searchContext = { status: 'unavailable' };
+            diagnostics.push({
+              code: 'search_context_unavailable',
+              severity: 'warning',
+              message: 'Search context could not be loaded for a message. Message metadata is still available.',
+            });
+          }
+        }
         items.push(message);
         if (items.length === pageSize) break;
       }
@@ -606,6 +636,7 @@ export class OutlookProvider implements EmailProvider {
       exhausted: !nextPageToken && !providerLimited,
       ...(nextPageToken ? { nextPageToken } : {}),
       ...(localFilter ? { inspectedCandidates } : {}),
+      ...(diagnostics.length ? { diagnostics } : {}),
       ...(items.length < pageSize && inspectedCandidates >= 1_000 && nextPageToken
         ? { incomplete: true as const, incompleteReason: 'scan_limit' as const }
         : providerLimited

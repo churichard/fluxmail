@@ -698,6 +698,77 @@ describe('EmailService search pagination', () => {
     );
   });
 
+  it('validates search-context text and provider capability before provider work', async () => {
+    const listMessages = vi.fn().mockResolvedValue({ items: [], exhausted: true });
+    const account = {
+      id: 'acct_1',
+      provider: 'gmail' as const,
+      email: 'me@example.com',
+      status: 'active' as const,
+    };
+    const registry = {
+      resolveAccountId: () => account.id,
+      getAccount: () => account,
+      getProvider: () => ({ capabilities: { search: supportedSearch }, listMessages }),
+      markStatus: vi.fn(),
+    };
+    const service = new EmailService(registry as never, testDb());
+
+    await expect(
+      service.listMessages(account.id, { subject: 'invoice' }, { includeSearchContext: true }),
+    ).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(
+      service.listMessages(account.id, { rawProviderQuery: 'invoice' }, { includeSearchContext: true }),
+    ).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(
+      service.listMessages(account.id, { text: 'invoice' }, { includeSearchContext: true }),
+    ).rejects.toMatchObject({ code: 'unsupported_capability' });
+    expect(listMessages).not.toHaveBeenCalled();
+  });
+
+  it('forwards search context and binds it into signed continuation tokens', async () => {
+    const listMessages = vi
+      .fn()
+      .mockResolvedValueOnce({ items: [], nextPageToken: 'provider-page-2', exhausted: false })
+      .mockResolvedValueOnce({ items: [], exhausted: true });
+    const account = {
+      id: 'acct_1',
+      provider: 'gmail' as const,
+      email: 'me@example.com',
+      status: 'active' as const,
+    };
+    const registry = {
+      resolveAccountId: () => account.id,
+      getAccount: () => account,
+      getProvider: () => ({ capabilities: { search: supportedSearch, searchContext: true }, listMessages }),
+      markStatus: vi.fn(),
+    };
+    const service = new EmailService(registry as never, testDb(), undefined, Buffer.alloc(32, 4));
+
+    const first = await service.listMessages(
+      account.id,
+      { text: '  invoice   [ORDER_ID] ' },
+      { includeSearchContext: true },
+    );
+    expect(listMessages).toHaveBeenCalledWith(
+      { text: 'invoice [ORDER_ID]' },
+      expect.objectContaining({ includeSearchContext: true }),
+    );
+    await expect(
+      service.listMessages(account.id, { text: 'invoice [ORDER_ID]' }, { pageToken: first.nextPageToken }),
+    ).rejects.toMatchObject({ code: 'invalid_request' });
+
+    await service.listMessages(
+      account.id,
+      { text: 'invoice [ORDER_ID]' },
+      { pageToken: first.nextPageToken, includeSearchContext: true },
+    );
+    expect(listMessages).toHaveBeenLastCalledWith(
+      { text: 'invoice [ORDER_ID]' },
+      expect.objectContaining({ pageToken: 'provider-page-2', includeSearchContext: true }),
+    );
+  });
+
   it('rejects continuation requests with a changed query or page size', async () => {
     const provider = {
       capabilities: { search: supportedSearch },

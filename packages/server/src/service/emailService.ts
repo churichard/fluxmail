@@ -103,6 +103,7 @@ export interface BatchSearchInput {
   query: PortableEmailQuery;
   pageSize?: number;
   includeSnippet?: boolean;
+  includeSearchContext?: boolean;
 }
 
 export interface BatchSearchError {
@@ -492,6 +493,9 @@ export class EmailService {
       });
     }
     const query = normalized.query;
+    if (page.includeSearchContext && !query.text) {
+      throw new EmailError('invalid_request', 'includeSearchContext requires a portable text query.');
+    }
     const pageSize = Math.min(Math.max(page.pageSize ?? 25, 1), 100);
     const ownsController = page.signal === undefined;
     const controller = ownsController ? new AbortController() : undefined;
@@ -506,6 +510,9 @@ export class EmailService {
     try {
       const operation = this.withProvider(accountId, async (provider, resolvedId, account) => {
         assertSearchCapabilities(provider.capabilities.search, query);
+        if (page.includeSearchContext && provider.capabilities.searchContext !== true) {
+          throw new EmailError('unsupported_capability', 'This provider does not support search context.');
+        }
         const providerToken = page.pageToken
           ? this.cursorCodec.decode(page.pageToken, {
               accountId: resolvedId,
@@ -513,12 +520,14 @@ export class EmailService {
               query,
               pageSize,
               ...(page.includeSnippet !== undefined ? { includeSnippet: page.includeSnippet } : {}),
+              ...(page.includeSearchContext !== undefined ? { includeSearchContext: page.includeSearchContext } : {}),
             })
           : undefined;
         const result = await provider.listMessages(query, {
           pageSize,
           ...(providerToken ? { pageToken: providerToken } : {}),
           ...(page.includeSnippet !== undefined ? { includeSnippet: page.includeSnippet } : {}),
+          ...(page.includeSearchContext !== undefined ? { includeSearchContext: page.includeSearchContext } : {}),
           signal,
           softDeadlineAt,
         });
@@ -533,6 +542,9 @@ export class EmailService {
                   query,
                   pageSize,
                   ...(page.includeSnippet !== undefined ? { includeSnippet: page.includeSnippet } : {}),
+                  ...(page.includeSearchContext !== undefined
+                    ? { includeSearchContext: page.includeSearchContext }
+                    : {}),
                   providerToken: result.nextPageToken,
                 }),
               }
@@ -570,6 +582,9 @@ export class EmailService {
       });
     }
     const pageSize = Math.min(Math.max(input.pageSize ?? 25, 1), 100);
+    if (input.includeSearchContext && !normalized.query.text) {
+      throw new EmailError('invalid_request', 'includeSearchContext requires a portable text query.');
+    }
     const controller = new AbortController();
     const startedAt = Date.now();
     const softDeadlineAt = startedAt + SEARCH_SOFT_BUDGET_MS;
@@ -591,6 +606,7 @@ export class EmailService {
             pageSize,
             ...(account.pageToken ? { pageToken: account.pageToken } : {}),
             ...(input.includeSnippet !== undefined ? { includeSnippet: input.includeSnippet } : {}),
+            ...(input.includeSearchContext !== undefined ? { includeSearchContext: input.includeSearchContext } : {}),
             signal: controller.signal,
             softDeadlineAt,
           });

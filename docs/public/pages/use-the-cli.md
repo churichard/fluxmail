@@ -35,13 +35,13 @@ List inbox messages, search across mail, or fetch a complete message or thread:
 
 ```bash
 fluxmail emails list --folder inbox --read false --page-size 20
-fluxmail emails search "from:ann@example.com is:unread quarterly report"
+fluxmail emails search "from:ann@example.com is:unread quarterly report" --include-search-context true
 fluxmail emails search-batch "subject:invoice is:unread" --account <first-account-id> --account <second-account-id>
 fluxmail emails get <message-id>
 fluxmail threads get <thread-id>
 ```
 
-The search string uses Fluxmail's [portable search syntax](/docs/email-search). Add `--include-snippet true` to request IMAP previews, or pass `false` to suppress previews. List responses include `meta.nextPageToken` when another page is available. Pass it back with `--page-token` and the same query, page size, and snippet setting. Check `meta.exhausted` before treating an empty page as a confirmed negative result.
+The search string uses Fluxmail's [portable search syntax](/docs/email-search). Add `--include-snippet true` to request IMAP previews, or pass `false` to suppress previews. Add `--include-search-context true` to include an excerpt around literal search text. List responses include `meta.nextPageToken` when another page is available. Pass it back with `--page-token` and the same query, page size, snippet setting, and search context setting. Check `meta.exhausted` before treating an empty page as a confirmed negative result.
 
 `emails search-batch` accepts 1 through 20 repeated `--account` options. It prints every account group and exits nonzero if any group fails. Use `--input <file|->` to send an exact batch request with per-account continuation tokens.
 

@@ -31,7 +31,7 @@ import {
   type SendResult,
   type Thread,
 } from '@fluxmail/core';
-import { downloadBody, downloadSnippet, inspectStructure } from './body.js';
+import { downloadBody, downloadListBody, inspectStructure } from './body.js';
 import { mapImapError } from './errors.js';
 import { resolveFolders, type ResolvedFolders } from './folders.js';
 import { composeMessage, stripBccHeader, type ThreadingHeaders } from './mime.js';
@@ -92,6 +92,7 @@ export const IMAP_CAPABILITIES: Capabilities = {
     nativeQuery: { syntax: 'gmail', availability: 'unknown' },
   },
   snippets: false,
+  searchContext: true,
 };
 
 export interface ImapProviderOptions {
@@ -393,6 +394,8 @@ export class ImapProvider implements EmailProvider {
       body?: boolean;
       snippet?: boolean;
       snippetDiagnostics?: SearchDiagnostic[];
+      searchContextText?: string;
+      searchContextDiagnostics?: SearchDiagnostic[];
       signal?: AbortSignal;
       includeHeaders?: boolean;
       draftId?: string;
@@ -442,18 +445,35 @@ export class ImapProvider implements EmailProvider {
       ...(fetched.bodyStructure ? { attachments: parts.attachments } : {}),
       ...(options.includeHeaders && parsed.selected ? { headers: parsed.selected } : {}),
     };
-    if (options.snippet && fetched.bodyStructure) {
+    if ((options.snippet || options.searchContextText) && fetched.bodyStructure) {
       try {
-        const snippet = await downloadSnippet(client, fetched.uid, parts);
-        if (snippet !== undefined) message.snippet = snippet;
+        const enrichment = await downloadListBody(client, fetched.uid, parts, {
+          snippet: options.snippet ?? false,
+          ...(options.searchContextText ? { searchContextText: options.searchContextText } : {}),
+        });
+        if (enrichment.snippet !== undefined) message.snippet = enrichment.snippet;
+        if (enrichment.searchContext !== undefined) message.searchContext = enrichment.searchContext;
       } catch {
         options.signal?.throwIfAborted();
-        options.snippetDiagnostics?.push({
-          code: 'snippet_unavailable',
-          severity: 'warning',
-          message: 'A message preview could not be loaded. Message metadata is still available.',
-        });
+        if (options.snippet) {
+          options.snippetDiagnostics?.push({
+            code: 'snippet_unavailable',
+            severity: 'warning',
+            message: 'A message preview could not be loaded. Message metadata is still available.',
+          });
+        }
+        if (options.searchContextText) {
+          message.searchContext = { status: 'unavailable' };
+          options.searchContextDiagnostics?.push({
+            code: 'search_context_unavailable',
+            severity: 'warning',
+            message: 'Search context could not be loaded for a message. Message metadata is still available.',
+          });
+        }
       }
+    }
+    if (options.searchContextText && !fetched.bodyStructure) {
+      message.searchContext = { status: 'unavailable' };
     }
     if (options.body) {
       if (fetched.bodyStructure) {
@@ -514,6 +534,9 @@ export class ImapProvider implements EmailProvider {
       });
     }
     query = normalized.query;
+    if (page?.includeSearchContext && !query.text) {
+      throw new EmailError('invalid_request', 'includeSearchContext requires a portable text query.');
+    }
     const folders = await this.refreshFolders(searchClient);
     const explicit = query.folder;
     let paths: string[];
@@ -609,6 +632,9 @@ export class ImapProvider implements EmailProvider {
               await this.toMessage(client, path, uidValidity, fetched, {
                 snippet: page?.includeSnippet === true,
                 snippetDiagnostics: diagnostics,
+                ...(page?.includeSearchContext && query.text
+                  ? { searchContextText: query.text, searchContextDiagnostics: diagnostics }
+                  : {}),
                 signal: page?.signal,
               }),
             );

@@ -220,14 +220,18 @@ describe('MCP typed search', () => {
 
     const result = await client.callTool({
       name: 'search_emails',
-      arguments: { query: 'form:ann@example.com is:unread', starred: true },
+      arguments: {
+        query: 'form:ann@example.com is:unread',
+        starred: true,
+        includeSearchContext: true,
+      },
     });
 
     expect(result.isError).toBeFalsy();
     expect(listMessages).toHaveBeenCalledWith(
       undefined,
       { text: 'form:ann@example.com', read: false, starred: true },
-      {},
+      { includeSearchContext: true },
     );
     expect(JSON.stringify(result.content)).toContain('possible_operator_typo');
   });
@@ -257,7 +261,13 @@ describe('MCP typed search', () => {
       .fn()
       .mockResolvedValueOnce({
         groups: [
-          { accountId: 'acct_1', page: { items: [], exhausted: true } },
+          {
+            accountId: 'acct_1',
+            page: {
+              items: [{ searchContext: { status: 'matched', excerpt: 'private body excerpt' } }],
+              exhausted: true,
+            },
+          },
           {
             accountId: 'acct_2',
             error: { code: 'provider_unavailable', message: 'Search timed out.', exhausted: false },
@@ -288,15 +298,18 @@ describe('MCP typed search', () => {
       name: 'search_emails_batch',
       arguments: {
         accounts: [{ accountId: 'acct_1' }, { accountId: 'acct_2' }],
-        query: 'subject:report',
+        query: 'invoice subject:report',
         includeSnippet: true,
+        includeSearchContext: true,
       },
     });
     expect(mixed.isError).toBeFalsy();
+    expect(JSON.stringify(mixed.content)).toContain('private body excerpt');
     expect(searchMessagesBatch).toHaveBeenNthCalledWith(1, {
       accounts: [{ accountId: 'acct_1' }, { accountId: 'acct_2' }],
-      query: { subject: 'report' },
+      query: { subject: 'report', text: 'invoice' },
       includeSnippet: true,
+      includeSearchContext: true,
     });
 
     const failed = await client.callTool({
@@ -318,6 +331,7 @@ describe('MCP typed search', () => {
         error_code: 'account_failure',
       }),
     );
+    expect(JSON.stringify(capture.mock.calls)).not.toContain('private body excerpt');
     expect(capture).toHaveBeenCalledWith(
       'operation completed',
       expect.objectContaining({

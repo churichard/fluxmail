@@ -26,6 +26,7 @@ const message: Message = {
   to: [{ email: account.email }],
   subject: 'Hello',
   date: '2026-07-14T12:00:00.000Z',
+  searchContext: { status: 'matched', excerpt: 'Invoice [ORDER_ID] is ready.' },
   body: { text: 'Hello there' },
   attachments: [],
   flags: { read: false, starred: false, draft: false },
@@ -257,10 +258,20 @@ describe('REST email operations', () => {
     await expect(labels.json()).resolves.toEqual({ data: [{ id: 'Label_1', name: 'private-project' }] });
     expect(service.listLabels).toHaveBeenCalledWith('acct_1');
 
-    const listed = await app.request('/api/v1/accounts/acct_1/messages?read=false&pageSize=25', { headers: auth });
+    const listed = await app.request(
+      '/api/v1/accounts/acct_1/messages?read=false&text=invoice&pageSize=25&includeSearchContext=true',
+      { headers: auth },
+    );
     expect(listed.status).toBe(200);
-    expect(await listed.json()).toMatchObject({ data: [{ id: 'msg_1' }], meta: { nextPageToken: 'next_1' } });
-    expect(service.listMessages).toHaveBeenCalledWith('acct_1', { read: false }, { pageSize: 25 });
+    expect(await listed.json()).toMatchObject({
+      data: [{ id: 'msg_1', searchContext: { status: 'matched', excerpt: 'Invoice [ORDER_ID] is ready.' } }],
+      meta: { nextPageToken: 'next_1' },
+    });
+    expect(service.listMessages).toHaveBeenCalledWith(
+      'acct_1',
+      { text: 'invoice', read: false },
+      { pageSize: 25, includeSearchContext: true },
+    );
 
     const batch = await app.request(
       '/api/v1/messages/search',
@@ -269,8 +280,10 @@ describe('REST email operations', () => {
         {
           accounts: [{ accountId: 'acct_1' }, { accountId: 'acct_2', pageToken: 'continue_2' }],
           query: 'subject:report',
+          text: 'invoice',
           folder: 'inbox',
           includeSnippet: true,
+          includeSearchContext: true,
         },
         auth,
       ),
@@ -285,8 +298,9 @@ describe('REST email operations', () => {
     });
     expect(service.searchMessagesBatch).toHaveBeenCalledWith({
       accounts: [{ accountId: 'acct_1' }, { accountId: 'acct_2', pageToken: 'continue_2' }],
-      query: { subject: 'report', folder: 'inbox' },
+      query: { text: 'invoice', subject: 'report', folder: 'inbox' },
       includeSnippet: true,
+      includeSearchContext: true,
     });
 
     expect((await app.request('/api/v1/accounts/acct_1/messages/msg_1', { headers: auth })).status).toBe(200);
@@ -544,16 +558,32 @@ describe('REST email operations', () => {
         })
       ).status,
     ).toBe(400);
-    const successfulBatchQuery = 'subject:private-success-search';
+    const successfulBatchQuery = 'private-success-search subject:invoice';
     service.searchMessagesBatch.mockResolvedValueOnce({
-      groups: [{ accountId: 'acct_1', page: { items: [], exhausted: true } }],
+      groups: [
+        {
+          accountId: 'acct_1',
+          page: {
+            items: [{ searchContext: { status: 'matched', excerpt: 'private REST body excerpt' } }],
+            exhausted: true,
+          },
+        },
+      ],
       exhausted: true,
     });
     expect(
       (
         await app.request(
           '/api/v1/messages/search',
-          jsonRequest('POST', { accounts: [{ accountId: 'acct_1' }], query: successfulBatchQuery }, auth),
+          jsonRequest(
+            'POST',
+            {
+              accounts: [{ accountId: 'acct_1' }],
+              query: successfulBatchQuery,
+              includeSearchContext: true,
+            },
+            auth,
+          ),
         )
       ).status,
     ).toBe(200);
@@ -629,6 +659,7 @@ describe('REST email operations', () => {
     expect(JSON.stringify(capture.mock.calls)).not.toContain(privateQuery);
     expect(JSON.stringify(capture.mock.calls)).not.toContain(privateBatchQuery);
     expect(JSON.stringify(capture.mock.calls)).not.toContain(successfulBatchQuery);
+    expect(JSON.stringify(capture.mock.calls)).not.toContain('private REST body excerpt');
     expect(JSON.stringify(capture.mock.calls)).not.toContain('acct_2');
     expect(warn).toHaveBeenCalledWith(
       'rest.operation_failed',

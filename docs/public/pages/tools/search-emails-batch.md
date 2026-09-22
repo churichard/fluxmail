@@ -31,6 +31,7 @@ Required capabilities: `mail.read`.
 | `before` | No | `string` | YYYY-MM-DD received date, exclusive in UTC Minimum length: 1. |
 | `pageSize` | No | `integer` | Defaults to 25 Minimum: 1. Maximum: 100. |
 | `includeSnippet` | No | `boolean` | Request or suppress message previews |
+| `includeSearchContext` | No | `boolean` | Include a match-centered body excerpt; requires a portable text query |
 
 <details>
 <summary>JSON input schema</summary>
@@ -115,6 +116,10 @@ Required capabilities: `mail.read`.
     "includeSnippet": {
       "type": "boolean",
       "description": "Request or suppress message previews"
+    },
+    "includeSearchContext": {
+      "type": "boolean",
+      "description": "Include a match-centered body excerpt; requires a portable text query"
     }
   },
   "required": [

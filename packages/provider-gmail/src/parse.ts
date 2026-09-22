@@ -107,16 +107,23 @@ export function walkParts(payload: gmail_v1.Schema$MessagePart | undefined): Wal
   const result: WalkedParts = { body: {}, attachments: [], externalBodyParts: {} };
   if (!payload) return result;
 
-  const visit = (part: gmail_v1.Schema$MessagePart, partPath: number[]) => {
+  const visit = (part: gmail_v1.Schema$MessagePart, partPath: number[], inAttachedMessage: boolean) => {
     const mimeType = part.mimeType ?? '';
     const attachment = parseAttachment(part, partPath);
     if (attachment) {
       result.attachments.push(attachment.meta);
       return;
     }
+    // Text inside an attached message is not the outer body, but its attachments still belong to this message.
+    const nested = inAttachedMessage || mimeType === 'message/rfc822';
     const bodyField: BodyField | undefined =
       mimeType === 'text/plain' ? 'text' : mimeType === 'text/html' ? 'html' : undefined;
-    if (bodyField && result.body[bodyField] === undefined && result.externalBodyParts[bodyField] === undefined) {
+    if (
+      !nested &&
+      bodyField &&
+      result.body[bodyField] === undefined &&
+      result.externalBodyParts[bodyField] === undefined
+    ) {
       if (part.body?.data != null) {
         result.body[bodyField] = decodeTextPart(part);
         return;
@@ -126,9 +133,9 @@ export function walkParts(payload: gmail_v1.Schema$MessagePart | undefined): Wal
         return;
       }
     }
-    for (const [index, child] of (part.parts ?? []).entries()) visit(child, [...partPath, index]);
+    for (const [index, child] of (part.parts ?? []).entries()) visit(child, [...partPath, index], nested);
   };
-  visit(payload, [0]);
+  visit(payload, [0], false);
   return result;
 }
 

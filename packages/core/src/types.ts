@@ -37,6 +37,8 @@ export interface Capabilities {
   search: SearchCapabilities;
   /** Whether list results include snippets without fetching bodies. */
   snippets: boolean;
+  /** Whether list and search results can include match-centered body excerpts. */
+  searchContext?: boolean;
 }
 
 export interface Account {
@@ -132,6 +134,9 @@ export interface Message {
   /** ISO 8601. */
   date: string;
   snippet?: string;
+  searchContext?:
+    | { status: 'matched'; excerpt: string }
+    | { status: 'no_literal_match' | 'scan_limit' | 'unavailable' };
   /** Populated on getMessage/getThread, not on list. */
   body?: MessageBody;
   /** Populated on getMessage/getThread; omitted when a list response has no MIME metadata. */
@@ -223,6 +228,8 @@ export interface PageOpts {
   pageToken?: string;
   /** Include or suppress message snippets. Omission preserves the provider default. */
   includeSnippet?: boolean;
+  /** Include a match-centered body excerpt for the portable text query. */
+  includeSearchContext?: boolean;
   /** Internal cancellation signal used to stop provider work at the request deadline. */
   signal?: AbortSignal;
   /** Internal soft deadline. Providers return a resumable page at the next safe boundary. */

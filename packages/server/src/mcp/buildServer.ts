@@ -67,6 +67,10 @@ const queryShape = {
   pageSize: z.number().int().min(1).max(100).optional().describe('Defaults to 25'),
   pageToken: z.string().min(1).optional().describe('nextPageToken from a previous call'),
   includeSnippet: z.boolean().optional().describe('Request or suppress message previews'),
+  includeSearchContext: z
+    .boolean()
+    .optional()
+    .describe('Include a match-centered body excerpt; requires a portable text query'),
 };
 
 const draftShape = {
@@ -284,11 +288,17 @@ function handle<A extends unknown[]>(
   return handleResult(tool, async (...args: A) => ok(await fn(...args)), gate, options);
 }
 
-function pageOpts(args: { pageSize?: number; pageToken?: string; includeSnippet?: boolean }): PageOpts {
+function pageOpts(args: {
+  pageSize?: number;
+  pageToken?: string;
+  includeSnippet?: boolean;
+  includeSearchContext?: boolean;
+}): PageOpts {
   return {
     ...(args.pageSize !== undefined ? { pageSize: args.pageSize } : {}),
     ...(args.pageToken !== undefined ? { pageToken: args.pageToken } : {}),
     ...(args.includeSnippet !== undefined ? { includeSnippet: args.includeSnippet } : {}),
+    ...(args.includeSearchContext !== undefined ? { includeSearchContext: args.includeSearchContext } : {}),
   };
 }
 
@@ -558,6 +568,7 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
             query: string;
             pageSize?: number;
             includeSnippet?: boolean;
+            includeSearchContext?: boolean;
           } & Record<string, unknown>,
         ) => {
           const parsed = parseEmailSearch(args.query);
@@ -577,6 +588,7 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
             query: merged.query as PortableEmailQuery,
             ...(args.pageSize !== undefined ? { pageSize: args.pageSize } : {}),
             ...(args.includeSnippet !== undefined ? { includeSnippet: args.includeSnippet } : {}),
+            ...(args.includeSearchContext !== undefined ? { includeSearchContext: args.includeSearchContext } : {}),
           });
           const response = ok({
             ...result,
