@@ -119,6 +119,10 @@ Content type: `application/json`
     },
     "includeSnippet": {
       "type": "boolean"
+    },
+    "includeSearchContext": {
+      "type": "boolean",
+      "description": "Include a match-centered body excerpt. Requires a portable text query."
     }
   },
   "required": [
@@ -334,6 +338,47 @@ Content type: `application/json`
                     },
                     "snippet": {
                       "type": "string"
+                    },
+                    "searchContext": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "matched"
+                              ]
+                            },
+                            "excerpt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "status",
+                            "excerpt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "no_literal_match",
+                                "scan_limit",
+                                "unavailable"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ],
+                      "description": "Optional body excerpt status for a requested portable text search."
                     },
                     "body": {
                       "type": "object",

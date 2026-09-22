@@ -2,6 +2,7 @@ import { google, type gmail_v1 } from 'googleapis';
 import type { OAuth2Client } from 'googleapis-common';
 import {
   EmailError,
+  extractSearchContext,
   isEmailError,
   normalizeEmailQuery,
   replySubject,
@@ -31,6 +32,7 @@ import {
   findAttachment,
   parseGmailMessage,
   parseGmailMessageWithParts,
+  walkParts,
 } from './parse.js';
 import { buildRawMessage, type ThreadingHeaders } from './mime.js';
 import { isInsufficientScope, isRetryableForNonIdempotentRequest, withRetry } from './errors.js';
@@ -152,6 +154,7 @@ export const GMAIL_CAPABILITIES: Capabilities = {
     nativeQuery: { syntax: 'gmail', availability: 'available' },
   },
   snippets: true,
+  searchContext: true,
 };
 
 export class GmailProvider implements EmailProvider {
@@ -344,6 +347,9 @@ export class GmailProvider implements EmailProvider {
       });
     }
     const q = normalized.query;
+    if (page?.includeSearchContext && !q.text) {
+      throw new EmailError('invalid_request', 'includeSearchContext requires a portable text query.');
+    }
     const labels = await this.labels(false, page?.signal);
     const gq = toGmailQuery(q, (folder) => {
       const match = labels.find((l) => l.id === folder || l.name?.toLowerCase() === folder.toLowerCase());
@@ -362,6 +368,7 @@ export class GmailProvider implements EmailProvider {
     let providerToken = decodedToken ? decodedToken.providerToken : page?.pageToken;
     let remainingIds: string[] = [];
     let timeLimited = false;
+    const diagnostics: NonNullable<MessageSearchPage['diagnostics']> = [];
     do {
       let ids: string[];
       if (pendingIds.length) {
@@ -398,6 +405,7 @@ export class GmailProvider implements EmailProvider {
           break;
         }
         const chunk = ids.slice(i, i + HYDRATE_CONCURRENCY);
+        const contextTargets: { message: Message; full?: gmail_v1.Schema$Message }[] = [];
         const fetched = await Promise.allSettled(
           chunk.map((id) =>
             withRetry(
@@ -439,8 +447,20 @@ export class GmailProvider implements EmailProvider {
               message.attachments?.some((attachment) => attachment.disposition !== 'inline') ?? false;
             if (hasAttachment !== q.hasAttachment) continue;
           }
+          if (page?.includeSearchContext) {
+            // Full MIME is already loaded when local attachment filtering required it.
+            contextTargets.push(q.hasAttachment !== undefined ? { message, full: result.value.data } : { message });
+          }
           items.push(message);
           if (items.length === pageSize) break;
+        }
+        if (q.text && contextTargets.length) {
+          const queryText = q.text;
+          await Promise.all(
+            contextTargets.map(({ message, full }) =>
+              this.attachSearchContext(message, full, queryText, diagnostics, page?.signal),
+            ),
+          );
         }
         if (timeLimited || items.length === pageSize || inspectedCandidates >= 1_000) break;
       }
@@ -454,6 +474,7 @@ export class GmailProvider implements EmailProvider {
       items,
       exhausted: false,
       ...(localFilter ? { inspectedCandidates } : {}),
+      ...(diagnostics.length ? { diagnostics } : {}),
     };
     const nextPageToken =
       localFilter || timeLimited
@@ -472,6 +493,65 @@ export class GmailProvider implements EmailProvider {
     }
     out.exhausted = !nextPageToken && out.incompleteReason !== 'provider_limit';
     return out;
+  }
+
+  private async attachSearchContext(
+    message: Message,
+    full: gmail_v1.Schema$Message | undefined,
+    queryText: string,
+    diagnostics: NonNullable<MessageSearchPage['diagnostics']>,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    try {
+      let raw = full;
+      if (!raw) {
+        const params = { userId: 'me', id: message.id, format: 'full' as const };
+        const response = await withRetry(
+          () => (signal ? this.gmail.users.messages.get(params, { signal }) : this.gmail.users.messages.get(params)),
+          3,
+          undefined,
+          signal,
+        );
+        raw = response.data;
+      }
+      message.searchContext = await this.searchContext(raw, queryText, signal);
+    } catch {
+      signal?.throwIfAborted();
+      message.searchContext = { status: 'unavailable' };
+      diagnostics.push({
+        code: 'search_context_unavailable',
+        severity: 'warning',
+        message: 'Search context could not be loaded for a message. Message metadata is still available.',
+      });
+    }
+  }
+
+  private async searchContext(
+    raw: gmail_v1.Schema$Message,
+    queryText: string,
+    signal?: AbortSignal,
+  ): Promise<NonNullable<Message['searchContext']>> {
+    const walked = walkParts(raw.payload);
+    for (const field of ['text', 'html'] as const) {
+      if (walked.body[field] !== undefined) {
+        return extractSearchContext({ [field]: walked.body[field] }, queryText);
+      }
+      const external = walked.externalBodyParts[field];
+      if (!external) continue;
+      const params = { userId: 'me', messageId: raw.id!, id: external.attachmentId };
+      const response = await withRetry(
+        () =>
+          signal
+            ? this.gmail.users.messages.attachments.get(params, { signal })
+            : this.gmail.users.messages.attachments.get(params),
+        3,
+        undefined,
+        signal,
+      );
+      if (response.data.data == null) return { status: 'unavailable' };
+      return extractSearchContext({ [field]: decodeTextPart(external.part, response.data.data) }, queryText);
+    }
+    return { status: 'unavailable' };
   }
 
   async getMessage(id: string, opts?: GetMessageOpts): Promise<Message> {

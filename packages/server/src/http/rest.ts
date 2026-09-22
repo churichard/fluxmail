@@ -166,6 +166,13 @@ const MessageSchema = z
     subject: z.string(),
     date: z.string(),
     snippet: z.string().optional(),
+    searchContext: z
+      .union([
+        z.object({ status: z.literal('matched'), excerpt: z.string() }).strict(),
+        z.object({ status: z.enum(['no_literal_match', 'scan_limit', 'unavailable']) }).strict(),
+      ])
+      .optional()
+      .describe('Optional body excerpt status for a requested portable text search.'),
     body: MessageBodySchema.optional(),
     attachments: z.array(AttachmentMetaSchema).optional(),
     flags: z.object({ read: z.boolean(), starred: z.boolean(), draft: z.boolean() }).strict(),
@@ -238,6 +245,7 @@ const AccountSchema = z
           })
           .strict(),
         snippets: z.boolean(),
+        searchContext: z.boolean().optional().describe('Supports optional match-centered body excerpts.'),
       })
       .strict(),
     ownerMemberId: z.string(),
@@ -468,6 +476,10 @@ const messageQuerySchema = z
       .optional(),
     pageToken: z.string().min(1).optional(),
     includeSnippet: z.enum(['true', 'false']).optional(),
+    includeSearchContext: z
+      .enum(['true', 'false'])
+      .optional()
+      .describe('Include a match-centered body excerpt. Requires a portable text query.'),
   })
   .strict();
 
@@ -491,6 +503,10 @@ const BatchSearchRequestSchema = z
     before: isoDate.optional(),
     pageSize: z.number().int().min(1).max(100).optional(),
     includeSnippet: z.boolean().optional(),
+    includeSearchContext: z
+      .boolean()
+      .optional()
+      .describe('Include a match-centered body excerpt. Requires a portable text query.'),
   })
   .strict()
   .openapi('BatchSearchRequest');
@@ -885,6 +901,9 @@ function toEmailQuery(input: z.infer<typeof messageQuerySchema>): {
       ...(input.pageSize ? { pageSize: Number(input.pageSize) } : {}),
       ...(input.pageToken ? { pageToken: input.pageToken } : {}),
       ...(input.includeSnippet !== undefined ? { includeSnippet: input.includeSnippet === 'true' } : {}),
+      ...(input.includeSearchContext !== undefined
+        ? { includeSearchContext: input.includeSearchContext === 'true' }
+        : {}),
     },
   };
 }
@@ -1437,6 +1456,7 @@ export function createRestApi(deps: RestApiDeps): OpenAPIHono<RestEnv> {
         query: merged.query as PortableEmailQuery,
         ...(input.pageSize !== undefined ? { pageSize: input.pageSize } : {}),
         ...(input.includeSnippet !== undefined ? { includeSnippet: input.includeSnippet } : {}),
+        ...(input.includeSearchContext !== undefined ? { includeSearchContext: input.includeSearchContext } : {}),
       });
       return {
         data: result.groups.map((group) => {

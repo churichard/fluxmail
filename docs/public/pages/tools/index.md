@@ -62,6 +62,6 @@ For HTTP connections, permissions belong to the API key. For stdio connections, 
 ## Common behavior
 
 - `accountId` is optional when the connection can access exactly one mailbox.
-- List and search tools return message metadata and snippets. Use `get_email` to retrieve a complete message body.
+- List and search tools return message metadata and optional snippets. Set `includeSearchContext` with literal search text when you need an excerpt around the body match. Use `get_email` to retrieve a complete message body.
 - Paginated tools return a page token that you can pass to the next request.
 - Scheduled messages are sent only while the Fluxmail server is running.

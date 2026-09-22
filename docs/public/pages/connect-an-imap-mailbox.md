@@ -155,7 +155,8 @@ Fluxmail uses IMAP to read and organize the mailbox, and SMTP to send messages. 
 - Each message lives in a folder. Fluxmail can move messages between folders, but IMAP mailboxes do not support label actions.
 - Fluxmail builds threads from the standard `References`, `In-Reply-To`, and `Message-ID` headers.
 - Searches run through the IMAP server, so results depend on what that server can index.
-- List and search results omit previews by default. Pass `includeSnippet=true` to fetch a short preview from the preferred text part without downloading attachments or complete messages.
+- List and search results omit previews by default. Pass `includeSnippet=true` to fetch a short preview from the preferred text part without downloading attachments or complete messages. The `snippets: false` capability means IMAP has no preview available without a body read. It does not disable requested previews.
+- Pass `includeSearchContext=true` with a literal text query to fetch an excerpt around the match. Fluxmail scans at most 256 KiB from the preferred text part. If you also request a snippet, both values come from one partial, non-marking body read.
 
 Through MCP or REST, Fluxmail can read and search mail, work with attachments and drafts, send or schedule messages, reply, forward, and organize messages into folders.
 

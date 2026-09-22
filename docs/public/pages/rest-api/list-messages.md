@@ -41,6 +41,7 @@ curl 'http://localhost:8977/api/v1/accounts/acct_123/messages' \
 | `pageSize` | query | No | `string` | Pattern: `^(?:[1-9]\|[1-9][0-9]\|100)$`. |
 | `pageToken` | query | No | `string` | Minimum length: 1. |
 | `includeSnippet` | query | No | `true` or `false` | None |
+| `includeSearchContext` | query | No | `true` or `false` | Include a match-centered body excerpt. Requires a portable text query. |
 
 ## Responses
 
@@ -235,6 +236,47 @@ curl 'http://localhost:8977/api/v1/accounts/acct_123/messages' \
           },
           "snippet": {
             "type": "string"
+          },
+          "searchContext": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "matched"
+                    ]
+                  },
+                  "excerpt": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "status",
+                  "excerpt"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "no_literal_match",
+                      "scan_limit",
+                      "unavailable"
+                    ]
+                  }
+                },
+                "required": [
+                  "status"
+                ],
+                "additionalProperties": false
+              }
+            ],
+            "description": "Optional body excerpt status for a requested portable text search."
           },
           "body": {
             "type": "object",

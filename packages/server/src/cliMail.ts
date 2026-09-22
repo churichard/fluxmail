@@ -53,6 +53,7 @@ interface QueryOptions {
   pageSize?: string;
   pageToken?: string;
   includeSnippet?: boolean;
+  includeSearchContext?: boolean;
 }
 
 interface MessageContentOptions extends InputOptions {
@@ -251,7 +252,8 @@ function addQueryOptions(command: Command, includeText: boolean): Command {
     .option('--raw-provider-query <query>', 'Pass a provider-native query')
     .option('--page-size <number>', 'Return 1 to 100 messages')
     .option('--page-token <token>', 'Continue from a previous response')
-    .option('--include-snippet <boolean>', 'Request or suppress message previews', booleanOption);
+    .option('--include-snippet <boolean>', 'Request or suppress message previews', booleanOption)
+    .option('--include-search-context <boolean>', 'Include a body excerpt around the search match', booleanOption);
   if (includeText) command.option('--text <query>', 'Filter by literal full-text search');
   return command;
 }
@@ -277,6 +279,9 @@ function queryString(options: QueryOptions, typedQuery?: string): string {
   if (options.starred !== undefined) query.set('starred', String(options.starred));
   if (options.hasAttachment !== undefined) query.set('hasAttachment', String(options.hasAttachment));
   if (options.includeSnippet !== undefined) query.set('includeSnippet', String(options.includeSnippet));
+  if (options.includeSearchContext !== undefined) {
+    query.set('includeSearchContext', String(options.includeSearchContext));
+  }
   return query.size ? `?${query}` : '';
 }
 
@@ -432,6 +437,7 @@ export function registerMailCommands(program: Command, options: MailCommandOptio
     .option('--before <date>', 'Return messages before this YYYY-MM-DD date')
     .option('--page-size <number>', 'Return 1 to 100 messages per account')
     .option('--include-snippet <boolean>', 'Request or suppress message previews', booleanOption)
+    .option('--include-search-context <boolean>', 'Include a body excerpt around the search match', booleanOption)
     .option('--input <file>', 'Read an exact REST JSON body from a file, or pass - for stdin');
   batchSearch.action(
     async (query: string | undefined, batchOptions: QueryOptions & { account: string[]; input?: string }) =>
@@ -473,6 +479,7 @@ export function registerMailCommands(program: Command, options: MailCommandOptio
                 before: batchOptions.before,
                 pageSize: batchOptions.pageSize ? Number(batchOptions.pageSize) : undefined,
                 includeSnippet: batchOptions.includeSnippet,
+                includeSearchContext: batchOptions.includeSearchContext,
               }).filter(([, value]) => value !== undefined),
             ),
           };

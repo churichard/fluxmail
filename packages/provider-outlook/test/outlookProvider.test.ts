@@ -92,6 +92,7 @@ describe('OutlookProvider', () => {
     }) as unknown as typeof fetch;
 
     const outlook = provider(fetchMock);
+    expect(outlook.capabilities.searchContext).toBe(true);
     expect(outlook.capabilities.search.folderRoles.archive).toBe('unknown');
     const result = await outlook.listFolders();
 
@@ -194,6 +195,83 @@ describe('OutlookProvider', () => {
     expect(listCall.searchParams.get('$filter')).toBeNull();
 
     expect(vi.mocked(fetchMock).mock.calls.some(([input]) => String(input) === nextLink)).toBe(true);
+  });
+
+  it('requests a text body only for accepted search-context results', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      const folder = folderResponse(url);
+      if (folder) return folder;
+      if (url.pathname === '/v1.0/me/messages') {
+        return json({
+          value: [
+            {
+              id: 'message-1',
+              conversationId: 'thread-1',
+              parentFolderId: 'folder-inbox',
+              subject: 'Invoice',
+              receivedDateTime: '2026-07-14T12:00:00Z',
+              bodyPreview: 'Opening preview',
+            },
+          ],
+        });
+      }
+      if (url.pathname === '/v1.0/me/messages/message-1') {
+        expect(url.searchParams.get('$select')).toBe('body');
+        expect(new Headers(init?.headers).get('prefer')).toContain('outlook.body-content-type="text"');
+        return json({ body: { contentType: 'text', content: 'Opening line\nInvoice [ORDER_ID] is ready.' } });
+      }
+      return json({ error: { code: 'ErrorItemNotFound', message: 'missing' } }, 404);
+    }) as unknown as typeof fetch;
+
+    const page = await provider(fetchMock).listMessages({ text: 'invoice [ORDER_ID]' }, { includeSearchContext: true });
+
+    expect(page.items[0]).toMatchObject({
+      snippet: 'Opening preview',
+      searchContext: { status: 'matched', excerpt: 'Invoice [ORDER_ID] is ready.' },
+    });
+    expect(
+      vi
+        .mocked(fetchMock)
+        .mock.calls.filter(([input]) => new URL(String(input)).pathname.startsWith('/v1.0/me/messages/message-1')),
+    ).toHaveLength(1);
+  });
+
+  it('keeps Outlook metadata when optional search-context enrichment fails', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      const folder = folderResponse(url);
+      if (folder) return folder;
+      if (url.pathname === '/v1.0/me/messages') {
+        return json({
+          value: [
+            {
+              id: 'message-1',
+              conversationId: 'thread-1',
+              parentFolderId: 'folder-inbox',
+              subject: 'Invoice',
+              receivedDateTime: '2026-07-14T12:00:00Z',
+            },
+          ],
+        });
+      }
+      if (url.pathname === '/v1.0/me/messages/message-1') {
+        return json({ error: { code: 'ErrorItemNotFound', message: 'private body failure' } }, 404);
+      }
+      return json({ error: { code: 'ErrorItemNotFound', message: 'missing' } }, 404);
+    }) as unknown as typeof fetch;
+
+    const page = await provider(fetchMock).listMessages({ text: 'invoice' }, { includeSearchContext: true });
+
+    expect(page.items[0]).toMatchObject({
+      id: 'message-1',
+      subject: 'Invoice',
+      searchContext: { status: 'unavailable' },
+    });
+    expect(page.diagnostics).toEqual([
+      expect.objectContaining({ code: 'search_context_unavailable', severity: 'warning' }),
+    ]);
+    expect(JSON.stringify(page.diagnostics)).not.toContain('private body failure');
   });
 
   it('replays an opaque Graph page when a Fluxmail page stops partway through it', async () => {

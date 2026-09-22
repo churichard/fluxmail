@@ -39,4 +39,5 @@ fluxmail emails search-batch [query] [options]
 | `--before <date>` | No | Return messages before this YYYY-MM-DD date | None |
 | `--page-size <number>` | No | Return 1 to 100 messages per account | None |
 | `--include-snippet <boolean>` | No | Request or suppress message previews | None |
+| `--include-search-context <boolean>` | No | Include a body excerpt around the search match | None |
 | `--input <file>` | No | Read an exact REST JSON body from a file, or pass - for stdin | None |

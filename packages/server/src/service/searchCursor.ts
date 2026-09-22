@@ -13,6 +13,7 @@ interface SearchCursorPayload {
   queryHash: string;
   pageSize: number;
   includeSnippet?: boolean;
+  includeSearchContext?: boolean;
   providerToken: string;
   issuedAt: number;
   expiresAt: number;
@@ -47,6 +48,7 @@ export class SearchCursorCodec {
       query: EmailQuery;
       pageSize: number;
       includeSnippet?: boolean;
+      includeSearchContext?: boolean;
       providerToken: string;
     },
     now = Date.now(),
@@ -58,6 +60,7 @@ export class SearchCursorCodec {
       queryHash: emailQueryHash(binding.query),
       pageSize: binding.pageSize,
       ...(binding.includeSnippet !== undefined ? { includeSnippet: binding.includeSnippet } : {}),
+      ...(binding.includeSearchContext ? { includeSearchContext: true } : {}),
       providerToken: binding.providerToken,
       issuedAt: now,
       expiresAt: now + CURSOR_LIFETIME_MS,
@@ -79,6 +82,7 @@ export class SearchCursorCodec {
       query: EmailQuery;
       pageSize: number;
       includeSnippet?: boolean;
+      includeSearchContext?: boolean;
     },
     now = Date.now(),
   ): string {
@@ -117,6 +121,7 @@ export class SearchCursorCodec {
       typeof payload.queryHash !== 'string' ||
       !Number.isInteger(payload.pageSize) ||
       (payload.includeSnippet !== undefined && typeof payload.includeSnippet !== 'boolean') ||
+      (payload.includeSearchContext !== undefined && typeof payload.includeSearchContext !== 'boolean') ||
       typeof payload.providerToken !== 'string' ||
       !payload.providerToken ||
       !Number.isFinite(payload.issuedAt) ||
@@ -132,7 +137,8 @@ export class SearchCursorCodec {
       payload.provider !== binding.provider ||
       payload.queryHash !== emailQueryHash(binding.query) ||
       payload.pageSize !== binding.pageSize ||
-      payload.includeSnippet !== binding.includeSnippet
+      payload.includeSnippet !== binding.includeSnippet ||
+      (payload.includeSearchContext ?? false) !== (binding.includeSearchContext ?? false)
     ) {
       throw invalidCursor();
     }

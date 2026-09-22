@@ -56,9 +56,9 @@ curl "$FLUXMAIL_API_URL/accounts/<account-id>/messages?folder=inbox&pageSize=10"
   -H "Authorization: Bearer $FLUXMAIL_API_KEY"
 ```
 
-List responses contain message metadata. Gmail and Outlook include their native snippets by default. Add `includeSnippet=true` to request IMAP previews, or use `includeSnippet=false` to suppress previews from every provider. Filters such as `read=false`, `from=person@example.com`, or `text=invoice` narrow the results. The `query` parameter accepts [portable search syntax](/docs/email-search).
+List responses contain message metadata. Gmail and Outlook include their native snippets by default. Add `includeSnippet=true` to request IMAP previews, or use `includeSnippet=false` to suppress previews from every provider. Add `includeSearchContext=true` with a literal text query to return an excerpt around the body match. Filters such as `read=false`, `from=person@example.com`, or `text=invoice` narrow the results. The `query` parameter accepts [portable search syntax](/docs/email-search).
 
-If the response includes `meta.nextPageToken`, pass it as `pageToken` with the same account, query, page size, and snippet setting. Treat an empty page as a confirmed negative result only when `meta.exhausted` is `true`. See [List messages](/docs/rest-api/list-messages) for all filters.
+If the response includes `meta.nextPageToken`, pass it as `pageToken` with the same account, query, page size, snippet setting, and search context setting. Treat an empty page as a confirmed negative result only when `meta.exhausted` is `true`. See [List messages](/docs/rest-api/list-messages) for all filters.
 
 Search several accounts with one request:
 
@@ -69,9 +69,10 @@ curl "$FLUXMAIL_API_URL/messages/search" \
   -H "Content-Type: application/json" \
   --data '{
     "accounts": [{"accountId": "<first-account-id>"}, {"accountId": "<second-account-id>"}],
-    "query": "subject:invoice is:unread",
+    "query": "invoice is:unread",
     "pageSize": 25,
-    "includeSnippet": true
+    "includeSnippet": true,
+    "includeSearchContext": true
   }'
 ```
 

@@ -1,7 +1,7 @@
 import { Readable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import type { MessageStructureObject } from 'imapflow';
-import { downloadSnippet, inspectStructure } from '../src/body.js';
+import { downloadListBody, downloadSnippet, inspectStructure } from '../src/body.js';
 
 describe('IMAP body structure', () => {
   it('uses part 1 for a single-part message', () => {
@@ -81,5 +81,47 @@ describe('IMAP body structure', () => {
     await expect(downloadSnippet({ download } as never, 8, { html: '2', attachments: [] })).resolves.toBe(
       'Hello world',
     );
+  });
+
+  it('derives a snippet and search context from one bounded download', async () => {
+    const body = `Opening preview\n${'later text '.repeat(40)}Invoice placeholder [ORDER_ID] is here.`;
+    const download = vi.fn().mockResolvedValue({
+      meta: { charset: 'utf-8', expectedSize: Buffer.byteLength(body) },
+      content: Readable.from([Buffer.from(body)]),
+    });
+
+    await expect(
+      downloadListBody(
+        { download } as never,
+        9,
+        { text: '1', attachments: [] },
+        {
+          snippet: true,
+          searchContextText: 'invoice [ORDER_ID]',
+        },
+      ),
+    ).resolves.toMatchObject({
+      snippet: expect.stringContaining('Opening preview'),
+      searchContext: { status: 'matched', excerpt: expect.stringContaining('[ORDER_ID]') },
+    });
+    expect(download).toHaveBeenCalledOnce();
+    expect(download).toHaveBeenCalledWith(9, '1', { uid: true, maxBytes: 256 * 1024 });
+  });
+
+  it('reports scan_limit when a partial download has no literal match', async () => {
+    const body = 'x'.repeat(256 * 1024);
+    const download = vi.fn().mockResolvedValue({
+      meta: { charset: 'utf-8', expectedSize: body.length + 100 },
+      content: Readable.from([Buffer.from(body)]),
+    });
+
+    await expect(
+      downloadListBody(
+        { download } as never,
+        10,
+        { text: '1', attachments: [] },
+        { snippet: false, searchContextText: 'needle' },
+      ),
+    ).resolves.toEqual({ searchContext: { status: 'scan_limit' } });
   });
 });

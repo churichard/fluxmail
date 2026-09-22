@@ -1,7 +1,7 @@
 ---
 title: 'Email search'
 description: 'Use the same portable search syntax with Fluxmail CLI, MCP, and REST clients.'
-updated: '2026-09-16'
+updated: '2026-09-17'
 ---
 
 Fluxmail has one portable search syntax for Gmail, Outlook, and IMAP mailboxes. You can use it with `fluxmail emails search`, `fluxmail emails search-batch`, the `search_emails` and `search_emails_batch` MCP tools, or the REST search operations.
@@ -62,7 +62,7 @@ Gmail's `has:attachment` operator has different behavior, so Fluxmail does not u
 
 ## Pagination
 
-Pass `nextPageToken` back with the same account, query, page size, and snippet setting. Search page tokens expire after one hour. They are signed to prevent changes, but their contents are not encrypted. Replacing the Fluxmail instance encryption key also invalidates existing tokens.
+Pass `nextPageToken` back with the same account, query, page size, snippet setting, and search context setting. Search page tokens expire after one hour. They are signed to prevent changes, but their contents are not encrypted. Replacing the Fluxmail instance encryption key also invalidates existing tokens.
 
 Every search page includes `exhausted`. A value of `true` means Fluxmail searched the full requested scope. When you omit the folder, that scope is all mail except Spam and Trash. An IMAP server's `\All` mailbox can define its own scope.
 
@@ -89,6 +89,27 @@ Search work has a 10-second soft budget and a 15-second deadline. Fluxmail retur
 Set `includeSnippet` to `true` to request previews or `false` to suppress them. If you omit it, Gmail and Outlook return their native previews while IMAP avoids extra body downloads.
 
 For IMAP, Fluxmail downloads up to 16 KiB from the preferred text part and returns at most 300 characters. It prefers plain text and converts HTML when needed. A preview failure leaves the message metadata available and adds a warning to the page.
+
+The `capabilities.snippets` field tells you whether a provider includes previews without fetching message bodies. A value of `false` does not prevent you from requesting a preview with `includeSnippet`.
+
+## Search context
+
+Set `includeSearchContext` to `true` to include a body excerpt around the search text. This option requires literal text from the typed query or the structured `text` field. Fluxmail rejects filter-only and provider-native searches that request context.
+
+Search context is separate from `includeSnippet`. A message can contain both. Fluxmail prefers the complete search phrase, then uses the earliest matching term when the phrase does not appear in the body. Matching is case insensitive and treats punctuation as literal text.
+
+Each message returns one of these values:
+
+| Status | Meaning |
+| --- | --- |
+| `matched` | `excerpt` contains the matching line, cropped to 300 Unicode characters when needed. |
+| `no_literal_match` | Fluxmail inspected the complete selected body but did not find the literal text. The provider may have matched headers, stemming, or other indexed content. |
+| `scan_limit` | Fluxmail reached the 256 KiB decoded body scan limit before finding a literal match. |
+| `unavailable` | Fluxmail could not read a suitable body or the optional body request failed. |
+
+Fluxmail reads at most 256 KiB of decoded body content for each result. It prefers plain text and converts HTML to readable text when no plain-text body exists. Attachments and attached messages are excluded. Gmail and Outlook may transfer the complete body because their APIs do not support the same bounded partial read as IMAP.
+
+Search context is off by default because it can add one body request per accepted result. On IMAP, Fluxmail uses a partial, non-marking body read. When an IMAP request asks for both a snippet and search context, Fluxmail derives both from the same download. An optional enrichment failure leaves the message metadata available, returns `unavailable`, and adds a warning to the page.
 
 ## Search several accounts
 
