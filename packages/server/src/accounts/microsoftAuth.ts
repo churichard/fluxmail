@@ -1,8 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { createServer } from 'node:http';
 import { EmailError } from '@fluxmail/core';
 import type { FluxmailConfig } from '../config.js';
 import type { StoredMicrosoftOAuthApp } from '../instanceConfig.js';
+import { runOAuthCallbackFlow, type LoopbackFlowOptions, type OAuthAuthUrlContext } from './oauthCallback.js';
 
 export const MICROSOFT_SCOPES = [
   'openid',
@@ -239,99 +239,30 @@ export async function exchangeMicrosoftCode(
   return { ...identity, credentials };
 }
 
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (char) => {
-    const entities: Record<string, string> = {
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#39;',
-    };
-    return entities[char]!;
-  });
-}
-
-function callbackPage(title: string, message: string): string {
-  return (
-    '<html><body style="font-family: sans-serif">' +
-    `<h2>${escapeHtml(title)}</h2><p>${escapeHtml(message)}</p>` +
-    '<p>You can close this tab and return to the terminal.</p></body></html>'
-  );
-}
-
-function listenerError(error: Error, port: number): Error {
-  if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') return error;
-  return new Error(
-    `OAuth callback port ${port} is already in use.\n\n` +
-      'If Fluxmail is running with Docker Compose, connect the account inside the container:\n\n' +
-      '  docker compose exec fluxmail fluxmail accounts add outlook\n\n' +
-      `Otherwise, stop the process using port ${port} and try again.`,
-    { cause: error },
-  );
-}
-
 export async function runMicrosoftLoopbackFlow<T = MicrosoftOAuthResult>(
   config: FluxmailConfig,
-  onAuthUrl: (url: string) => void,
+  onAuthUrl: (url: string, context: OAuthAuthUrlContext) => void,
   onAuthorized?: (result: MicrosoftOAuthResult) => T | Promise<T>,
+  options?: LoopbackFlowOptions,
 ): Promise<T> {
   const oauthClient = { ...requireMicrosoftConfig(config) };
   const redirectUri = `http://localhost:${config.oauthPort}/oauth/microsoft/callback`;
   const state = randomBytes(16).toString('hex');
   const verifier = randomBytes(48).toString('base64url');
 
-  return new Promise<T>((resolve, reject) => {
-    const server = createServer(async (request, response) => {
-      const finish = (settle: () => void) => {
-        response.once('close', () => {
-          server.close();
-          server.closeAllConnections();
-          settle();
-        });
-      };
-      try {
-        const url = new URL(request.url ?? '/', redirectUri);
-        if (url.pathname !== '/oauth/microsoft/callback') {
-          response.writeHead(404).end('Not found');
-          return;
-        }
-        if (url.searchParams.get('state') !== state) {
-          response.writeHead(400).end('State mismatch. Restart the flow.');
-          return;
-        }
-        const oauthError = url.searchParams.get('error');
-        if (oauthError) {
-          const description = url.searchParams.get('error_description') ?? oauthError;
-          finish(() => reject(new EmailError('invalid_request', `Microsoft OAuth error: ${description}`)));
-          response.writeHead(400).end(`Microsoft returned an error: ${description}. You can close this tab.`);
-          return;
-        }
-        const code = url.searchParams.get('code');
-        if (!code) {
-          response.writeHead(400).end('Missing code parameter.');
-          return;
-        }
-        const result = await exchangeMicrosoftCode(config, code, redirectUri, verifier, 'public', oauthClient);
-        const accepted = onAuthorized ? await onAuthorized(result) : (result as T);
-        finish(() => resolve(accepted));
-        response
-          .writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-          .end(callbackPage(`${result.email} is connected to Fluxmail`, 'The account is ready to use.'));
-      } catch (error) {
-        finish(() => reject(error));
-        const expected = error instanceof EmailError;
-        const message = expected
-          ? error.message
-          : 'Fluxmail could not finish connecting this account. Check the terminal for details.';
-        response
-          .writeHead(expected ? 400 : 500, { 'content-type': 'text/html; charset=utf-8' })
-          .end(callbackPage('Fluxmail could not connect this account', message));
-      }
-    });
-    server.on('error', (error) => reject(listenerError(error, config.oauthPort)));
-    server.listen(config.oauthPort, config.oauthHost, () => {
-      onAuthUrl(buildMicrosoftAuthUrl(config, redirectUri, state, verifier, oauthClient));
-    });
+  return runOAuthCallbackFlow({
+    provider: 'outlook',
+    redirectUri,
+    host: config.oauthHost,
+    port: config.oauthPort,
+    state,
+    authUrl: buildMicrosoftAuthUrl(config, redirectUri, state, verifier, oauthClient),
+    onAuthUrl,
+    complete: async (code) => {
+      const result = await exchangeMicrosoftCode(config, code, redirectUri, verifier, 'public', oauthClient);
+      const value = onAuthorized ? await onAuthorized(result) : (result as T);
+      return { email: result.email, value };
+    },
+    options,
   });
 }

@@ -1,5 +1,6 @@
 import type { Provider } from '@fluxmail/core';
 import type { FluxmailConfig } from '../config.js';
+import type { OAuthCallbackSource } from './oauthCallback.js';
 import type { TelemetryProperties } from '../telemetry.js';
 import { DEFAULT_GOOGLE_CLIENT_ID } from './defaultGoogleOAuth.js';
 import type { AccountRegistry } from './registry.js';
@@ -30,6 +31,8 @@ export interface ConnectionTelemetry {
   reauthorize?: boolean;
   flow?: ConnectionFlow;
   oauthApp?: OAuthAppKind;
+  /** How a loopback callback reached the CLI, or that it timed out waiting. */
+  callback?: OAuthCallbackSource;
 }
 
 /** Describe a connection attempt without naming the mailbox it connects. */
@@ -39,6 +42,7 @@ export function connectionProperties(connection: ConnectionTelemetry): Telemetry
     ...(connection.reauthorize === undefined ? {} : { reauthorize: connection.reauthorize }),
     ...(connection.flow ? { connection_flow: connection.flow } : {}),
     ...(connection.oauthApp ? { oauth_app: connection.oauthApp } : {}),
+    ...(connection.callback ? { oauth_callback: connection.callback } : {}),
   };
 }
 

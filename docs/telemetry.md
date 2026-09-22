@@ -19,16 +19,17 @@ Batch search reports `emails search-batch`, `search_emails_batch`, or `searchMes
 
 Mailbox connection and removal events may add these properties to `operation completed`:
 
-| Property                                                             | Values                     | Meaning                                                                                 |
-| -------------------------------------------------------------------- | -------------------------- | --------------------------------------------------------------------------------------- |
-| `provider`                                                           | `gmail`, `outlook`, `imap` | Which kind of mailbox the operation connects or removes                                 |
-| `connection_flow`                                                    | `hosted`, `loopback`       | Whether OAuth returns through the server public URL or the local callback port          |
-| `oauth_app`                                                          | `built-in`, `custom`       | Fluxmail's built-in Google application, or an OAuth application the operator registered |
-| `reauthorize`                                                        | `true`, `false`            | Whether the operation reconnected a mailbox that already exists                         |
-| `account_count`                                                      | number                     | Mailboxes connected to the installation after the change                                |
-| `gmail_account_count`, `outlook_account_count`, `imap_account_count` | number                     | The same total split by provider                                                        |
+| Property                                                             | Values                          | Meaning                                                                                             |
+| -------------------------------------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `provider`                                                           | `gmail`, `outlook`, `imap`      | Which kind of mailbox the operation connects or removes                                             |
+| `connection_flow`                                                    | `hosted`, `loopback`            | Whether OAuth returns through the server public URL or the local callback port                      |
+| `oauth_app`                                                          | `built-in`, `custom`            | Fluxmail's built-in Google application, or an OAuth application the operator registered             |
+| `oauth_callback`                                                     | `listener`, `pasted`, `timeout` | How a local OAuth redirect reached the CLI, or that none arrived before the command stopped waiting |
+| `reauthorize`                                                        | `true`, `false`                 | Whether the operation reconnected a mailbox that already exists                                     |
+| `account_count`                                                      | number                          | Mailboxes connected to the installation after the change                                            |
+| `gmail_account_count`, `outlook_account_count`, `imap_account_count` | number                          | The same total split by provider                                                                    |
 
-`oauth_app` reports the application that issued the tokens, never its client ID or secret. Outlook always reports `custom`, since Fluxmail ships no built-in Microsoft application. The counts are totals for the installation. They carry no mailbox address, account ID, or member ID.
+`oauth_app` reports the application that issued the tokens, never its client ID or secret. `oauth_callback` appears only on local OAuth connections. A pasted callback URL contains an authorization code and state, so Fluxmail records only that the user pasted it. Outlook always reports `custom`, since Fluxmail ships no built-in Microsoft application. The counts are totals for the installation. They carry no mailbox address, account ID, or member ID.
 
 The account counts appear only after Fluxmail has connected or removed a mailbox. Events that prepare an OAuth link do not include them because the user may never finish the browser flow. `reauthorize` is left out when the surface cannot tell a reconnection from a new mailbox, such as a CLI IMAP connection against a remote instance, where the server matches the mailbox by address and reports the answer in its own event.
 
