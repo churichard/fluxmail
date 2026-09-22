@@ -1,10 +1,10 @@
-import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { CodeChallengeMethod, OAuth2Client, type Credentials } from 'google-auth-library';
 import { EmailError } from '@fluxmail/core';
 import type { FluxmailConfig } from '../config.js';
 import type { StoredGoogleOAuthApp } from '../instanceConfig.js';
 import { DEFAULT_GOOGLE_CLIENT_ID } from './defaultGoogleOAuth.js';
+import { runOAuthCallbackFlow, type LoopbackFlowOptions, type OAuthAuthUrlContext } from './oauthCallback.js';
 
 const GOOGLE_IDENTITY_SCOPES = ['openid', 'email', 'profile'];
 
@@ -114,40 +114,6 @@ function googleTokenError(err: unknown): EmailError {
   return new EmailError('provider_unavailable', `Google OAuth token exchange failed: ${detail}`);
 }
 
-function oauthListenerError(err: Error, port: number): Error {
-  const code = (err as NodeJS.ErrnoException).code;
-  if (code !== 'EADDRINUSE') return err;
-
-  return new Error(
-    `OAuth callback port ${port} is already in use.\n\n` +
-      'If Fluxmail is already running with Docker Compose, connect the account inside the container:\n\n' +
-      '  docker compose exec fluxmail fluxmail accounts add gmail\n\n' +
-      `Otherwise, stop the process using port ${port} and try again.`,
-    { cause: err },
-  );
-}
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (char) => {
-    const entities: Record<string, string> = {
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#39;',
-    };
-    return entities[char]!;
-  });
-}
-
-function callbackPage(title: string, message: string): string {
-  return (
-    '<html><body style="font-family: sans-serif">' +
-    `<h2>${escapeHtml(title)}</h2><p>${escapeHtml(message)}</p>` +
-    '<p>You can close this tab and return to the terminal.</p></body></html>'
-  );
-}
-
 export async function exchangeCode(client: OAuth2Client, code: string, codeVerifier?: string): Promise<OAuthResult> {
   let tokens: Credentials;
   try {
@@ -167,12 +133,14 @@ export async function exchangeCode(client: OAuth2Client, code: string, codeVerif
 
 /**
  * Loopback OAuth flow for the CLI: listens once on config.oauthPort, prints the
- * consent URL, and resolves when Google redirects back with a code.
+ * consent URL, and resolves when Google redirects back with a code or when the
+ * user pastes the callback URL into the terminal.
  */
 export async function runLoopbackFlow<T = AuthorizedOAuthResult>(
   config: FluxmailConfig,
-  onAuthUrl: (url: string) => void,
+  onAuthUrl: (url: string, context: OAuthAuthUrlContext) => void,
   onAuthorized?: (result: AuthorizedOAuthResult) => T | Promise<T>,
+  options?: LoopbackFlowOptions,
 ): Promise<T> {
   const oauthClient = { ...requireGoogleConfig(config) };
   const redirectUri = `http://127.0.0.1:${config.oauthPort}/oauth/callback`;
@@ -180,59 +148,19 @@ export async function runLoopbackFlow<T = AuthorizedOAuthResult>(
   const { codeVerifier, codeChallenge } = await client.generateCodeVerifierAsync();
   const state = randomBytes(16).toString('hex');
 
-  return new Promise<T>((resolve, reject) => {
-    const server = createServer(async (req, res) => {
-      // Close the listener and destroy lingering keep-alive sockets (the browser
-      // holds its connection open after loading the page); otherwise the CLI
-      // process never exits.
-      const finish = (settle: () => void) => {
-        res.once('close', () => {
-          server.close();
-          server.closeAllConnections();
-          settle();
-        });
-      };
-      try {
-        const url = new URL(req.url ?? '/', redirectUri);
-        if (url.pathname !== '/oauth/callback') {
-          res.writeHead(404).end('Not found');
-          return;
-        }
-        if (url.searchParams.get('state') !== state) {
-          res.writeHead(400).end('State mismatch. Restart the flow.');
-          return;
-        }
-        const error = url.searchParams.get('error');
-        if (error) {
-          finish(() => reject(new EmailError('invalid_request', `Google OAuth error: ${error}`)));
-          res.writeHead(400).end(`Google returned an error: ${error}. You can close this tab.`);
-          return;
-        }
-        const code = url.searchParams.get('code');
-        if (!code) {
-          res.writeHead(400).end('Missing code parameter.');
-          return;
-        }
-        const result = { ...(await exchangeCode(client, code, codeVerifier)), oauthClient };
-        const accepted = onAuthorized ? await onAuthorized(result) : (result as T);
-        finish(() => resolve(accepted));
-        res
-          .writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-          .end(callbackPage(`${result.email} is connected to Fluxmail`, 'The account is ready to use.'));
-      } catch (err) {
-        finish(() => reject(err));
-        const expected = err instanceof EmailError;
-        const message = expected
-          ? err.message
-          : 'Fluxmail could not finish connecting this account. Check the terminal for details.';
-        res
-          .writeHead(expected ? 400 : 500, { 'content-type': 'text/html; charset=utf-8' })
-          .end(callbackPage('Fluxmail could not connect this account', message));
-      }
-    });
-    server.on('error', (err) => reject(oauthListenerError(err, config.oauthPort)));
-    server.listen(config.oauthPort, config.oauthHost, () => {
-      onAuthUrl(buildAuthUrl(client, state, gmailScopes(config, oauthClient), codeChallenge));
-    });
+  return runOAuthCallbackFlow({
+    provider: 'gmail',
+    redirectUri,
+    host: config.oauthHost,
+    port: config.oauthPort,
+    state,
+    authUrl: buildAuthUrl(client, state, gmailScopes(config, oauthClient), codeChallenge),
+    onAuthUrl,
+    complete: async (code) => {
+      const result = { ...(await exchangeCode(client, code, codeVerifier)), oauthClient };
+      const value = onAuthorized ? await onAuthorized(result) : (result as T);
+      return { email: result.email, value };
+    },
+    options,
   });
 }

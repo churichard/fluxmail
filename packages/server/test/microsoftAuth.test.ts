@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FluxmailConfig } from '../src/config.js';
 import {
@@ -407,5 +408,49 @@ describe('Microsoft OAuth', () => {
     expect(String(fetchMock.mock.calls[0]![0])).toContain('/common/oauth2/v2.0/token');
     expect(String(fetchMock.mock.calls[0]![1]?.body)).toContain(`client_id=${oauthClient.clientId}`);
     expect(String(fetchMock.mock.calls[0]![1]?.body)).not.toContain('replacement-client-id');
+  });
+
+  it('finishes with a callback URL pasted from a browser on another computer', async () => {
+    const portProbe = createServer();
+    await new Promise<void>((resolve) => portProbe.listen(0, '127.0.0.1', resolve));
+    const address = portProbe.address();
+    if (!address || typeof address === 'string') throw new Error('Test server did not bind to a TCP port');
+    await new Promise<void>((resolve, reject) => portProbe.close((error) => (error ? reject(error) : resolve())));
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ access_token: 'access-token', refresh_token: 'refresh-token', expires_in: 3600 }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ mail: 'me@example.com' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: 'inbox-id' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    let provideAuthUrl!: (url: string) => void;
+    const authUrl = new Promise<string>((resolve) => {
+      provideAuthUrl = resolve;
+    });
+    const input = new PassThrough();
+
+    const flow = runMicrosoftLoopbackFlow(config(address.port), provideAuthUrl, undefined, {
+      paste: { input, write: vi.fn() },
+    });
+    const state = new URL(await authUrl).searchParams.get('state');
+    input.write(`http://localhost:${address.port}/oauth/microsoft/callback?state=${state}&code=pasted-code\n`);
+
+    await expect(flow).resolves.toMatchObject({ email: 'me@example.com' });
+    expect(String(fetchMock.mock.calls[0]![1]?.body)).toContain('code=pasted-code');
   });
 });

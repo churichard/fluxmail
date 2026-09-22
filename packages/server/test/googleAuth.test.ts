@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import { OAuth2Client } from 'google-auth-library';
 import { EmailError } from '@fluxmail/core';
@@ -197,6 +198,61 @@ describe('Google OAuth callback listener', () => {
         codeVerifier: 'local-code-verifier',
       });
       await flowError;
+    } finally {
+      getToken.mockRestore();
+      verifyIdToken.mockRestore();
+      generateCodeVerifier.mockRestore();
+    }
+  });
+
+  it('finishes with a callback URL pasted from a browser on another computer', async () => {
+    const portProbe = createServer();
+    await new Promise<void>((resolve) => portProbe.listen(0, '127.0.0.1', resolve));
+    const address = portProbe.address();
+    if (!address || typeof address === 'string') throw new Error('Test server did not bind to a TCP port');
+    await new Promise<void>((resolve, reject) => portProbe.close((err) => (err ? reject(err) : resolve())));
+
+    const getToken = vi.spyOn(OAuth2Client.prototype, 'getToken').mockResolvedValue({
+      tokens: { refresh_token: 'refresh-token', id_token: 'id-token' },
+      res: null,
+    });
+    const verifyIdToken = vi.spyOn(OAuth2Client.prototype, 'verifyIdToken').mockResolvedValue({
+      getPayload: () => ({ email: 'me@example.com', email_verified: true }),
+    } as never);
+    const generateCodeVerifier = vi.spyOn(OAuth2Client.prototype, 'generateCodeVerifierAsync').mockResolvedValue({
+      codeVerifier: 'local-code-verifier',
+      codeChallenge: 'local-code-challenge',
+    });
+    let provideAuthUrl!: (url: string) => void;
+    const authUrl = new Promise<string>((resolve) => {
+      provideAuthUrl = resolve;
+    });
+    const input = new PassThrough();
+    const onCallback = vi.fn();
+    const config: FluxmailConfig = {
+      dataDir: '/tmp/fluxmail-test',
+      dbPath: '/tmp/fluxmail-test/fluxmail.db',
+      encryptionKey: Buffer.alloc(32),
+      port: 8977,
+      publicUrl: 'http://127.0.0.1:8977',
+      publicUrlConfigured: false,
+      oauthPort: address.port,
+      oauthHost: '127.0.0.1',
+      maxAttachmentBytes: 10 * 1024 * 1024,
+      google: { clientId: 'client-id', clientSecret: 'client-secret' },
+    };
+
+    try {
+      const flow = runLoopbackFlow(config, provideAuthUrl, undefined, {
+        paste: { input, write: vi.fn() },
+        onCallback,
+      });
+      const state = new URL(await authUrl).searchParams.get('state');
+      input.write(`http://127.0.0.1:${address.port}/oauth/callback?state=${state}&code=pasted-code\n`);
+
+      await expect(flow).resolves.toMatchObject({ email: 'me@example.com' });
+      expect(getToken).toHaveBeenCalledWith({ code: 'pasted-code', codeVerifier: 'local-code-verifier' });
+      expect(onCallback).toHaveBeenCalledWith('pasted');
     } finally {
       getToken.mockRestore();
       verifyIdToken.mockRestore();

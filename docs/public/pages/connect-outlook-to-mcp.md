@@ -80,6 +80,8 @@ fluxmail oauth configure outlook \
 
 Fluxmail listens on `http://localhost:8976`, prints a Microsoft authorization URL, and waits for the redirect. Choose the mailbox you want to connect and approve access.
 
+If your browser runs on a different computer, such as when you use the CLI over SSH, the redirect to `localhost` fails to load after you approve access. Copy the full URL from the browser's address bar and paste it into the waiting terminal. Pasting needs an interactive terminal. You can also forward the port first with `ssh -L 8976:127.0.0.1:8976 you@server`. The command stops waiting after 10 minutes.
+
 ### Local Docker
 
 Add the client ID to `.env` and leave `FLUXMAIL_PUBLIC_URL` unset:

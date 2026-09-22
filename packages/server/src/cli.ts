@@ -23,6 +23,7 @@ import { migrateConfigurationFile, parseEnvContent, recognizedMigrationSettings 
 import { createApp } from './http/app.js';
 import { buildMcpServer } from './mcp/buildServer.js';
 import { runLoopbackFlow } from './accounts/googleAuth.js';
+import type { LoopbackFlowOptions, OAuthAuthUrlContext } from './accounts/oauthCallback.js';
 import { runMicrosoftLoopbackFlow } from './accounts/microsoftAuth.js';
 import {
   assertHostedConnectionReady,
@@ -290,6 +291,44 @@ function readSecretFile(file: string): string {
 
 async function secretInput(file: string | undefined, label: string): Promise<string> {
   return file === undefined ? hiddenPrompt(label) : readSecretFile(file);
+}
+
+/** Print the consent URL and explain how to finish when the redirect cannot reach this computer. */
+function printLoopbackInstructions(
+  provider: 'gmail' | 'outlook',
+  url: string,
+  context: OAuthAuthUrlContext,
+  port: number,
+): void {
+  const providerName = provider === 'gmail' ? 'Google' : 'Microsoft';
+  const access = provider === 'gmail' ? 'Gmail access' : 'Microsoft mail access';
+  console.log(`\nOpen this URL in your browser to authorize ${access}:\n`);
+  console.log(`  ${url}\n`);
+  if (!context.listening) {
+    console.log(
+      `Port ${port} is already in use, so Fluxmail cannot receive the redirect from ${providerName}.\n\n` +
+        'If Fluxmail is running with Docker Compose, press Ctrl-C and connect the account inside the container ' +
+        'so it is saved there:\n\n' +
+        `  docker compose exec fluxmail fluxmail accounts add ${provider}\n\n` +
+        "Otherwise, approve access, then copy the full URL from your browser's address bar and paste it here.",
+    );
+    return;
+  }
+  console.log(`Waiting for ${providerName} to redirect back...`);
+  if (context.pasteEnabled) {
+    console.log(
+      'If your browser runs on another computer, the page will not load after you approve access. ' +
+        'Copy the full URL from its address bar and paste it here.',
+    );
+  }
+}
+
+/** Accept a pasted callback URL when a person is at the terminal, and report how the callback arrived. */
+function loopbackFlowOptions(program: Command, provider: 'gmail' | 'outlook'): LoopbackFlowOptions {
+  return {
+    ...(process.stdin.isTTY ? { paste: { input: process.stdin, write: (message) => console.error(message) } } : {}),
+    onCallback: (callback) => recordCliOperationProperties(program, connectionProperties({ provider, callback })),
+  };
 }
 
 /** Offered when a configured public URL, not an explicit --hosted, chose the hosted flow. */
@@ -1182,11 +1221,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
 
           const account = await runMicrosoftLoopbackFlow(
             ctx.config,
-            (url) => {
-              console.log('\nOpen this URL in your browser to authorize Microsoft mail access:\n');
-              console.log(`  ${url}\n`);
-              console.log('Waiting for Microsoft to redirect back...');
-            },
+            (url, context) => printLoopbackInstructions('outlook', url, context, ctx.config.oauthPort),
             (result) => {
               const duplicate = ctx.registry
                 .listAccounts()
@@ -1213,6 +1248,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
                 access,
               );
             },
+            loopbackFlowOptions(program, 'outlook'),
           );
           auditConnection('account.connection.complete', account.id);
           recordCliOperationProperties(program, {
@@ -1242,11 +1278,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
 
         const account = await runLoopbackFlow(
           ctx.config,
-          (url) => {
-            console.log('\nOpen this URL in your browser to authorize Gmail access:\n');
-            console.log(`  ${url}\n`);
-            console.log('Waiting for Google to redirect back…');
-          },
+          (url, context) => printLoopbackInstructions('gmail', url, context, ctx.config.oauthPort),
           (result) => {
             const duplicate = ctx.registry
               .listAccounts()
@@ -1273,6 +1305,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
               result.oauthClient,
             );
           },
+          loopbackFlowOptions(program, 'gmail'),
         );
         auditConnection('account.connection.complete', account.id);
         recordCliOperationProperties(program, {

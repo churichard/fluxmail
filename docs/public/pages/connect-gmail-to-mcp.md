@@ -56,6 +56,18 @@ On local Docker, the command prints a Google consent URL and waits for the callb
 
 Fluxmail uses the hosted flow whenever `FLUXMAIL_PUBLIC_URL` is set. The hosted flow cannot use the built-in Google client, which only accepts local callbacks, so it needs your own Web application. Without a public URL, `fluxmail accounts add gmail` uses the local callback at `http://127.0.0.1:8976/oauth/callback`. For troubleshooting, pass `--hosted` or `--local` to choose a flow explicitly.
 
+### Browser on a different computer
+
+The local callback reaches Fluxmail only when your browser runs on the same computer as the CLI. If you run `fluxmail accounts add gmail` over SSH or on a headless server, open the consent URL in any browser and approve access. The browser then tries to load `http://127.0.0.1:8976/oauth/callback` and shows a connection error. Copy the full URL from its address bar and paste it into the terminal where the command is waiting. Pasting works when you run the command in an interactive terminal, so do not pass `-T` to `docker compose exec`. Fluxmail checks that the URL belongs to the current sign-in attempt and then connects the mailbox.
+
+You can also forward the callback port before you run the command, so the redirect reaches the CLI directly:
+
+```bash
+ssh -L 8976:127.0.0.1:8976 you@server
+```
+
+The command stops waiting after 10 minutes. Run it again to get a new consent URL.
+
 ## Use your own Google OAuth app
 
 Use a custom Google client if you prefer to manage the OAuth consent screen yourself. A remote server with `FLUXMAIL_PUBLIC_URL` needs a Web client because Google's Desktop clients only support callbacks on the computer running the CLI.

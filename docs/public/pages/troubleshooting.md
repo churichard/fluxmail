@@ -38,7 +38,9 @@ Some apps use a limited `PATH`. Run `which fluxmail` in your terminal and use th
 
 ## The browser cannot finish connecting a mailbox
 
-Local OAuth connections expect the browser and Fluxmail to run on the same computer. Check that port 8976 is available.
+Local OAuth connections listen for the browser redirect on port 8976 of the computer running the CLI. If your browser runs on another computer, the page fails to load after you approve access. Copy the full URL from the address bar and paste it into the terminal where the command is waiting, or forward the port with `ssh -L 8976:127.0.0.1:8976 you@server`. Pasting needs an interactive terminal. If another program is using port 8976 and you run the command in one, Fluxmail asks you to paste the URL instead. When Docker Compose is using the port, run the command inside the container with `docker compose exec fluxmail fluxmail accounts add gmail` or `outlook` so the mailbox is saved there.
+
+The command stops waiting after 10 minutes. If it times out, run it again to get a new authorization URL.
 
 A remote server needs `FLUXMAIL_PUBLIC_URL` set to its public HTTPS address. Gmail also needs a Google Web client, and Outlook needs a Microsoft Entra client secret. Follow [Deploy with Docker](/docs/deploy-with-docker) and the setup guide for [Gmail](/docs/connect-gmail-to-mcp) or [Outlook](/docs/connect-outlook-to-mcp).
 
