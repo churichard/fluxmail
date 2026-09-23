@@ -24,6 +24,7 @@
     "demo:stop": "bash scripts/demo.sh stop",
     "demo:run": "bash scripts/demo.sh run",
     "registry:check": "node scripts/check-registry-metadata.mjs",
+    "mcpb:build": "node scripts/build-mcpb.mjs",
     "dev": "pnpm --filter fluxmail dev",
     "cli": "bash scripts/cli.sh",
     "version:bump": "pnpm --recursive --include-workspace-root version --no-git-tag-version",
@@ -31,6 +32,7 @@
     "publish:all": "node scripts/publish.mjs"
   },
   "devDependencies": {
+    "@anthropic-ai/mcpb": "2.1.2",
     "@modelcontextprotocol/sdk": "^1.13.0",
     "@types/node": "^22.15.0",
     "commander": "^13.1.0",
