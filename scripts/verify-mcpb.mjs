@@ -6,7 +6,6 @@ import { createRequire } from 'node:module';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 const [bundleDirectory, expectedVersion, toolsOutput] = process.argv.slice(2);
 if (!bundleDirectory || !expectedVersion) throw new Error('Provide the extracted bundle and expected version.');
@@ -63,21 +62,14 @@ assert.equal(typeof require('@node-rs/argon2').hash, 'function');
 
 const dataDirectory = await mkdtemp(path.join(tmpdir(), 'fluxmail-mcpb-check-'));
 try {
-  process.env.FLUXMAIL_DATA_DIR = dataDirectory;
-  process.env.FLUXMAIL_TELEMETRY = '0';
-  const { createCliProgram, shutdownTelemetryAndLogging } = await import(pathToFileURL(cli).href);
-  await createCliProgram({ passwordPrompt: async () => 'McpbCheckPassword123!' }).parseAsync([
-    process.execPath,
-    cli,
-    'setup',
-    '--name',
-    'MCPB Check',
-    '--email',
-    'mcpb-check@example.invalid',
-  ]);
+  const setup = spawnSync(process.execPath, ['scripts/setup-mcpb-check.mjs', cli, dataDirectory], {
+    encoding: 'utf8',
+    env: { ...process.env, FLUXMAIL_TELEMETRY: '0' },
+  });
+  assert.equal(setup.status, 0, setup.stderr);
+  process.stdout.write(setup.stdout);
   const tools = await checkTools(entryPoint, dataDirectory, manifest.tools.length);
   if (toolsOutput) await writeFile(toolsOutput, `${JSON.stringify(tools, null, 2)}\n`);
-  await shutdownTelemetryAndLogging();
 } finally {
   await rm(dataDirectory, { recursive: true, force: true });
 }
