@@ -1,0 +1,58 @@
+{
+  "manifest_version": "0.3",
+  "name": "fluxmail",
+  "display_name": "Fluxmail",
+  "version": "0.0.0",
+  "description": "Read, search, draft, send, and organize email in your connected mailboxes.",
+  "long_description": "Fluxmail is self-hosted email infrastructure for Gmail, Outlook, and IMAP/SMTP. This bundle runs on Apple Silicon Macs with Node.js 22. Set up Fluxmail and connect a mailbox first, then install the bundle to use that local account from your MCP client. See the quickstart at https://fluxmail.ai/docs/quickstart.",
+  "author": {
+    "name": "Richard Chu",
+    "url": "https://fluxmail.ai"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/churichard/fluxmail"
+  },
+  "homepage": "https://fluxmail.ai",
+  "documentation": "https://fluxmail.ai/docs/connect-an-mcp-client",
+  "support": "https://github.com/churichard/fluxmail/issues",
+  "icon": "icon.png",
+  "license": "Elastic-2.0",
+  "privacy_policies": ["https://fluxmail.ai/privacy"],
+  "keywords": ["email", "gmail", "outlook", "imap", "smtp", "self-hosted"],
+  "compatibility": {
+    "platforms": ["darwin"],
+    "runtimes": {
+      "node": ">=22.22.0 <23"
+    }
+  },
+  "server": {
+    "type": "node",
+    "entry_point": "dist/cli.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/cli.js", "stdio"]
+    }
+  },
+  "tools": [
+    { "name": "list_accounts", "description": "List connected mailboxes and their status." },
+    { "name": "list_folders", "description": "List folders for a connected mailbox." },
+    { "name": "list_labels", "description": "List Gmail labels or Outlook categories." },
+    { "name": "list_emails", "description": "Browse messages with folder and metadata filters." },
+    { "name": "search_emails", "description": "Search one mailbox using a portable query." },
+    { "name": "search_emails_batch", "description": "Search several mailboxes with one query." },
+    { "name": "get_email", "description": "Read a message and its attachment metadata." },
+    { "name": "get_thread", "description": "Read a complete conversation thread." },
+    { "name": "download_attachment", "description": "Retrieve an email attachment." },
+    { "name": "create_draft", "description": "Create a new email or reply draft." },
+    { "name": "update_draft", "description": "Replace the content of a draft." },
+    { "name": "delete_draft", "description": "Delete a draft." },
+    { "name": "send_email", "description": "Send, reply to, or schedule an email." },
+    { "name": "forward_email", "description": "Forward an email to new recipients." },
+    { "name": "list_scheduled_emails", "description": "List pending and past scheduled sends." },
+    { "name": "cancel_scheduled_email", "description": "Cancel a pending scheduled send." },
+    { "name": "modify_emails", "description": "Mark, move, archive, or label messages." },
+    { "name": "list_send_as", "description": "List available sender addresses." },
+    { "name": "get_status", "description": "Check account connections and scheduled sends." }
+  ]
+}
