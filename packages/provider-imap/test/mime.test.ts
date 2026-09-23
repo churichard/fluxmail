@@ -18,6 +18,21 @@ describe('IMAP MIME composition', () => {
     expect(stripBccHeader(stored).toString()).not.toMatch(/^Bcc:/im);
   });
 
+  it('uses CRLF line endings when bodies contain bare LF', async () => {
+    const raw = await composeMessage(
+      {
+        to: [{ email: 'visible@example.com' }],
+        subject: 'x',
+        body: { text: 'line one\nline two', html: '<p>one</p>\n<p>two</p>' },
+      },
+      { email: 'sender@example.com' },
+    );
+    const source = raw.toString('binary');
+    expect(source).not.toMatch(/(?<!\r)\n/);
+    expect(source).toContain('line one\r\nline two');
+    expect(source).toContain('<p>one</p>\r\n<p>two</p>');
+  });
+
   it('rejects invalid attachment base64', async () => {
     await expect(
       composeMessage(
