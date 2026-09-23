@@ -14,10 +14,12 @@ const extractedDirectory = path.resolve(bundleDirectory);
 
 const manifest = JSON.parse(await readFile(path.join(extractedDirectory, 'manifest.json')));
 assert.equal(manifest.version, expectedVersion);
+assert.equal(manifest.server.mcp_config.args[0], '${__dirname}/' + manifest.server.entry_point);
 assert.deepEqual(manifest.server.mcp_config.args.slice(1), ['stdio']);
 
-const cli = path.join(extractedDirectory, manifest.server.entry_point);
-const version = spawnSync(process.execPath, [cli, '--version'], {
+const entryPoint = path.join(extractedDirectory, manifest.server.entry_point);
+const cli = path.join(extractedDirectory, 'dist/cli.js');
+const version = spawnSync(process.execPath, [entryPoint, '--version'], {
   encoding: 'utf8',
   env: { ...process.env, FLUXMAIL_TELEMETRY: '0' },
 });
@@ -48,7 +50,7 @@ try {
     '--email',
     'mcpb-check@example.invalid',
   ]);
-  await checkTools(cli, dataDirectory, manifest.tools.length);
+  await checkTools(entryPoint, dataDirectory, manifest.tools.length);
   await shutdownTelemetryAndLogging();
 } finally {
   await rm(dataDirectory, { recursive: true, force: true });

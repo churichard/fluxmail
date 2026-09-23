@@ -1,6 +1,6 @@
 # Fluxmail MCP bundle
 
-Smithery accepts a prebuilt MCPB for local stdio servers. The current Fluxmail bundle supports Apple Silicon Macs running Node.js 22.22 or later within the Node.js 22 release line. It includes the server and its dependencies, including native SQLite and Argon2 modules. Other systems need their own native builds before they can use a bundle.
+Smithery accepts a prebuilt MCPB for local stdio servers. The current Fluxmail bundle supports Apple Silicon Macs running Node.js 22.22 or later within the Node.js 22 release line. It includes the server and its dependencies, including native SQLite and Argon2 modules. Other systems need their own native builds before they can use a bundle. MCPB's compatibility field can limit the operating system but has no CPU architecture field. The manifest states the Apple Silicon requirement, and the launcher checks it before loading native modules.
 
 Build it from a clean checkout of the matching Fluxmail version:
 

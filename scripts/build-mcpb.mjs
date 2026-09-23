@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile, copyFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rename, rm, stat, writeFile, copyFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -25,6 +25,7 @@ async function main() {
   await mkdir(outputDirectory, { recursive: true });
   const temporaryDirectory = await mkdtemp(path.join(outputDirectory, 'build-'));
   const bundleDirectory = path.join(temporaryDirectory, 'bundle');
+  const temporaryArchive = path.join(temporaryDirectory, path.basename(output));
   try {
     await run('pnpm', ['build']);
     try {
@@ -34,14 +35,16 @@ async function main() {
       await run('pnpm', ['install', '--prod=false', '--frozen-lockfile']);
     }
     await copyFile(path.join(templateDirectory, 'icon.png'), path.join(bundleDirectory, 'icon.png'));
+    await copyFile(path.join(templateDirectory, 'launch.mjs'), path.join(bundleDirectory, 'launch.mjs'));
     await writeFile(path.join(bundleDirectory, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
-    await run(path.join(repositoryRoot, 'node_modules', '.bin', 'mcpb'), ['pack', bundleDirectory, output]);
+    await run(path.join(repositoryRoot, 'node_modules', '.bin', 'mcpb'), ['pack', bundleDirectory, temporaryArchive]);
 
     const extractedDirectory = path.join(temporaryDirectory, 'extracted');
     await mkdir(extractedDirectory);
-    await run('unzip', ['-qq', output, '-d', extractedDirectory]);
+    await run('unzip', ['-qq', temporaryArchive, '-d', extractedDirectory]);
     await run(process.execPath, ['scripts/verify-mcpb.mjs', extractedDirectory, packageJson.version]);
 
+    await rename(temporaryArchive, output);
     const archive = await stat(output);
     console.log(`Verified ${output} (${(archive.size / 1024 / 1024).toFixed(1)} MiB).`);
   } finally {
