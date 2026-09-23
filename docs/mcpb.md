@@ -15,11 +15,11 @@ The build uses a hoisted production install. It includes Argon2 binaries for eac
 
 Users need to complete the [Fluxmail quickstart](https://fluxmail.ai/docs/quickstart) and connect a mailbox before installing the bundle. It uses their existing local Fluxmail data and login. The archive contains no credentials or mailbox data.
 
-Publish the verified archive through the Smithery CLI to the [Fluxmail listing](https://smithery.ai/servers/richard-8sjs/fluxmail):
+Publish the verified archive through the Smithery CLI to the [Fluxmail listing](https://smithery.ai/servers/fluxmail/fluxmail):
 
 ```bash
 smithery auth login
-smithery mcp publish .context/mcpb/fluxmail-<version>-smithery.mcpb -n richard-8sjs/fluxmail
+smithery mcp publish .context/mcpb/fluxmail-<version>-smithery.mcpb -n fluxmail/fluxmail
 ```
 
 Check the published listing and install command after Smithery finishes processing the release.
