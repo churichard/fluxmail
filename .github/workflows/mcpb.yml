@@ -1,0 +1,67 @@
+name: MCP bundle
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm mcpb:build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fluxmail-mcpb
+          path: .context/mcpb/fluxmail-*.mcpb
+          include-hidden-files: true
+          if-no-files-found: error
+
+  verify:
+    needs: build
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+          - macos-15-intel
+          - macos-15
+          - windows-latest
+          - windows-11-arm
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: fluxmail-mcpb
+          path: .context/mcpb
+      - name: Verify extracted bundle
+        shell: bash
+        run: |
+          version=$(node -p "require('./packages/server/package.json').version")
+          mkdir -p .context/mcpb/extracted
+          tar -xf ".context/mcpb/fluxmail-$version.mcpb" -C .context/mcpb/extracted
+          node scripts/verify-mcpb.mjs .context/mcpb/extracted "$version"
+      - name: Verify on Alpine Linux
+        if: startsWith(matrix.os, 'ubuntu')
+        shell: bash
+        run: |
+          version=$(node -p "require('./packages/server/package.json').version")
+          docker run --rm -v "$PWD:/workspace" -w /workspace node:22-alpine node scripts/verify-mcpb.mjs .context/mcpb/extracted "$version"

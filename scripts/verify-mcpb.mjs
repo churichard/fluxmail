@@ -3,7 +3,7 @@
 import { strict as assert } from 'node:assert';
 import { spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -14,8 +14,33 @@ const extractedDirectory = path.resolve(bundleDirectory);
 
 const manifest = JSON.parse(await readFile(path.join(extractedDirectory, 'manifest.json')));
 assert.equal(manifest.version, expectedVersion);
+assert.deepEqual(manifest.compatibility.platforms, ['darwin', 'win32', 'linux']);
 assert.equal(manifest.server.mcp_config.args[0], '${__dirname}/' + manifest.server.entry_point);
 assert.deepEqual(manifest.server.mcp_config.args.slice(1), ['stdio']);
+
+const nativePackages = {
+  'darwin-arm64': 'darwin-arm64',
+  'darwin-x64': 'darwin-x64',
+  'linux-arm64': 'linux-arm64-gnu',
+  'linux-x64': 'linux-x64-gnu',
+  'linuxmusl-arm64': 'linux-arm64-musl',
+  'linuxmusl-x64': 'linux-x64-musl',
+  'win32-arm64': 'win32-arm64-msvc',
+  'win32-x64': 'win32-x64-msvc',
+};
+for (const [target, argon2Target] of Object.entries(nativePackages)) {
+  const sqliteBinary = path.join(
+    extractedDirectory,
+    'node_modules',
+    'better-sqlite3',
+    'lib',
+    'binding',
+    `node-v127-${target}`,
+    'better_sqlite3.node',
+  );
+  assert.ok((await stat(sqliteBinary)).size > 0, `Missing SQLite binary for ${target}`);
+  await stat(path.join(extractedDirectory, 'node_modules', '@node-rs', `argon2-${argon2Target}`, 'package.json'));
+}
 
 const entryPoint = path.join(extractedDirectory, manifest.server.entry_point);
 const cli = path.join(extractedDirectory, 'dist/cli.js');

@@ -1,10 +1,10 @@
 {
   "manifest_version": "0.3",
   "name": "fluxmail",
-  "display_name": "Fluxmail (Apple Silicon)",
+  "display_name": "Fluxmail",
   "version": "0.0.0",
-  "description": "Apple Silicon Mac bundle to read, search, draft, send, and organize email.",
-  "long_description": "Fluxmail is self-hosted email infrastructure for Gmail, Outlook, and IMAP/SMTP. This bundle requires an Apple Silicon Mac and Node.js 22.22 or later in the Node.js 22 release line. Set up Fluxmail and connect a mailbox first, then install the bundle to use that local account from your MCP client. See the quickstart at https://fluxmail.ai/docs/quickstart.",
+  "description": "Read, search, draft, send, and organize email from Windows, macOS, or Linux.",
+  "long_description": "Fluxmail connects Gmail, Outlook, and IMAP/SMTP mailboxes to a local MCP server. This bundle supports Windows and macOS on x64 and ARM64, plus Linux on x64 and ARM64 with glibc or musl. It requires Node.js 22.22 or later in the Node.js 22 release line. Set up Fluxmail and connect a mailbox first, then install the bundle to use that local account from your MCP client. See the quickstart at https://fluxmail.ai/docs/quickstart.",
   "author": {
     "name": "Richard Chu",
     "url": "https://fluxmail.ai"
@@ -21,7 +21,7 @@
   "privacy_policies": ["https://fluxmail.ai/privacy"],
   "keywords": ["email", "gmail", "outlook", "imap", "smtp", "self-hosted"],
   "compatibility": {
-    "platforms": ["darwin"],
+    "platforms": ["darwin", "win32", "linux"],
     "runtimes": {
       "node": ">=22.22.0 <23"
     }
