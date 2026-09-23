@@ -3,12 +3,12 @@
 import { strict as assert } from 'node:assert';
 import { spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const [bundleDirectory, expectedVersion] = process.argv.slice(2);
+const [bundleDirectory, expectedVersion, toolsOutput] = process.argv.slice(2);
 if (!bundleDirectory || !expectedVersion) throw new Error('Provide the extracted bundle and expected version.');
 const extractedDirectory = path.resolve(bundleDirectory);
 
@@ -50,7 +50,8 @@ try {
     '--email',
     'mcpb-check@example.invalid',
   ]);
-  await checkTools(entryPoint, dataDirectory, manifest.tools.length);
+  const tools = await checkTools(entryPoint, dataDirectory, manifest.tools.length);
+  if (toolsOutput) await writeFile(toolsOutput, `${JSON.stringify(tools, null, 2)}\n`);
   await shutdownTelemetryAndLogging();
 } finally {
   await rm(dataDirectory, { recursive: true, force: true });
@@ -68,6 +69,7 @@ function checkTools(entryPoint, dataDirectory, expectedTools) {
     let stderr = '';
     let completed = false;
     let failure;
+    let toolList;
     const timeout = setTimeout(() => finish(new Error(`MCP handshake timed out: ${stderr}`)), 10_000);
 
     child.stderr.setEncoding('utf8');
@@ -102,7 +104,7 @@ function checkTools(entryPoint, dataDirectory, expectedTools) {
               new Set(message.result.tools.map((tool) => tool.name)),
               new Set(manifest.tools.map((tool) => tool.name)),
             );
-            finish();
+            finish(undefined, message.result.tools);
           } catch (error) {
             finish(error);
           }
@@ -113,7 +115,7 @@ function checkTools(entryPoint, dataDirectory, expectedTools) {
     child.on('close', (code) => {
       if (!completed) finish(new Error(`MCP process exited with status ${code}: ${stderr}`));
       if (failure) reject(failure);
-      else resolve();
+      else resolve(toolList);
     });
     send({
       jsonrpc: '2.0',
@@ -125,11 +127,12 @@ function checkTools(entryPoint, dataDirectory, expectedTools) {
     function send(message) {
       child.stdin.write(`${JSON.stringify(message)}\n`);
     }
-    function finish(error) {
+    function finish(error, tools) {
       if (completed) return;
       completed = true;
       clearTimeout(timeout);
       failure = error;
+      toolList = tools;
       child.kill();
     }
   });
