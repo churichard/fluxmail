@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rename, rm, stat, writeFile, copyFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, stat, writeFile, copyFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -29,11 +29,21 @@ async function main() {
   try {
     await run('pnpm', ['build']);
     try {
-      await run('pnpm', ['--filter', 'fluxmail', 'deploy', '--prod', '--legacy', '--frozen-lockfile', bundleDirectory]);
+      await run('pnpm', [
+        '--filter',
+        'fluxmail',
+        'deploy',
+        '--prod',
+        '--legacy',
+        '--frozen-lockfile',
+        '--config.node-linker=hoisted',
+        bundleDirectory,
+      ]);
     } finally {
       // pnpm's legacy deploy can switch the checkout's install to production dependencies.
       await run('pnpm', ['install', '--prod=false', '--frozen-lockfile']);
     }
+    await pruneUnusedGoogleApis(bundleDirectory);
     await copyFile(path.join(templateDirectory, 'icon.png'), path.join(bundleDirectory, 'icon.png'));
     await copyFile(path.join(templateDirectory, 'launch.mjs'), path.join(bundleDirectory, 'launch.mjs'));
     await writeFile(path.join(bundleDirectory, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
@@ -50,6 +60,19 @@ async function main() {
   } finally {
     await rm(temporaryDirectory, { recursive: true, force: true });
   }
+}
+
+async function pruneUnusedGoogleApis(bundleDirectory) {
+  const apisDirectory = path.join(bundleDirectory, 'node_modules', 'googleapis', 'build', 'src', 'apis');
+  const entries = await readdir(apisDirectory, { withFileTypes: true });
+  if (!entries.some((entry) => entry.isDirectory() && entry.name === 'gmail')) {
+    throw new Error('The deployed Google APIs package has no Gmail client.');
+  }
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory() && entry.name !== 'gmail')
+      .map((entry) => rm(path.join(apisDirectory, entry.name), { recursive: true, force: true })),
+  );
 }
 
 function run(command, args) {

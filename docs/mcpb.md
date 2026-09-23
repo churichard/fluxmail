@@ -9,7 +9,7 @@ pnpm install --frozen-lockfile
 pnpm mcpb:build
 ```
 
-The archive is written to `.context/mcpb/fluxmail-<version>-darwin-arm64.mcpb`. The build extracts the archive and checks the CLI and native modules. The manifest version comes from `packages/server/package.json`; review the tool descriptions in `mcpb/manifest.template.json` when the MCP toolset changes.
+The archive is written to `.context/mcpb/fluxmail-<version>-darwin-arm64.mcpb`. The build uses a hoisted production install and removes Google API clients other than Gmail to stay under Smithery's 25 MB bundle limit. It then extracts the archive and checks the CLI and native modules. The manifest version comes from `packages/server/package.json`; review the tool descriptions in `mcpb/manifest.template.json` when the MCP toolset changes.
 
 Before installing the bundle, users need to complete the [Fluxmail quickstart](https://fluxmail.ai/docs/quickstart) and connect a mailbox. The bundle uses their existing local Fluxmail data and login. It does not contain credentials or mailbox data.
 

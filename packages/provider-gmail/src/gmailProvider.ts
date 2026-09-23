@@ -1,4 +1,4 @@
-import { google, type gmail_v1 } from 'googleapis';
+import { gmail, type gmail_v1 } from 'googleapis/build/src/apis/gmail/index.js';
 import type { OAuth2Client } from 'googleapis-common';
 import {
   EmailError,
@@ -175,7 +175,7 @@ export class GmailProvider implements EmailProvider {
     this.email = opts.email;
     this.displayName = opts.displayName;
     this.auth = opts.auth;
-    this.gmail = google.gmail({ version: 'v1', auth: opts.auth });
+    this.gmail = gmail({ version: 'v1', auth: opts.auth });
   }
 
   /**
