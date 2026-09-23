@@ -4,9 +4,20 @@ Fluxmail records user-facing changes in this file. The format follows [Common Ch
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-23
+
+### Changed
+
+- Record whether a local OAuth connection used the browser redirect, a pasted callback URL, or timed out in anonymous telemetry ([#91](https://github.com/churichard/fluxmail/pull/91))
+
 ### Added
 
-- [MCP / CLI / REST] Add optional match-centered search context for Gmail, Outlook, and IMAP results, with a 256 KiB scan limit and explicit match statuses.
+- [CLI] Finish Gmail and Outlook account connections from a browser on another computer by pasting the callback URL into the waiting terminal ([#91](https://github.com/churichard/fluxmail/pull/91))
+- [MCP / CLI / REST] Add optional search context excerpts to Gmail, Outlook, and IMAP results, with match and availability statuses ([#92](https://github.com/churichard/fluxmail/pull/92))
+
+### Fixed
+
+- [MCP / CLI / REST] Save IMAP drafts with multiline bodies on strict servers and show the server's rejection reason when an IMAP command fails ([#93](https://github.com/churichard/fluxmail/pull/93))
 
 ## [0.9.0] - 2026-09-16
 
@@ -149,7 +160,7 @@ Only the breaking entries for the interfaces you use apply. An MCP-only integrat
 - Prevent hosted Microsoft OAuth responses from forwarding connection credentials through the HTTP referrer ([#43](https://github.com/churichard/fluxmail/pull/43))
 - Stop a pending IMAP connection immediately when its provider closes during setup ([#49](https://github.com/churichard/fluxmail/pull/49))
 
-[Unreleased]: https://github.com/churichard/fluxmail/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/churichard/fluxmail/compare/v0.10.0...HEAD
 [0.4.0]: https://github.com/churichard/fluxmail/compare/v0.3.0...v0.4.0
 [0.4.1]: https://github.com/churichard/fluxmail/compare/v0.4.0...v0.4.1
 [0.5.0]: https://github.com/churichard/fluxmail/compare/v0.4.1...v0.5.0
@@ -159,3 +170,4 @@ Only the breaking entries for the interfaces you use apply. An MCP-only integrat
 [0.8.0]: https://github.com/churichard/fluxmail/compare/v0.7.0...v0.8.0
 [0.8.1]: https://github.com/churichard/fluxmail/compare/v0.8.0...v0.8.1
 [0.9.0]: https://github.com/churichard/fluxmail/compare/v0.8.1...v0.9.0
+[0.10.0]: https://github.com/churichard/fluxmail/compare/v0.9.0...v0.10.0
