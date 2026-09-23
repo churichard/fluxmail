@@ -797,7 +797,12 @@ export class ImapProvider implements EmailProvider {
     const path = this.requireRole('drafts');
     const parsed = await PostalMime.parse(raw, POSTAL_OPTIONS);
     const client = await this.client();
-    const result = await client.append(path, raw, ['\\Draft']);
+    let result: Awaited<ReturnType<ImapFlow['append']>>;
+    try {
+      result = await client.append(path, raw, ['\\Draft']);
+    } catch (error) {
+      throw mapImapError(error);
+    }
     const appended = await this.appendedLocation(path, result, parsed.messageId, 'saved draft');
     const location: ImapMessageLocation = {
       id: existingId ?? locationId('im', this.options.accountId, path, appended.uidValidity, appended.uid),

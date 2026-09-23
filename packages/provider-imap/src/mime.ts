@@ -44,6 +44,8 @@ export async function composeMessage(
   };
   const compiled = new MailComposer(options).compile();
   compiled.keepBcc = true;
+  // IMAP APPEND and SMTP require CRLF. Without this, Nodemailer keeps bare LF from body text.
+  compiled.newline = 'windows';
   return new Promise((resolve, reject) => {
     compiled.build((error, message) => (error ? reject(error) : resolve(message)));
   });

@@ -12,6 +12,17 @@ describe('IMAP error mapping', () => {
     expect(mapImapError(input)).toMatchObject({ code });
   });
 
+  it('includes the IMAP server reply for failed commands', () => {
+    const error = Object.assign(new Error('Command failed'), {
+      responseStatus: 'BAD',
+      responseText: 'Message contains bare newlines',
+    });
+    expect(mapImapError(error)).toMatchObject({
+      code: 'provider_unavailable',
+      message: 'IMAP/SMTP operation failed: Command failed (BAD: Message contains bare newlines)',
+    });
+  });
+
   it('preserves an existing EmailError', () => {
     const error = new EmailError('not_found', 'gone');
     expect(mapImapError(error)).toBe(error);

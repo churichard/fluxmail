@@ -354,6 +354,45 @@ describe('ImapProvider safe folder fallbacks', () => {
     expect(append).not.toHaveBeenCalled();
   });
 
+  it('reports the server reply when the Drafts append is rejected', async () => {
+    const drafts = folder('INBOX.Drafts');
+    drafts.specialUse = '\\Drafts';
+    const fake = {
+      usable: true,
+      capabilities: new Map(),
+      on: vi.fn(),
+      connect: vi.fn(),
+      close: vi.fn(),
+      list: vi.fn().mockResolvedValue([folder('INBOX'), drafts]),
+      append: vi
+        .fn()
+        .mockRejectedValue(
+          Object.assign(new Error('Command failed'), { responseStatus: 'NO', responseText: 'Mailbox is full' }),
+        ),
+    };
+    const provider = new ImapProvider({
+      accountId: 'a1',
+      email: 'me@example.com',
+      credentials: {
+        imap: { host: 'imap.example.com', port: 993, security: 'tls', user: 'me', password: 'secret' },
+        smtp: { host: 'smtp.example.com', port: 587, security: 'starttls', user: 'me', password: 'secret' },
+        saveSent: true,
+      },
+      store: new MemoryStore(),
+      imapFactory: () => fake as unknown as ImapFlow,
+    });
+
+    await expect(
+      provider.createDraft({ to: [{ email: 'me@example.com' }], subject: 'x', body: { text: 'line one\nline two' } }),
+    ).rejects.toMatchObject({
+      code: 'provider_unavailable',
+      message: 'IMAP/SMTP operation failed: Command failed (NO: Mailbox is full)',
+    });
+    const raw = (fake.append.mock.calls[0]![1] as Buffer).toString('binary');
+    expect(raw).toContain('line one\r\nline two');
+    expect(raw).not.toMatch(/(?<!\r)\n/);
+  });
+
   it.each(['archive', 'trash', 'untrash'] as const)(
     'does not move or delete for %s when its required folder is unresolved',
     async (action) => {
