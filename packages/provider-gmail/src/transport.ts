@@ -7,11 +7,12 @@ function proxyUrl(): string | undefined {
   return process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy;
 }
 
-/** Mirrors gaxios's NO_PROXY matching so this agent routes the same requests through the proxy. */
+/** Follows gaxios's NO_PROXY matching, plus the common `*` rule that bypasses the proxy for every host. */
 function bypassesProxy(url: URL): boolean {
   const rules = (process.env.NO_PROXY ?? process.env.no_proxy)?.split(',') ?? [];
   return rules.some((raw) => {
     const rule = raw.trim();
+    if (rule === '*') return true;
     if (rule.startsWith('*.') || rule.startsWith('.')) return url.hostname.endsWith(rule.replace(/^\*\./, '.'));
     return rule === url.origin || rule === url.hostname || rule === url.href;
   });

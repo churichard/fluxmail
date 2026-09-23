@@ -34,7 +34,7 @@ describe('googleRequestAgent', () => {
     expect(agent?.proxy.href).toBe('http://fallback.test:8080/');
   });
 
-  it.each(['gmail.googleapis.com', '.googleapis.com', '*.googleapis.com', 'https://gmail.googleapis.com'])(
+  it.each(['*', 'gmail.googleapis.com', '.googleapis.com', '*.googleapis.com', 'https://gmail.googleapis.com'])(
     'skips the proxy when NO_PROXY contains %s',
     (rule) => {
       vi.stubEnv('HTTPS_PROXY', 'http://proxy.test:3128');
