@@ -57,7 +57,7 @@ jobs:
         run: |
           version=$(node -p "require('./packages/server/package.json').version")
           mkdir -p .context/mcpb/extracted
-          tar -xf ".context/mcpb/fluxmail-$version.mcpb" -C .context/mcpb/extracted
+          unzip -qq ".context/mcpb/fluxmail-$version.mcpb" -d .context/mcpb/extracted
           node scripts/verify-mcpb.mjs .context/mcpb/extracted "$version"
       - name: Verify on Alpine Linux
         if: startsWith(matrix.os, 'ubuntu')
