@@ -50,6 +50,9 @@ importers:
       googleapis-common:
         specifier: 8.0.2
         version: 8.0.2
+      https-proxy-agent:
+        specifier: ^7.0.6
+        version: 7.0.6
       iconv-lite:
         specifier: ^0.7.3
         version: 0.7.3
