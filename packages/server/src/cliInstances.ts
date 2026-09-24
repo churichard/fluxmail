@@ -32,6 +32,7 @@ const EMAIL_ERROR_CODES = new Set<EmailErrorCode>([
   'rate_limited',
   'not_found',
   'invalid_request',
+  'idempotency_conflict',
   'provider_unavailable',
   'entitlement_exceeded',
   'permission_denied',
@@ -45,11 +46,21 @@ const SAFE_INSTANCE_API_TELEMETRY_CODES = new Set([
   'internal',
   'invalid_response',
   'request_failed',
+  'request_timeout',
   'request_too_large',
   'setup_required',
   'unauthorized',
   'unsupported_media_type',
 ]);
+
+let requestDeadlineMs = 30_000;
+
+export function setRequestDeadlineMs(value: number): void {
+  if (!Number.isInteger(value) || value < 1_000 || value > 300_000) {
+    throw new EmailError('invalid_request', '--timeout must be between 1 and 300 seconds.');
+  }
+  requestDeadlineMs = value;
+}
 
 export class InstanceApiError extends Error {
   constructor(
@@ -57,6 +68,7 @@ export class InstanceApiError extends Error {
     message: string,
     readonly status: number,
     readonly data?: Record<string, unknown>,
+    readonly requestId?: string,
   ) {
     super(message);
     this.name = 'InstanceApiError';
@@ -68,11 +80,18 @@ export function instanceResponseError(
   message: string,
   status: number,
   data?: Record<string, unknown>,
+  requestId?: string,
 ): Error {
   if (EMAIL_ERROR_CODES.has(code as EmailErrorCode)) {
-    return new EmailError(code as EmailErrorCode, message, data);
+    return Object.assign(new EmailError(code as EmailErrorCode, message, data), { status, requestId });
   }
-  return new InstanceApiError(code, message, status, data);
+  return new InstanceApiError(code, message, status, data, requestId);
+}
+
+export function apiRequestId(error: unknown): string | undefined {
+  return error && typeof error === 'object' && 'requestId' in error && typeof error.requestId === 'string'
+    ? error.requestId
+    : undefined;
 }
 
 export function apiErrorCode(error: unknown): string {
@@ -227,6 +246,8 @@ export class InstanceClient {
   ) {}
 
   async request(pathname: string, init: RequestInit = {}, authenticated = true): Promise<Response> {
+    const deadline = AbortSignal.timeout(requestDeadlineMs);
+    const signal = init.signal ? AbortSignal.any([init.signal, deadline]) : deadline;
     const headers = new Headers(init.headers);
     if (authenticated) {
       if (!this.token) throw new EmailError('permission_denied', `Log in to instance "${this.name}" first.`);
@@ -239,7 +260,11 @@ export class InstanceClient {
         // already reports the outcome. Withholding telemetry keeps one user action
         // from being counted twice and keeps the rest surface meaning a real HTTP
         // call. The logger stays, so local logs still record the failure.
-        const response = await createApp({ ...context, telemetry: undefined }).request(pathname, { ...init, headers });
+        const response = await createApp({ ...context, telemetry: undefined }).request(pathname, {
+          ...init,
+          headers,
+          signal,
+        });
         const body = response.body ? await response.arrayBuffer() : null;
         return new Response(body?.byteLength ? body : null, {
           status: response.status,
@@ -259,7 +284,18 @@ export class InstanceClient {
     if (url.origin !== baseUrl.origin) {
       throw new EmailError('invalid_request', 'Remote request paths must stay on the configured server.');
     }
-    const response = await fetch(url, { ...init, headers, redirect: 'manual' });
+    let response: Response;
+    try {
+      response = await fetch(url, { ...init, headers, signal, redirect: 'manual' });
+    } catch (error) {
+      if (signal.aborted)
+        throw new InstanceApiError(
+          'request_timeout',
+          'The request timed out. Check the operation status before retrying a send.',
+          0,
+        );
+      throw error;
+    }
     if (response.status >= 300 && response.status < 400) {
       throw new EmailError(
         'permission_denied',
@@ -279,7 +315,7 @@ export class InstanceClient {
       data?: T;
       meta?: Record<string, unknown>;
       warnings?: string[];
-      error?: { code?: string; message?: string; data?: Record<string, unknown> };
+      error?: { code?: string; message?: string; data?: Record<string, unknown>; requestId?: string };
     };
     try {
       body = (await response.json()) as typeof body;
@@ -293,7 +329,7 @@ export class InstanceClient {
     if (!response.ok) {
       const code = body.error?.code ?? 'request_failed';
       const message = body.error?.message ?? `Request failed with HTTP ${response.status}.`;
-      throw instanceResponseError(code, message, response.status, body.error?.data);
+      throw instanceResponseError(code, message, response.status, body.error?.data, body.error?.requestId);
     }
     if (!('data' in body)) {
       throw new InstanceApiError('invalid_response', `Instance ${this.name} returned no data.`, response.status);

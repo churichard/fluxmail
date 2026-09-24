@@ -2,7 +2,8 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createCliProgram } from '../src/cli.js';
+import { createCliProgram, runCli } from '../src/cli.js';
+import { cliExitCode } from '../src/cliOutput.js';
 import { saveRemoteInstance, saveSessionToken } from '../src/cliInstances.js';
 
 interface RecordedRequest {
@@ -20,7 +21,18 @@ function envelope(data: unknown, extra: Record<string, unknown> = {}, status = 2
 }
 
 function setupRemote(
-  responder: (request: RecordedRequest) => Response | Promise<Response> = () => envelope({ ok: true }),
+  responder: (request: RecordedRequest) => Response | Promise<Response> = (request) =>
+    request.url.pathname.endsWith('/messages/actions')
+      ? envelope({ action: 'markRead', succeededIds: ['msg_1'], failed: [], uncertainIds: [] })
+      : request.url.pathname.endsWith('/send') || request.url.pathname.endsWith('/forward')
+        ? envelope({
+            operationId: 'dop_1',
+            accountId: 'acct_1',
+            kind: 'send',
+            status: 'succeeded',
+            result: { id: 'sent_1', threadId: 'thread_1' },
+          })
+        : envelope({ ok: true }),
   accounts: Array<{
     id: string;
     email: string;
@@ -95,6 +107,50 @@ afterEach(() => {
 });
 
 describe('CLI email commands', () => {
+  it('assigns stable exit categories', () => {
+    expect(cliExitCode('invalid_request')).toBe(2);
+    expect(cliExitCode('not_found')).toBe(2);
+    expect(cliExitCode('uncertain')).toBe(3);
+    expect(cliExitCode('permission_denied')).toBe(4);
+    expect(cliExitCode('rate_limited')).toBe(5);
+    expect(cliExitCode('internal')).toBe(1);
+  });
+
+  it('reports an invalid root format as a structured input error', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await runCli(['node', 'fluxmail', '--format', 'bad', 'status']);
+    expect(process.exitCode).toBe(2);
+    expect(JSON.parse(String(error.mock.calls.at(-1)?.[0]))).toMatchObject({ error: { code: 'invalid_request' } });
+  });
+
+  it('keeps partial bulk outcomes in JSON and exits with category 3', async () => {
+    setupRemote(() =>
+      envelope({
+        action: 'markRead',
+        succeededIds: ['m1'],
+        failed: [{ messageId: 'm2', code: 'not_found' }],
+        uncertainIds: ['m3'],
+      }),
+    );
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await run(['emails', 'modify', 'mark-read', 'm1', 'm2', 'm3']);
+    expect(process.exitCode).toBe(3);
+    expect(JSON.parse(String(log.mock.calls.at(-1)?.[0]))).toMatchObject({
+      data: { succeededIds: ['m1'], failed: [{ messageId: 'm2', code: 'not_found' }], uncertainIds: ['m3'] },
+    });
+  });
+
+  it('wraps management output in the selected scripting format', async () => {
+    setupRemote();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await createCliProgram().parseAsync(['node', 'fluxmail', 'instances', 'list']);
+    const json = JSON.parse(String(log.mock.calls.at(-1)?.[0]));
+    expect(json.data).toEqual(expect.arrayContaining([expect.stringContaining('NAME')]));
+    log.mockClear();
+    await createCliProgram().parseAsync(['node', 'fluxmail', '--format', 'ndjson', 'instances', 'list']);
+    expect(log.mock.calls.every(([line]) => JSON.parse(String(line)).type === 'item')).toBe(true);
+  });
+
   it('lists messages through REST and preserves pagination metadata and warnings', async () => {
     const { requests } = setupRemote(() =>
       envelope([{ id: 'private-message' }], { meta: { nextPageToken: 'private-next' }, warnings: ['renew soon'] }),
@@ -113,6 +169,22 @@ describe('CLI email commands', () => {
       data: [{ id: 'private-message' }],
       meta: { nextPageToken: 'private-next' },
       warnings: ['renew soon'],
+    });
+  });
+
+  it('follows listing pages up to the selected ceiling', async () => {
+    const { requests } = setupRemote((request) =>
+      request.url.searchParams.has('pageToken')
+        ? envelope([{ id: 'm3' }], { meta: { exhausted: true } })
+        : envelope([{ id: 'm1' }, { id: 'm2' }], { meta: { nextPageToken: 'next-1', exhausted: false } }),
+    );
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await run(['emails', 'list', '--all', '--max-results', '3', '--page-size', '2']);
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.url.searchParams.get('pageToken')).toBe('next-1');
+    expect(requests[1]?.url.searchParams.get('pageSize')).toBe('1');
+    expect(JSON.parse(String(log.mock.calls.at(-1)?.[0]))).toMatchObject({
+      data: [{ id: 'm1' }, { id: 'm2' }, { id: 'm3' }],
     });
   });
 
@@ -268,14 +340,14 @@ describe('CLI email commands', () => {
       includeSnippet: true,
       includeSearchContext: true,
     });
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(3);
     expect(capture).toHaveBeenCalledWith(
       'operation completed',
       expect.objectContaining({
         product_surface: 'cli',
         operation: 'emails search-batch',
         outcome: 'error',
-        error_code: 'account_failure',
+        error_code: 'partial_failure',
       }),
     );
     expect(capture).toHaveBeenCalledWith(
@@ -324,7 +396,7 @@ describe('CLI email commands', () => {
 
     await createCliProgram().parseAsync(['node', 'fluxmail', '--instance', 'work', 'labels', 'list']);
 
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(2);
     expect(error).toHaveBeenCalledWith(expect.stringContaining('Multiple accounts are available'));
   });
 
@@ -372,7 +444,7 @@ describe('CLI email commands', () => {
     const empty = setupRemote(undefined, []);
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     await createCliProgram().parseAsync(['node', 'fluxmail', '--instance', 'work', 'folders', 'list']);
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(2);
     expect(empty.requests).toHaveLength(1);
     expect(error).toHaveBeenCalledWith(expect.stringContaining('No email accounts are available'));
   });
@@ -426,12 +498,14 @@ describe('CLI email commands', () => {
       attachmentPath,
       '--send-at',
       '2026-08-01T12:00:00Z',
+      '--idempotency-key',
+      'scheduled-send-key',
     ]);
 
     const request = requests.at(-1)!;
     expect(request.url.pathname).toBe('/api/v1/accounts/acct_1/send');
     expect(request.method).toBe('POST');
-    expect(request.headers.get('idempotency-key')).toMatch(/^[0-9a-f-]{36}$/);
+    expect(request.headers.get('idempotency-key')).toBe('scheduled-send-key');
     expect(request.body).toMatchObject({
       from: 'sales@example.com',
       to: [{ name: 'Ann', email: 'ann@example.com' }],
@@ -545,12 +619,12 @@ describe('CLI email commands', () => {
 
     const requestCount = requests.length;
     await run(['emails', 'send', '--input', inputPath, '--subject', 'conflict']);
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(2);
     expect(requests).toHaveLength(requestCount);
     expect(error).toHaveBeenCalledWith(expect.stringContaining('--input cannot be combined'));
 
     await run(['emails', 'send', '--draft', 'draft_1', '--from', 'sales@example.com']);
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(2);
     expect(requests).toHaveLength(requestCount);
     expect(error).toHaveBeenCalledWith(expect.stringContaining('--draft cannot be combined'));
   });
@@ -601,7 +675,7 @@ describe('CLI email commands', () => {
 
     const requestCount = requests.length;
     await run(['emails', 'modify', 'archive', 'msg_1', '--input', inputPath]);
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(2);
     expect(requests).toHaveLength(requestCount);
     expect(error).toHaveBeenCalledWith(expect.stringContaining('--input cannot be combined'));
   });
@@ -615,11 +689,11 @@ describe('CLI email commands', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     await run(['drafts', 'create', '--body', 'inline', '--body-file', bodyPath]);
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(2);
     await run(['drafts', 'create', '--html', '<p>inline</p>', '--html-file', htmlPath]);
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(2);
     await run(['drafts', 'create', '--to', 'not an address', '--body', 'test']);
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(2);
 
     expect(requests).toHaveLength(0);
     expect(error).toHaveBeenCalledWith(expect.stringContaining('--body and --body-file'));
@@ -634,6 +708,9 @@ describe('CLI email commands', () => {
           status: 200,
           headers: { 'content-type': 'text/plain', 'content-length': '10' },
         });
+      }
+      if (request.url.pathname.endsWith('/messages/actions')) {
+        return envelope({ action: 'addLabels', succeededIds: ['msg_1'], failed: [], uncertainIds: [] });
       }
       return envelope({ ok: true });
     });
@@ -666,12 +743,12 @@ describe('CLI email commands', () => {
         path: '/api/v1/accounts/acct_1/drafts/draft_1',
       },
       {
-        args: ['emails', 'send', '--draft', 'draft_1'],
+        args: ['emails', 'send', '--draft', 'draft_1', '--idempotency-key', 'send-resource'],
         method: 'POST',
         path: '/api/v1/accounts/acct_1/send',
       },
       {
-        args: ['emails', 'forward', 'msg_1', '--to', 'ann@example.com'],
+        args: ['emails', 'forward', 'msg_1', '--to', 'ann@example.com', '--idempotency-key', 'forward-resource'],
         method: 'POST',
         path: '/api/v1/accounts/acct_1/messages/msg_1/forward',
       },
@@ -719,7 +796,7 @@ describe('CLI email commands', () => {
 
     await run(['attachments', 'download', 'msg_1', 'att_1', '--output', outputPath]);
 
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(2);
     expect(readFileSync(outputPath, 'utf8')).toBe('original');
     expect(requests).toHaveLength(0);
     expect(error).toHaveBeenCalledWith(expect.stringContaining('already exists'));
@@ -753,17 +830,22 @@ describe('CLI email commands', () => {
   it('preserves safe REST error codes in CLI output', async () => {
     setupRemote(
       () =>
-        new Response(JSON.stringify({ error: { code: 'rate_limited', message: 'Try later.' } }), {
-          status: 429,
-          headers: { 'content-type': 'application/json' },
-        }),
+        new Response(
+          JSON.stringify({ error: { code: 'rate_limited', message: 'Try later.', requestId: 'request-123' } }),
+          {
+            status: 429,
+            headers: { 'content-type': 'application/json' },
+          },
+        ),
     );
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     await run(['labels', 'list']);
 
-    expect(process.exitCode).toBe(1);
-    expect(error).toHaveBeenCalledWith('Error [rate_limited]: Try later.');
+    expect(process.exitCode).toBe(5);
+    expect(JSON.parse(String(error.mock.calls[0]?.[0]))).toMatchObject({
+      error: { code: 'rate_limited', message: 'Try later.', requestId: 'request-123' },
+    });
   });
 
   it('preserves standard REST error codes for attachment downloads', async () => {
@@ -778,8 +860,10 @@ describe('CLI email commands', () => {
 
     await run(['attachments', 'download', 'msg_1', 'att_1', '--output', path.join(dataDir, 'missing.txt')]);
 
-    expect(process.exitCode).toBe(1);
-    expect(error).toHaveBeenCalledWith('Error [not_found]: Attachment missing.');
+    expect(process.exitCode).toBe(2);
+    expect(JSON.parse(String(error.mock.calls[0]?.[0]))).toMatchObject({
+      error: { code: 'not_found', message: 'Attachment missing.' },
+    });
   });
 
   it('records safe success and REST error telemetry without private input', async () => {
@@ -818,5 +902,52 @@ describe('CLI email commands', () => {
     expect(JSON.stringify(capture.mock.calls)).not.toContain('private provider response');
     expect(JSON.stringify(capture.mock.calls)).not.toContain('acct_1');
     expect(requests.some((request) => request.url.searchParams.get('query') === privateQuery)).toBe(true);
+  });
+
+  it('records new lookup and preview operations without private input', async () => {
+    const capture = vi.fn();
+    const telemetry = { capture, shutdown: vi.fn().mockResolvedValue(undefined) };
+    let fail = false;
+    setupRemote(() =>
+      fail
+        ? new Response(JSON.stringify({ error: { code: 'not_found', message: 'private provider text' } }), {
+            status: 404,
+            headers: { 'content-type': 'application/json' },
+          })
+        : envelope({ id: 'private-draft', to: [{ email: 'private@example.com' }] }),
+    );
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await run(['drafts', 'get', 'private-draft'], telemetry);
+    await run(['emails', 'preview', '--draft', 'private-draft'], telemetry);
+    await run(['emails', 'delivery-status', 'private-operation'], telemetry);
+    fail = true;
+    await run(['drafts', 'get', 'private-fail'], telemetry);
+    await run(['emails', 'preview', '--draft', 'private-draft'], telemetry);
+    await run(['emails', 'delivery-status', 'private-operation'], telemetry);
+    for (const operation of ['drafts get', 'emails preview', 'emails delivery-status']) {
+      expect(capture).toHaveBeenCalledWith(
+        'operation completed',
+        expect.objectContaining({ product_surface: 'cli', operation, outcome: 'success' }),
+      );
+    }
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({
+        product_surface: 'cli',
+        operation: 'drafts get',
+        outcome: 'error',
+        error_code: 'not_found',
+      }),
+    );
+    for (const operation of ['emails preview', 'emails delivery-status']) {
+      expect(capture).toHaveBeenCalledWith(
+        'operation completed',
+        expect.objectContaining({ product_surface: 'cli', operation, outcome: 'error', error_code: 'not_found' }),
+      );
+    }
+    const captured = JSON.stringify(capture.mock.calls);
+    for (const value of ['private-draft', 'private-operation', 'private@example.com', 'private provider text'])
+      expect(captured).not.toContain(value);
   });
 });

@@ -1,4 +1,5 @@
 import { isEmailError, type SendResult } from '@fluxmail/core';
+import type { DeliveryOperation } from '../service/deliveryCoordinator.js';
 import type { FluxmailDb } from '../storage/db.js';
 import { logFailure, type Logger } from '../logging.js';
 import {
@@ -9,12 +10,14 @@ import {
   listActive,
   listClaimable,
   retryClaim,
+  uncertainClaim,
   type ScheduledSendRow,
 } from '../storage/scheduledSends.js';
 
 /** The slice of EmailService the scheduler needs. */
 export interface ScheduledSender {
   send(accountId: string | undefined, input: { draftId: string }): Promise<SendResult>;
+  deliverScheduled?(accountId: string, draftId: string, scheduleId: string): Promise<DeliveryOperation>;
   /** Throws while a lapsed license leaves the instance over the plan quota. */
   enforceQuota(): string | undefined;
 }
@@ -112,8 +115,16 @@ export class SendScheduler {
       return;
     }
     try {
-      const result = await this.service.send(row.accountId, { draftId: row.draftId });
-      completeClaim(this.db, row.id, claim.token, result);
+      const operation = this.service.deliverScheduled
+        ? await this.service.deliverScheduled(row.accountId, row.draftId, row.id)
+        : { status: 'succeeded' as const, result: await this.service.send(row.accountId, { draftId: row.draftId }) };
+      if (operation.status === 'succeeded' && operation.result) {
+        completeClaim(this.db, row.id, claim.token, operation.result);
+      } else if (operation.status === 'failed') {
+        failClaim(this.db, row.id, claim.token, operation.error?.code ?? 'Delivery failed.');
+      } else {
+        uncertainClaim(this.db, row.id, claim.token, 'Delivery outcome is uncertain. Check Sent before sending again.');
+      }
       this.backoff.delete(row.id);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

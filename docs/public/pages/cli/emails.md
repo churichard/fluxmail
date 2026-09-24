@@ -29,5 +29,7 @@ This command has no command-specific options.
 | [`fluxmail emails search-batch`](/docs/cli/emails-search-batch) | Search multiple email accounts |
 | [`fluxmail emails get`](/docs/cli/emails-get) | Get a complete message |
 | [`fluxmail emails send`](/docs/cli/emails-send) | Send or schedule a message |
+| [`fluxmail emails preview`](/docs/cli/emails-preview) | Preview sender, recipients, and attachments |
 | [`fluxmail emails forward`](/docs/cli/emails-forward) | Forward a message |
+| [`fluxmail emails delivery-status`](/docs/cli/emails-delivery-status) | Check a send or forward outcome |
 | [`fluxmail emails modify`](/docs/cli/emails-modify) | Apply one action to one or more messages |

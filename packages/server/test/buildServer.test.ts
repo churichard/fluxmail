@@ -8,6 +8,20 @@ import { customPermissionPolicy, permissionPolicyForProfile } from '../src/permi
 import type { Telemetry } from '../src/telemetry.js';
 import type { Logger } from '../src/logging.js';
 
+const draftMessage = {
+  id: 'd1',
+  threadId: 't1',
+  accountId: 'acct_1',
+  from: { email: 'me@example.com' },
+  to: [{ email: 'recipient@example.com' }],
+  subject: 'Reply',
+  date: '2026-07-11T09:00:00.000Z',
+  body: { text: 'Reply' },
+  attachments: [],
+  flags: { read: true, starred: false, draft: true },
+  draftId: 'd1',
+};
+
 function loggerSpy(): { logger: Logger; warn: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn> } {
   const warn = vi.fn();
   const error = vi.fn();
@@ -68,6 +82,7 @@ describe('MCP permissions', () => {
   const readTools = [
     'download_attachment',
     'get_email',
+    'get_email_body',
     'get_status',
     'get_thread',
     'list_accounts',
@@ -96,14 +111,22 @@ describe('MCP permissions', () => {
   it('adds safe write tools but not send tools for the read-write profile', async () => {
     const names = await toolNames({ permissions: permissionPolicyForProfile('read-write') });
     expect(names).toEqual(
-      [...readTools, 'cancel_scheduled_email', 'create_draft', 'delete_draft', 'modify_emails', 'update_draft'].sort(),
+      [
+        ...readTools,
+        'cancel_scheduled_email',
+        'create_draft',
+        'delete_draft',
+        'get_draft',
+        'modify_emails',
+        'update_draft',
+      ].sort(),
     );
     expect(names).not.toContain('send_email');
     expect(names).not.toContain('forward_email');
   });
 
   it('uses one capability for trash and untrash but keeps permanent delete separate', async () => {
-    const modify = vi.fn().mockResolvedValue(undefined);
+    const modify = vi.fn().mockResolvedValue({ succeededIds: ['m1'], failed: [], uncertainIds: [] });
     const client = await connectMcp({ enforceQuota: () => undefined, modify } as Partial<EmailService>, {
       permissions: customPermissionPolicy(['mail.trash']),
     });
@@ -132,7 +155,7 @@ describe('MCP permissions', () => {
   });
 
   it('uses mail.organize for reversible message organization', async () => {
-    const modify = vi.fn().mockResolvedValue(undefined);
+    const modify = vi.fn().mockResolvedValue({ succeededIds: ['m1'], failed: [], uncertainIds: [] });
     const client = await connectMcp({ enforceQuota: () => undefined, modify } as Partial<EmailService>, {
       permissions: customPermissionPolicy(['mail.organize']),
     });
@@ -154,7 +177,7 @@ describe('MCP permissions', () => {
   });
 
   it('does not let generic move permissions change protected folders', async () => {
-    const modify = vi.fn().mockResolvedValue(undefined);
+    const modify = vi.fn().mockResolvedValue({ succeededIds: ['m1'], failed: [], uncertainIds: [] });
     const client = await connectMcp({ enforceQuota: () => undefined, modify } as Partial<EmailService>, {
       permissions: customPermissionPolicy(['mail.organize']),
     });
@@ -170,7 +193,7 @@ describe('MCP permissions', () => {
   });
 
   it('defers label-name validation to the provider', async () => {
-    const modify = vi.fn().mockResolvedValue(undefined);
+    const modify = vi.fn().mockResolvedValue({ succeededIds: ['m1'], failed: [], uncertainIds: [] });
     const client = await connectMcp({ enforceQuota: () => undefined, modify } as Partial<EmailService>, {
       permissions: customPermissionPolicy(['mail.organize']),
     });
@@ -189,31 +212,42 @@ describe('MCP permissions', () => {
       'forward_email',
     );
 
-    const forward = vi.fn().mockResolvedValue({ id: 'm2', threadId: 't2' });
-    const client = await connectMcp({ enforceQuota: () => undefined, forward } as Partial<EmailService>, {
+    const deliverForward = vi.fn().mockResolvedValue({
+      operationId: 'dop_2',
+      accountId: 'acct_1',
+      kind: 'forward',
+      status: 'succeeded',
+      result: { id: 'm2', threadId: 't2' },
+    });
+    const client = await connectMcp({ enforceQuota: () => undefined, deliverForward } as Partial<EmailService>, {
       permissions: customPermissionPolicy(['mail.send', 'mail.read']),
     });
     expect((await client.listTools()).tools.map((tool) => tool.name)).toContain('forward_email');
 
     const withAttachments = await client.callTool({
       name: 'forward_email',
-      arguments: { messageId: 'm1', to: ['recipient@example.com'] },
+      arguments: { messageId: 'm1', to: ['recipient@example.com'], idempotencyKey: 'forward-1' },
     });
     expect(withAttachments.isError).toBeFalsy();
-    expect(forward).toHaveBeenCalledOnce();
+    expect(deliverForward).toHaveBeenCalledOnce();
 
     const withoutAttachments = await client.callTool({
       name: 'forward_email',
-      arguments: { messageId: 'm1', to: ['recipient@example.com'], includeAttachments: false },
+      arguments: {
+        messageId: 'm1',
+        to: ['recipient@example.com'],
+        includeAttachments: false,
+        idempotencyKey: 'forward-2',
+      },
     });
     expect(withoutAttachments.isError).toBeFalsy();
-    expect(forward).toHaveBeenCalledTimes(2);
+    expect(deliverForward).toHaveBeenCalledTimes(2);
   });
 });
 
 describe('MCP typed search', () => {
   it('parses portable syntax and includes parser warnings in the result', async () => {
-    const listMessages = vi.fn().mockResolvedValue({ items: [] });
+    const listMessages = vi.fn().mockResolvedValue({ items: [], exhausted: true });
     const client = await connectMcp({ enforceQuota: () => undefined, listMessages } as Partial<EmailService>, {
       permissions: permissionPolicyForProfile('read-only'),
     });
@@ -366,6 +400,21 @@ describe('MCP typed search', () => {
     });
     expect(JSON.stringify(result.content)).toContain('possible_operator_typo');
   });
+
+  it('returns actionable local search diagnostics without calling the provider', async () => {
+    const listMessages = vi.fn();
+    const client = await connectMcp({ enforceQuota: () => undefined, listMessages } as Partial<EmailService>, {
+      permissions: permissionPolicyForProfile('read-only'),
+    });
+    const result = await client.callTool({
+      name: 'search_emails',
+      arguments: { accountId: 'acct_1', query: 'from:ann@example.com', from: 'bob@example.com' },
+    });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('diagnostics');
+    expect(JSON.stringify(result.content)).toContain('invalid_request');
+    expect(listMessages).not.toHaveBeenCalled();
+  });
 });
 
 describe('attachment tool', () => {
@@ -381,17 +430,28 @@ describe('attachment tool', () => {
 
     const result = await client.callTool({
       name: 'download_attachment',
-      arguments: { accountId: 'acct_1', messageId: 'm1', attachmentId: 'a1' },
+      arguments: { accountId: 'acct_1', messageId: 'INBOX:42', attachmentId: 'AAMk=+/' },
     });
 
     expect(result.isError).toBeFalsy();
-    expect(getAttachment).toHaveBeenCalledWith('acct_1', 'm1', 'a1', 3);
-    expect(result.content).toContainEqual({
+    expect(getAttachment).toHaveBeenCalledWith('acct_1', 'INBOX:42', 'AAMk=+/', 3);
+    expect(result.content).toContainEqual(
+      expect.objectContaining({ type: 'resource_link', mimeType: 'application/pdf' }),
+    );
+    const link = result.content.find((item) => item.type === 'resource_link');
+    expect(link?.type).toBe('resource_link');
+    if (link?.type === 'resource_link') {
+      const fetched = await client.readResource({ uri: link.uri });
+      expect(fetched.contents).toContainEqual(expect.objectContaining({ blob: Buffer.from('pdf').toString('base64') }));
+      expect(getAttachment).toHaveBeenLastCalledWith('acct_1', 'INBOX:42', 'AAMk=+/', 3);
+    }
+    const inline = await client.callTool({
+      name: 'download_attachment',
+      arguments: { accountId: 'acct_1', messageId: 'INBOX:42', attachmentId: 'AAMk=+/', inline: true },
+    });
+    expect(inline.content).toContainEqual({
       type: 'resource',
-      resource: expect.objectContaining({
-        mimeType: 'application/pdf',
-        blob: Buffer.from('pdf').toString('base64'),
-      }),
+      resource: expect.objectContaining({ blob: Buffer.from('pdf').toString('base64') }),
     });
   });
 
@@ -407,11 +467,159 @@ describe('attachment tool', () => {
 
     const result = await client.callTool({
       name: 'download_attachment',
-      arguments: { messageId: 'm1', attachmentId: 'a1' },
+      arguments: { accountId: 'acct_1', messageId: 'm1', attachmentId: 'a1' },
     });
 
     expect(result.isError).toBe(true);
-    expect(JSON.stringify(result.content)).toContain('maxBytes');
+    expect(JSON.stringify(result.content)).toContain('invalid_request');
+  });
+});
+
+describe('typed MCP responses', () => {
+  it('hides unexpected exception text and returns a request ID', async () => {
+    const getMessage = vi.fn().mockRejectedValue(new Error('private database password'));
+    const client = await connectMcp({ enforceQuota: () => undefined, getMessage } as Partial<EmailService>);
+    const result = await client.callTool({ name: 'get_email', arguments: { messageId: 'm1' } });
+    expect(result.isError).toBe(true);
+    const error = JSON.parse(String(result.content.find((item) => item.type === 'text')?.text));
+    expect(error).toMatchObject({ error: 'internal', requestId: expect.any(String) });
+    expect(JSON.stringify(result.content)).not.toContain('private database password');
+  });
+
+  it('marks partial bulk changes as errors while retaining each outcome', async () => {
+    const { telemetry, capture } = telemetrySpy();
+    const modify = vi.fn().mockResolvedValue({
+      succeededIds: ['m1'],
+      failed: [{ messageId: 'm2', code: 'not_found' }],
+      uncertainIds: ['m3'],
+    });
+    const client = await connectMcp({ enforceQuota: () => undefined, modify } as Partial<EmailService>, { telemetry });
+    const result = await client.callTool({
+      name: 'modify_emails',
+      arguments: { messageIds: ['m1', 'm2', 'm3'], action: 'markRead' },
+    });
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      data: { succeededIds: ['m1'], failed: [{ messageId: 'm2', code: 'not_found' }], uncertainIds: ['m3'] },
+    });
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({ operation: 'modify_emails', outcome: 'error', error_code: 'account_failure' }),
+    );
+  });
+
+  it('declares an output schema for every tool and bounds body content', async () => {
+    const getMessage = vi.fn().mockResolvedValue({ ...draftMessage, body: { text: 'x'.repeat(60_000) } });
+    const client = await connectMcp({ enforceQuota: () => undefined, getMessage } as Partial<EmailService>);
+    const tools = (await client.listTools()).tools;
+    expect(tools.every((tool) => tool.outputSchema !== undefined)).toBe(true);
+    const first = await client.callTool({
+      name: 'get_email',
+      arguments: { messageId: 'private-message', bodyFormat: 'text' },
+    });
+    expect(first.isError).toBeFalsy();
+    expect(first.structuredContent).toMatchObject({
+      data: { bodyTruncation: { text: { totalChars: 60_000, nextOffset: 50_000 } } },
+    });
+    const next = await client.callTool({
+      name: 'get_email_body',
+      arguments: { messageId: 'private-message', format: 'text', offset: 50_000 },
+    });
+    expect(next.structuredContent).toMatchObject({ data: { totalChars: 60_000, offset: 50_000 } });
+    expect((next.structuredContent as { data: { text: string } }).data.text).toHaveLength(10_000);
+  });
+
+  it('records safe success and error telemetry for new lookups', async () => {
+    const { telemetry, capture } = telemetrySpy();
+    const getDraft = vi
+      .fn()
+      .mockResolvedValueOnce(draftMessage)
+      .mockRejectedValueOnce(new EmailError('not_found', 'private draft ID'));
+    const previewSend = vi.fn().mockResolvedValue({
+      accountId: 'acct_1',
+      from: 'me@example.com',
+      to: [{ email: 'private@example.com' }],
+      cc: [],
+      bcc: [],
+      subject: 'private subject',
+      attachments: [],
+      bodyTextChars: 3,
+      bodyHtmlChars: 0,
+    });
+    const getDelivery = vi.fn().mockReturnValue({
+      operationId: 'private-operation',
+      accountId: 'acct_1',
+      kind: 'send',
+      status: 'uncertain',
+      error: { code: 'provider_unavailable' },
+    });
+    const getMessage = vi
+      .fn()
+      .mockResolvedValueOnce(draftMessage)
+      .mockRejectedValueOnce(new EmailError('not_found', 'private body'));
+    const client = await connectMcp(
+      { enforceQuota: () => undefined, getDraft, previewSend, getDelivery, getMessage } as Partial<EmailService>,
+      { telemetry },
+    );
+    await client.callTool({ name: 'get_draft', arguments: { draftId: 'private-draft' } });
+    await client.callTool({ name: 'get_draft', arguments: { draftId: 'private-draft' } });
+    await client.callTool({ name: 'preview_send', arguments: { to: ['private@example.com'], bodyText: 'Hi!' } });
+    await client.callTool({ name: 'get_email_body', arguments: { messageId: 'private-message', format: 'text' } });
+    await client.callTool({ name: 'get_email_body', arguments: { messageId: 'private-message', format: 'text' } });
+    await client.callTool({
+      name: 'get_delivery_operation',
+      arguments: { accountId: 'acct_1', operationId: 'private-operation' },
+    });
+    previewSend.mockRejectedValueOnce(new EmailError('not_found', 'private preview'));
+    getDelivery.mockImplementationOnce(() => {
+      throw new EmailError('not_found', 'private operation');
+    });
+    await client.callTool({ name: 'preview_send', arguments: { to: ['private@example.com'], bodyText: 'Hi!' } });
+    await client.callTool({
+      name: 'get_delivery_operation',
+      arguments: { accountId: 'acct_1', operationId: 'private-operation' },
+    });
+    for (const operation of ['get_draft', 'preview_send', 'get_delivery_operation', 'get_email_body']) {
+      expect(capture).toHaveBeenCalledWith(
+        'operation completed',
+        expect.objectContaining({ product_surface: 'mcp', operation, outcome: 'success' }),
+      );
+    }
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({
+        product_surface: 'mcp',
+        operation: 'get_draft',
+        outcome: 'error',
+        error_code: 'not_found',
+      }),
+    );
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({
+        product_surface: 'mcp',
+        operation: 'get_email_body',
+        outcome: 'error',
+        error_code: 'not_found',
+      }),
+    );
+    for (const operation of ['preview_send', 'get_delivery_operation']) {
+      expect(capture).toHaveBeenCalledWith(
+        'operation completed',
+        expect.objectContaining({ product_surface: 'mcp', operation, outcome: 'error', error_code: 'not_found' }),
+      );
+    }
+    const captured = JSON.stringify(capture.mock.calls);
+    for (const privateValue of [
+      'private-draft',
+      'private-operation',
+      'private@example.com',
+      'private subject',
+      'private-message',
+      'private body',
+      'private preview',
+    ])
+      expect(captured).not.toContain(privateValue);
   });
 });
 
@@ -429,10 +637,38 @@ describe('scheduled send tools', () => {
     expect(names).toContain('cancel_scheduled_email');
   });
 
-  it('routes send_email with sendAt to scheduleSend', async () => {
-    const scheduleSend = vi.fn().mockResolvedValue({ scheduleId: 'sch_1', status: 'pending' });
-    const send = vi.fn();
-    const client = await connect({ scheduleSend, send } as Partial<EmailService>);
+  it('marks an uncertain send as an error with an operation ID', async () => {
+    const { telemetry, capture } = telemetrySpy();
+    const deliver = vi.fn().mockResolvedValue({
+      operationId: 'dop_uncertain',
+      accountId: 'acct_1',
+      kind: 'send',
+      status: 'uncertain',
+      error: { code: 'provider_unavailable' },
+    });
+    const client = await connectMcp({ enforceQuota: () => undefined, deliver } as Partial<EmailService>, { telemetry });
+    const result = await client.callTool({
+      name: 'send_email',
+      arguments: { to: ['recipient@example.com'], bodyText: 'Hi', idempotencyKey: 'uncertain-key' },
+    });
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({ data: { operationId: 'dop_uncertain', status: 'uncertain' } });
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({ operation: 'send_email', outcome: 'error', error_code: 'account_failure' }),
+    );
+  });
+
+  it('routes send_email with sendAt to scheduleDelivery', async () => {
+    const scheduleDelivery = vi.fn().mockResolvedValue({
+      operationId: 'dop_1',
+      accountId: 'acct_1',
+      kind: 'scheduled',
+      status: 'queued',
+      scheduleId: 'sch_1',
+    });
+    const deliver = vi.fn();
+    const client = await connect({ scheduleDelivery, deliver } as Partial<EmailService>);
 
     const result = await client.callTool({
       name: 'send_email',
@@ -441,70 +677,93 @@ describe('scheduled send tools', () => {
         subject: 'Later',
         bodyText: 'hi',
         sendAt: '2026-07-11T09:00:00-07:00',
+        idempotencyKey: 'schedule-1',
       },
     });
 
     expect(result.isError).toBeFalsy();
-    expect(send).not.toHaveBeenCalled();
-    expect(scheduleSend).toHaveBeenCalledWith(
+    expect(deliver).not.toHaveBeenCalled();
+    expect(scheduleDelivery).toHaveBeenCalledWith(
       undefined,
       expect.objectContaining({ subject: 'Later' }),
       '2026-07-11T09:00:00-07:00',
+      'schedule-1',
     );
     // sendAt must not leak into the composed message content.
-    expect(scheduleSend.mock.calls[0]![1]).not.toHaveProperty('sendAt');
+    expect(scheduleDelivery.mock.calls[0]![1]).not.toHaveProperty('sendAt');
   });
 
-  it('routes send_email without sendAt to send', async () => {
-    const scheduleSend = vi.fn();
-    const send = vi.fn().mockResolvedValue({ id: 'm1', threadId: 't1' });
-    const client = await connect({ scheduleSend, send } as Partial<EmailService>);
+  it('routes send_email without sendAt to deliver', async () => {
+    const scheduleDelivery = vi.fn();
+    const deliver = vi.fn().mockResolvedValue({
+      operationId: 'dop_1',
+      accountId: 'acct_1',
+      kind: 'send',
+      status: 'succeeded',
+      result: { id: 'm1', threadId: 't1' },
+    });
+    const client = await connect({ scheduleDelivery, deliver } as Partial<EmailService>);
 
     const result = await client.callTool({
       name: 'send_email',
-      arguments: { draftId: 'draft_1' },
+      arguments: { draftId: 'draft_1', idempotencyKey: 'send-1' },
     });
 
     expect(result.isError).toBeFalsy();
-    expect(scheduleSend).not.toHaveBeenCalled();
-    expect(send).toHaveBeenCalledWith(undefined, { draftId: 'draft_1' });
+    expect(scheduleDelivery).not.toHaveBeenCalled();
+    expect(deliver).toHaveBeenCalledWith(undefined, { draftId: 'draft_1' }, 'send-1');
   });
 
   it('rejects a sendAt without a timezone before reaching the service', async () => {
-    const scheduleSend = vi.fn();
-    const client = await connect({ scheduleSend } as Partial<EmailService>);
+    const scheduleDelivery = vi.fn();
+    const client = await connect({ scheduleDelivery } as Partial<EmailService>);
 
     const result = await client.callTool({
       name: 'send_email',
-      arguments: { draftId: 'draft_1', sendAt: '2026-07-11T09:00:00' },
+      arguments: { draftId: 'draft_1', sendAt: '2026-07-11T09:00:00', idempotencyKey: 'schedule-1' },
     });
 
     expect(result.isError).toBe(true);
-    expect(scheduleSend).not.toHaveBeenCalled();
+    expect(scheduleDelivery).not.toHaveBeenCalled();
   });
 
   it('uses mail.send for immediate and scheduled delivery', async () => {
-    const send = vi.fn().mockResolvedValue({ id: 'm1', threadId: 't1' });
-    const scheduleSend = vi.fn().mockResolvedValue({ scheduleId: 'sch_1', status: 'pending' });
-    const client = await connectMcp({ enforceQuota: () => undefined, send, scheduleSend } as Partial<EmailService>, {
-      permissions: customPermissionPolicy(['mail.send']),
+    const deliver = vi.fn().mockResolvedValue({
+      operationId: 'dop_1',
+      accountId: 'acct_1',
+      kind: 'send',
+      status: 'succeeded',
+      result: { id: 'm1', threadId: 't1' },
     });
+    const scheduleDelivery = vi.fn().mockResolvedValue({
+      operationId: 'dop_2',
+      accountId: 'acct_1',
+      kind: 'scheduled',
+      status: 'queued',
+      scheduleId: 'sch_1',
+    });
+    const client = await connectMcp(
+      { enforceQuota: () => undefined, deliver, scheduleDelivery } as Partial<EmailService>,
+      {
+        permissions: customPermissionPolicy(['mail.send']),
+      },
+    );
 
     const direct = await client.callTool({
       name: 'send_email',
-      arguments: { to: ['bob@example.com'], subject: 'Hello', bodyText: 'Hi' },
+      arguments: { to: ['bob@example.com'], subject: 'Hello', bodyText: 'Hi', idempotencyKey: 'send-1' },
     });
     expect(direct.isError).toBeFalsy();
 
     const reply = await client.callTool({
       name: 'send_email',
-      arguments: { replyToMessageId: 'm1', bodyText: 'Hi' },
+      arguments: { replyToMessageId: 'm1', bodyText: 'Hi', idempotencyKey: 'send-2' },
     });
     expect(reply.isError).toBe(true);
 
     const draft = await client.callTool({
       name: 'send_email',
-      arguments: { draftId: 'draft_1' },
+      arguments: { draftId: 'draft_1', idempotencyKey: 'send-3' },
     });
     expect(draft.isError).toBeFalsy();
 
@@ -515,25 +774,32 @@ describe('scheduled send tools', () => {
         subject: 'Later',
         bodyText: 'Hi',
         sendAt: '2026-07-11T09:00:00-07:00',
+        idempotencyKey: 'schedule-1',
       },
     });
     expect(scheduled.isError).toBeFalsy();
-    expect(send).toHaveBeenCalledTimes(2);
-    expect(scheduleSend).toHaveBeenCalledOnce();
+    expect(deliver).toHaveBeenCalledTimes(2);
+    expect(scheduleDelivery).toHaveBeenCalledOnce();
   });
 
   it('uses mail.send plus read access for replies', async () => {
-    const send = vi.fn().mockResolvedValue({ id: 'm2', threadId: 't1' });
-    const client = await connectMcp({ enforceQuota: () => undefined, send } as Partial<EmailService>, {
+    const deliver = vi.fn().mockResolvedValue({
+      operationId: 'dop_1',
+      accountId: 'acct_1',
+      kind: 'send',
+      status: 'succeeded',
+      result: { id: 'm2', threadId: 't1' },
+    });
+    const client = await connectMcp({ enforceQuota: () => undefined, deliver } as Partial<EmailService>, {
       permissions: customPermissionPolicy(['mail.send', 'mail.read']),
     });
 
     const reply = await client.callTool({
       name: 'send_email',
-      arguments: { replyToMessageId: 'm1', bodyText: 'Hi' },
+      arguments: { replyToMessageId: 'm1', bodyText: 'Hi', idempotencyKey: 'reply-1' },
     });
     expect(reply.isError).toBeFalsy();
-    expect(send).toHaveBeenCalledOnce();
+    expect(deliver).toHaveBeenCalledOnce();
   });
 });
 
@@ -553,8 +819,8 @@ describe('reply permissions', () => {
   });
 
   it('uses the normal create and update capabilities for reply drafts', async () => {
-    const createDraft = vi.fn().mockResolvedValue({ id: 'd1' });
-    const updateDraft = vi.fn().mockResolvedValue({ id: 'd1' });
+    const createDraft = vi.fn().mockResolvedValue(draftMessage);
+    const updateDraft = vi.fn().mockResolvedValue(draftMessage);
     const client = await connectMcp(
       { enforceQuota: () => undefined, createDraft, updateDraft } as Partial<EmailService>,
       { permissions: customPermissionPolicy(['mail.drafts', 'mail.read']) },
@@ -639,7 +905,13 @@ describe('tool telemetry', () => {
     const { telemetry, capture, beginActivity, finishActivity } = telemetrySpy();
     const service = {
       enforceQuota: () => undefined,
-      scheduleSend: vi.fn().mockResolvedValue({ scheduleId: 'sch_1', status: 'pending' }),
+      scheduleDelivery: vi.fn().mockResolvedValue({
+        operationId: 'dop_1',
+        accountId: 'acct_1',
+        kind: 'scheduled',
+        status: 'queued',
+        scheduleId: 'sch_1',
+      }),
     } as Partial<EmailService>;
     const client = await connectMcp(service, { telemetry, transport: 'http' });
 
@@ -650,6 +922,7 @@ describe('tool telemetry', () => {
         subject: 'private subject',
         bodyText: 'private body',
         sendAt: '2026-07-11T09:00:00-07:00',
+        idempotencyKey: 'schedule-private',
       },
     });
 
@@ -707,7 +980,7 @@ describe('tool telemetry', () => {
 describe('plan quota gate', () => {
   it('blocks tool calls while over quota but keeps get_status available', async () => {
     const listAccounts = vi.fn().mockReturnValue([]);
-    const status = vi.fn().mockResolvedValue({ accounts: [] });
+    const status = vi.fn().mockResolvedValue({ accounts: [], providersAvailable: [] });
     const enforceQuota = vi.fn(() => {
       throw new EmailError('entitlement_exceeded', 'Renew the license or remove mailboxes/members');
     });

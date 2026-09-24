@@ -224,8 +224,8 @@ describe('CLI mail process integration', { timeout: 15_000 }, () => {
   it('uses an explicit account ID with an API key that cannot read mail', async () => {
     const selection = { instance: 'e2e-compose', account: account.id };
     const listed = await runCli(dataDir, ['emails', 'list'], undefined, selection);
-    expect(listed.status).toBe(1);
-    expect(listed.stderr).toContain('Error [permission_denied]');
+    expect(listed.status).toBe(4);
+    expect(listed.stderr).toContain('"code":"permission_denied"');
 
     const drafted = await runCli(
       dataDir,
@@ -237,7 +237,16 @@ describe('CLI mail process integration', { timeout: 15_000 }, () => {
 
     const sent = await runCli(
       dataDir,
-      ['emails', 'send', '--to', 'recipient@example.com', '--body', 'restricted send'],
+      [
+        'emails',
+        'send',
+        '--to',
+        'recipient@example.com',
+        '--body',
+        'restricted send',
+        '--idempotency-key',
+        'restricted-send',
+      ],
       undefined,
       selection,
     );
@@ -276,6 +285,8 @@ describe('CLI mail process integration', { timeout: 15_000 }, () => {
       'scheduled body',
       '--send-at',
       sendAt,
+      '--idempotency-key',
+      'schedule-e2e',
     ]);
     expect(scheduled.status, scheduled.stderr).toBe(0);
     const scheduleId = (JSON.parse(scheduled.stdout) as { data: { scheduleId: string } }).data.scheduleId;
@@ -330,8 +341,7 @@ describe('CLI mail process integration', { timeout: 15_000 }, () => {
       encryptionKey: '55'.repeat(32),
     });
 
-    expect(labels.status).toBe(1);
-    expect(labels.stderr).toContain('Error [unsupported_capability]');
-    expect(labels.stderr).toContain('IMAP accounts do not support labels');
+    expect(labels.status).toBe(2);
+    expect(labels.stderr).toContain('"code":"unsupported_capability"');
   });
 });

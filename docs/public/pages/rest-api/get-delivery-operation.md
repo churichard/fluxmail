@@ -1,14 +1,14 @@
 ---
-title: 'Forward a message'
-description: 'Forward a message to one or more recipients.'
+title: 'Get a delivery outcome'
+description: 'Reference for GET /api/v1/accounts/{accountId}/delivery-operations/{operationId}.'
 updated: '2026-07-15'
 ---
 
 <!-- This page is generated from the OpenAPI schema. Run pnpm docs:generate to update it. -->
 
-`POST /api/v1/accounts/{accountId}/messages/{messageId}/forward`
+`GET /api/v1/accounts/{accountId}/delivery-operations/{operationId}`
 
-Forward a message to one or more recipients.
+Reference for GET /api/v1/accounts/{accountId}/delivery-operations/{operationId}.
 
 ## Authentication
 
@@ -17,18 +17,8 @@ Pass a Fluxmail member session or API key as a bearer token. API keys apply thei
 ## Request
 
 ```bash
-curl 'http://localhost:8977/api/v1/accounts/acct_123/messages/msg_123/forward' \
-  -X POST \
-  -H "Authorization: Bearer $FLUXMAIL_API_KEY" \
-  -H "Idempotency-Key: $(uuidgen)" \
-  -H "Content-Type: application/json" \
-  --data '{
-  "to": [
-    {
-      "email": "person@example.com"
-    }
-  ]
-}'
+curl 'http://localhost:8977/api/v1/accounts/acct_123/delivery-operations/operationId_123' \
+  -H "Authorization: Bearer $FLUXMAIL_API_KEY"
 ```
 
 ### Parameters
@@ -36,98 +26,13 @@ curl 'http://localhost:8977/api/v1/accounts/acct_123/messages/msg_123/forward' \
 | Name | Location | Required | Type | Details |
 | --- | --- | --- | --- | --- |
 | `accountId` | path | Yes | `string` | Minimum length: 1. |
-| `messageId` | path | Yes | `string` | Minimum length: 1. |
-| `Idempotency-Key` | header | Yes | `string` | A unique key for one intended delivery. Reuse it when retrying the same request. Minimum length: 1. Maximum length: 255. Pattern: `^[\x21-\x7e]+$`. |
-
-### Request body
-
-Content type: `application/json`
-
-<details>
-<summary>JSON schema</summary>
-
-```json
-{
-  "type": "object",
-  "properties": {
-    "from": {
-      "type": "string",
-      "format": "email"
-    },
-    "to": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "email": {
-            "type": "string",
-            "format": "email"
-          },
-          "name": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "required": [
-          "email"
-        ],
-        "additionalProperties": false
-      },
-      "minItems": 1
-    },
-    "cc": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "email": {
-            "type": "string",
-            "format": "email"
-          },
-          "name": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "required": [
-          "email"
-        ],
-        "additionalProperties": false
-      }
-    },
-    "comment": {
-      "type": "string"
-    },
-    "includeAttachments": {
-      "type": "boolean",
-      "default": true,
-      "description": "Include attachments from the original message. Defaults to true."
-    }
-  },
-  "required": [
-    "to"
-  ],
-  "additionalProperties": false
-}
-```
-
-</details>
-
-## Safe retries
-
-Fluxmail keeps each idempotency result for 24 hours and scopes it to the authenticated credential.
-
-- Repeating a completed request with the same key returns the stored response and sets `Idempotency-Replayed: true`.
-- Reusing the key with different request data returns `409 idempotency_conflict`.
-- A request that is still running, or whose outcome became uncertain during a restart, returns `409 idempotency_in_progress` with `Retry-After: 1`.
-
-Reuse the original key when retrying the same request. If the outcome is uncertain, do not create a new key. Check the Sent folder before deciding whether to start a new delivery.
+| `operationId` | path | Yes | `string` | Minimum length: 1. |
 
 ## Responses
 
 | Status | Description | Content type |
 | --- | --- | --- |
-| `200` | Forward delivery operation | `application/json` |
+| `200` | Delivery outcome | `application/json` |
 | `400` | Invalid request | `application/json` |
 | `401` | Authentication required | `application/json` |
 | `403` | Permission or plan denied | `application/json` |

@@ -68,6 +68,7 @@ import {
 } from './telemetry.js';
 import {
   apiErrorCode,
+  apiRequestId,
   clearSessionToken,
   instanceClient,
   loadInstanceConfig,
@@ -76,8 +77,10 @@ import {
   saveLocalInstance,
   saveRemoteInstance,
   saveSessionToken,
+  setRequestDeadlineMs,
   useInstance,
 } from './cliInstances.js';
+import { cliExitCode, parseOutputFormat, printOutput } from './cliOutput.js';
 import {
   authenticateBearer,
   isBootstrapComplete,
@@ -423,9 +426,23 @@ function finishCliOperation(program: Command, outcome: 'success' | 'error', erro
 
 /** End a failed command with the error's own telemetry code instead of a generic one. */
 function failCliOperation(program: Command, error: unknown, prefix = 'Error: '): void {
-  finishCliOperation(program, 'error', apiErrorCode(error), error);
-  console.error(`${prefix}${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
+  const code = apiErrorCode(error);
+  finishCliOperation(program, 'error', code, error);
+  let format: 'json' | 'table' | 'ndjson' = 'json';
+  try {
+    format = parseOutputFormat(program.opts<{ format?: string }>().format ?? 'json');
+  } catch {
+    // Report an invalid --format value in the default structured format.
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(
+    format === 'table'
+      ? `${prefix}${message}`
+      : JSON.stringify({
+          error: { code, message, ...(apiRequestId(error) ? { requestId: apiRequestId(error) } : {}) },
+        }),
+  );
+  process.exitCode = cliExitCode(code);
 }
 
 export function waitForServerListening(server: ReturnType<typeof serve>): Promise<void> {
@@ -477,11 +494,15 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
     .description('Fluxmail, a self-hosted email API with MCP, REST, and CLI access')
     .option('--instance <name>', 'Use a named local or remote instance')
     .option('-a, --mail-account <id-or-email>', 'Use an email account by ID or address')
+    .option('--format <format>', 'Output format: json, table, or ndjson', 'json')
+    .option('--timeout <seconds>', 'Request deadline in seconds (1 to 300)', '30')
     .option('--no-update-notifier', 'Skip the automatic update check for this command')
     .version(VERSION, '-v, --version');
 
   const selectedInstance = (): string | undefined => program.opts<{ instance?: string }>().instance;
   const selectedAccount = (): string | undefined => program.opts<{ mailAccount?: string }>().mailAccount;
+  const selectedFormat = () => parseOutputFormat(program.opts<{ format: string }>().format);
+  const capturedOutput = new Map<Command, { original: typeof console.log; lines: string[] }>();
 
   function commandPath(command: Command): string {
     const names: string[] = [];
@@ -524,6 +545,8 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
   }
 
   program.hook('preAction', (_command, actionCommand) => {
+    selectedFormat();
+    setRequestDeadlineMs(Number(program.opts<{ timeout: string }>().timeout) * 1000);
     const command = commandPath(actionCommand);
     const updateNotifierEnabled = program.opts<{ updateNotifier: boolean }>().updateNotifier;
     if (updateNotifierEnabled && actionCommand.name() !== 'stdio') {
@@ -572,9 +595,46 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
       initialExitCode: process.exitCode,
       logger: getLogger(dataDir, mode, logging),
     });
+    const [group, action] = command.split(' ');
+    const alreadyStructured =
+      ['folders', 'labels', 'emails', 'threads', 'drafts', 'scheduled', 'attachments'].includes(group ?? '') ||
+      command === 'accounts list' ||
+      command === 'status';
+    const interactive =
+      ['setup', 'login', 'serve', 'stdio'].includes(command) ||
+      group === 'auth' ||
+      command === 'accounts add' ||
+      command === 'accounts configure' ||
+      command === 'license activate' ||
+      (group === 'oauth' && action !== 'status') ||
+      group === 'logs';
+    if (selectedFormat() !== 'table' && !alreadyStructured && !interactive) {
+      const original = console.log;
+      const lines: string[] = [];
+      capturedOutput.set(program, { original, lines });
+      console.log = (...values: unknown[]) => {
+        lines.push(values.map((value) => (typeof value === 'string' ? value : JSON.stringify(value))).join(' '));
+      };
+    }
   });
 
   program.hook('postAction', async (_command, actionCommand) => {
+    const captured = capturedOutput.get(program);
+    if (captured) {
+      capturedOutput.delete(program);
+      console.log = captured.original;
+      if (captured.lines.length) {
+        let data: unknown = captured.lines.length === 1 ? captured.lines[0] : captured.lines;
+        if (captured.lines.length === 1) {
+          try {
+            data = JSON.parse(captured.lines[0]!);
+          } catch {
+            /* Plain output stays a string. */
+          }
+        }
+        printOutput({ data }, selectedFormat());
+      }
+    }
     const active = activeCliOperations.get(program);
     const failed =
       active !== undefined &&
@@ -1394,18 +1454,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
             grantedMemberIds: string[];
           }>
         >('/api/v1/accounts');
-        if (!all.length) {
-          console.log('No accounts connected. Run "fluxmail accounts add <provider>".');
-          return;
-        }
-        for (const a of all) {
-          const access = a.sharedWithAll
-            ? 'all'
-            : a.grantedMemberIds.length
-              ? `selected:${a.grantedMemberIds.join(',')}`
-              : 'owner-only';
-          console.log(`${a.id}  ${a.provider}  ${a.email}  [${a.status}]  owner=${a.ownerMemberId}  access=${access}`);
-        }
+        printOutput({ data: all }, selectedFormat());
       } catch (err) {
         failCliOperation(program, err);
       }
@@ -2168,14 +2217,22 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
   registerMailCommands(program, {
     selectedInstance,
     selectedAccount,
+    selectedFormat,
     reportError: (error, code) => {
       finishCliOperation(program, 'error', code, error);
-      console.error(`Error [${code}]: ${error instanceof Error ? error.message : String(error)}`);
-      process.exitCode = 1;
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(
+        selectedFormat() === 'table'
+          ? `Error [${code}]: ${message}`
+          : JSON.stringify({
+              error: { code, message, ...(apiRequestId(error) ? { requestId: apiRequestId(error) } : {}) },
+            }),
+      );
+      process.exitCode = cliExitCode(code);
     },
     reportPartialFailure: (code) => {
       finishCliOperation(program, 'error', code);
-      process.exitCode = 1;
+      process.exitCode = cliExitCode(code);
     },
   });
 
@@ -2185,7 +2242,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
     .action(async () => {
       try {
         const status = await instanceClient(selectedInstance()).json('/api/v1/status');
-        console.log(JSON.stringify(status, null, 2));
+        printOutput({ data: status }, selectedFormat());
       } catch (err) {
         failCliOperation(program, err);
       }

@@ -115,6 +115,123 @@ describe('EmailService.forward', () => {
   });
 });
 
+describe('EmailService bulk and content limits', () => {
+  function serviceWith(provider: Record<string, unknown>, attachmentLimit = 1024) {
+    const registry = {
+      resolveAccountId: () => 'acct_1',
+      getAccount: () => ({
+        id: 'acct_1',
+        provider: 'gmail',
+        email: 'me@example.com',
+        status: 'active',
+        capabilities: {},
+      }),
+      getProvider: () => provider,
+      markStatus: vi.fn(),
+    };
+    return new EmailService(registry as never, testDb(), undefined, undefined, attachmentLimit);
+  }
+
+  it('deduplicates IDs, continues after failures, and reports ambiguous changes', async () => {
+    let active = 0;
+    let peak = 0;
+    const modify = vi.fn(async (ids: string[]) => {
+      active++;
+      peak = Math.max(peak, active);
+      await Promise.resolve();
+      active--;
+      if (ids[0] === 'm2') throw new EmailError('not_found', 'missing');
+      if (ids[0] === 'm3') throw new EmailError('provider_unavailable', 'ambiguous');
+    });
+    const service = serviceWith({ modify });
+    const result = await service.modify('acct_1', ['m1', 'm2', 'm1', 'm3', 'm4', 'm5'], 'markRead');
+    expect(result).toEqual({
+      action: 'markRead',
+      succeededIds: ['m1', 'm4', 'm5'],
+      failed: [{ messageId: 'm2', code: 'not_found' }],
+      uncertainIds: ['m3'],
+    });
+    expect(modify).toHaveBeenCalledTimes(5);
+    expect(peak).toBeLessThanOrEqual(4);
+    await expect(
+      service.modify(
+        'acct_1',
+        Array.from({ length: 101 }, (_, index) => `m${index}`),
+        'markRead',
+      ),
+    ).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(modify).toHaveBeenCalledTimes(5);
+  });
+
+  it('previews reply-all recipients and subject without sending', async () => {
+    const send = vi.fn();
+    const getMessage = vi.fn().mockResolvedValue(original);
+    const service = serviceWith({ send, getMessage });
+    const preview = await service.previewSend('acct_1', {
+      replyToMessageId: 'm1',
+      replyAll: true,
+      body: { text: 'Thanks' },
+    });
+    expect(preview).toMatchObject({
+      from: 'me@example.com',
+      to: [{ email: 'ann@example.com' }],
+      cc: [{ email: 'carol@example.com' }],
+      subject: 'Re: Report',
+    });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('rejects oversized bodies and combined attachments before provider work', async () => {
+    const send = vi.fn();
+    const service = serviceWith({ send }, 4);
+    await expect(
+      service.send('acct_1', { body: { text: 'x'.repeat(1024 * 1024 + 1) }, to: [{ email: 'recipient@example.com' }] }),
+    ).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(
+      service.send('acct_1', {
+        body: { text: 'hi' },
+        attachments: [
+          { filename: 'a', mimeType: 'text/plain', content: Buffer.from('abc').toString('base64') },
+          { filename: 'b', mimeType: 'text/plain', content: Buffer.from('def').toString('base64') },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(
+      service.send('acct_1', {
+        body: { text: 'hi' },
+        attachments: Array.from({ length: 21 }, (_, index) => ({
+          filename: `a${index}`,
+          mimeType: 'text/plain',
+          content: '',
+        })),
+      }),
+    ).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(send).not.toHaveBeenCalled();
+
+    const getAttachment = vi.fn();
+    const forwardService = serviceWith(
+      {
+        getMessage: vi.fn().mockResolvedValue({
+          ...original,
+          attachments: Array.from({ length: 21 }, (_, index) => ({
+            id: `a${index}`,
+            filename: 'a',
+            mimeType: 'text/plain',
+            sizeBytes: 1,
+          })),
+        }),
+        getAttachment,
+        send,
+      },
+      1024,
+    );
+    await expect(
+      forwardService.forward('acct_1', { messageId: 'm1', to: [{ email: 'recipient@example.com' }] }),
+    ).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(getAttachment).not.toHaveBeenCalled();
+  });
+});
+
 describe('EmailService send-as selection', () => {
   const identities = [
     { email: 'me@example.com', name: 'Primary', isPrimary: true, source: 'provider' as const },

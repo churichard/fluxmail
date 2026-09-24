@@ -32,7 +32,11 @@ export function toEmailError(err: unknown): EmailError {
     return new EmailError('auth_expired', `Microsoft authorization expired or was revoked: ${message}`);
   }
   if (graph.status === 429 || graph.code === 'ErrorQuotaExceeded') {
-    return new EmailError('rate_limited', `Microsoft Graph rate limit hit: ${message}`);
+    return new EmailError(
+      'rate_limited',
+      `Microsoft Graph rate limit hit: ${message}`,
+      graph.retryAfterMs !== undefined ? { retryAfterMs: graph.retryAfterMs } : undefined,
+    );
   }
   if (graph.status === 403 || graph.code === 'ErrorAccessDenied') {
     return new EmailError('permission_denied', `Microsoft Graph denied this operation: ${message}`);

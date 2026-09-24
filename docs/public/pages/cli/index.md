@@ -99,11 +99,14 @@ docker compose exec fluxmail fluxmail accounts list
 | [`fluxmail emails search-batch`](/docs/cli/emails-search-batch) | Search multiple email accounts |
 | [`fluxmail emails get`](/docs/cli/emails-get) | Get a complete message |
 | [`fluxmail emails send`](/docs/cli/emails-send) | Send or schedule a message |
+| [`fluxmail emails preview`](/docs/cli/emails-preview) | Preview sender, recipients, and attachments |
 | [`fluxmail emails forward`](/docs/cli/emails-forward) | Forward a message |
+| [`fluxmail emails delivery-status`](/docs/cli/emails-delivery-status) | Check a send or forward outcome |
 | [`fluxmail emails modify`](/docs/cli/emails-modify) | Apply one action to one or more messages |
 | [`fluxmail threads`](/docs/cli/threads) | Read email threads |
 | [`fluxmail threads get`](/docs/cli/threads-get) | Get a complete thread |
 | [`fluxmail drafts`](/docs/cli/drafts) | Create and manage drafts |
+| [`fluxmail drafts get`](/docs/cli/drafts-get) | Read a draft |
 | [`fluxmail drafts create`](/docs/cli/drafts-create) | Create a draft |
 | [`fluxmail drafts update`](/docs/cli/drafts-update) | Replace the content of a draft |
 | [`fluxmail drafts delete`](/docs/cli/drafts-delete) | Delete a draft |

@@ -377,6 +377,13 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
         401,
       );
     }
+    const bodyLimit = Math.ceil((config.maxAttachmentBytes * 4) / 3) + 2 * 1024 * 1024;
+    if (await requestBodyExceedsLimit(c.req.raw, bodyLimit)) {
+      return c.json(
+        { jsonrpc: '2.0', error: { code: -32600, message: 'Request body exceeds the size limit.' }, id: null },
+        413,
+      );
+    }
     let body: unknown;
     try {
       body = await c.req.json();

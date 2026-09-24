@@ -1,14 +1,14 @@
 ---
-title: 'Send or schedule a message'
-description: 'Send a message now or schedule it for a specified time.'
+title: 'Preview a send'
+description: 'Reference for POST /api/v1/accounts/{accountId}/send/preview.'
 updated: '2026-07-15'
 ---
 
 <!-- This page is generated from the OpenAPI schema. Run pnpm docs:generate to update it. -->
 
-`POST /api/v1/accounts/{accountId}/send`
+`POST /api/v1/accounts/{accountId}/send/preview`
 
-Send a message now or schedule it for a specified time.
+Reference for POST /api/v1/accounts/{accountId}/send/preview.
 
 ## Authentication
 
@@ -17,10 +17,9 @@ Pass a Fluxmail member session or API key as a bearer token. API keys apply thei
 ## Request
 
 ```bash
-curl 'http://localhost:8977/api/v1/accounts/acct_123/send' \
+curl 'http://localhost:8977/api/v1/accounts/acct_123/send/preview' \
   -X POST \
   -H "Authorization: Bearer $FLUXMAIL_API_KEY" \
-  -H "Idempotency-Key: $(uuidgen)" \
   -H "Content-Type: application/json" \
   --data '{
   "draftId": "draft_123"
@@ -32,7 +31,6 @@ curl 'http://localhost:8977/api/v1/accounts/acct_123/send' \
 | Name | Location | Required | Type | Details |
 | --- | --- | --- | --- | --- |
 | `accountId` | path | Yes | `string` | Minimum length: 1. |
-| `Idempotency-Key` | header | Yes | `string` | A unique key for one intended delivery. Reuse it when retrying the same request. Minimum length: 1. Maximum length: 255. Pattern: `^[\x21-\x7e]+$`. |
 
 ### Request body
 
@@ -208,22 +206,11 @@ Content type: `application/json`
 
 </details>
 
-## Safe retries
-
-Fluxmail keeps each idempotency result for 24 hours and scopes it to the authenticated credential.
-
-- Repeating a completed request with the same key returns the stored response and sets `Idempotency-Replayed: true`.
-- Reusing the key with different request data returns `409 idempotency_conflict`.
-- A request that is still running, or whose outcome became uncertain during a restart, returns `409 idempotency_in_progress` with `Retry-After: 1`.
-
-Reuse the original key when retrying the same request. If the outcome is uncertain, do not create a new key. Check the Sent folder before deciding whether to start a new delivery.
-
 ## Responses
 
 | Status | Description | Content type |
 | --- | --- | --- |
-| `200` | Delivery operation | `application/json` |
-| `202` | Message scheduled | `application/json` |
+| `200` | Resolved send details | `application/json` |
 | `400` | Invalid request | `application/json` |
 | `401` | Authentication required | `application/json` |
 | `403` | Permission or plan denied | `application/json` |
@@ -246,171 +233,115 @@ Reuse the original key when retrying the same request. If the outcome is uncerta
     "data": {
       "type": "object",
       "properties": {
-        "operationId": {
-          "type": "string"
-        },
         "accountId": {
           "type": "string"
         },
-        "kind": {
-          "type": "string",
-          "enum": [
-            "send",
-            "forward",
-            "scheduled"
-          ]
-        },
-        "status": {
-          "type": "string",
-          "enum": [
-            "queued",
-            "sending",
-            "succeeded",
-            "failed",
-            "uncertain"
-          ]
-        },
-        "result": {
-          "type": "object",
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "threadId": {
-              "type": "string"
-            },
-            "warnings": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          },
-          "required": [
-            "id",
-            "threadId"
-          ],
-          "additionalProperties": false
-        },
-        "error": {
-          "type": "object",
-          "properties": {
-            "code": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "code"
-          ],
-          "additionalProperties": false
-        },
-        "scheduleId": {
+        "from": {
           "type": "string"
+        },
+        "to": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string",
+                "format": "email"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "email"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "cc": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string",
+                "format": "email"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "email"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "bcc": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string",
+                "format": "email"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "email"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "subject": {
+          "type": "string"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "filename": {
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              },
+              "sizeBytes": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "filename",
+              "mimeType",
+              "sizeBytes"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "bodyTextChars": {
+          "type": "integer"
+        },
+        "bodyHtmlChars": {
+          "type": "integer"
         }
       },
       "required": [
-        "operationId",
         "accountId",
-        "kind",
-        "status"
-      ],
-      "additionalProperties": false
-    },
-    "warnings": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    }
-  },
-  "required": [
-    "data"
-  ],
-  "additionalProperties": false
-}
-```
-
-</details>
-
-### 202 response
-
-<details>
-<summary>JSON schema</summary>
-
-```json
-{
-  "type": "object",
-  "properties": {
-    "data": {
-      "type": "object",
-      "properties": {
-        "operationId": {
-          "type": "string"
-        },
-        "accountId": {
-          "type": "string"
-        },
-        "kind": {
-          "type": "string",
-          "enum": [
-            "send",
-            "forward",
-            "scheduled"
-          ]
-        },
-        "status": {
-          "type": "string",
-          "enum": [
-            "queued",
-            "sending",
-            "succeeded",
-            "failed",
-            "uncertain"
-          ]
-        },
-        "result": {
-          "type": "object",
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "threadId": {
-              "type": "string"
-            },
-            "warnings": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          },
-          "required": [
-            "id",
-            "threadId"
-          ],
-          "additionalProperties": false
-        },
-        "error": {
-          "type": "object",
-          "properties": {
-            "code": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "code"
-          ],
-          "additionalProperties": false
-        },
-        "scheduleId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "operationId",
-        "accountId",
-        "kind",
-        "status"
+        "from",
+        "to",
+        "cc",
+        "bcc",
+        "subject",
+        "attachments",
+        "bodyTextChars",
+        "bodyHtmlChars"
       ],
       "additionalProperties": false
     },

@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { lookup as lookupMimeType } from 'mime-types';
@@ -10,6 +9,7 @@ import {
   type EmailAddress,
 } from '@fluxmail/core';
 import type { Command } from 'commander';
+import { printOutput, type OutputFormat } from './cliOutput.js';
 import {
   apiErrorCode,
   instanceClient,
@@ -21,6 +21,7 @@ import {
 interface MailCommandOptions {
   selectedInstance: () => string | undefined;
   selectedAccount: () => string | undefined;
+  selectedFormat: () => OutputFormat;
   reportError: (error: unknown, code: string) => void;
   reportPartialFailure: (code: string) => void;
 }
@@ -54,6 +55,8 @@ interface QueryOptions {
   pageToken?: string;
   includeSnippet?: boolean;
   includeSearchContext?: boolean;
+  all?: boolean;
+  maxResults?: string;
 }
 
 interface MessageContentOptions extends InputOptions {
@@ -112,10 +115,6 @@ function booleanOption(value: string): boolean {
   if (value === 'true') return true;
   if (value === 'false') return false;
   throw new EmailError('invalid_request', 'Boolean search options accept true or false.');
-}
-
-function printJson(value: unknown): void {
-  console.log(JSON.stringify(value, null, 2));
 }
 
 function readSource(source: string): string {
@@ -254,6 +253,8 @@ function addQueryOptions(command: Command, includeText: boolean): Command {
     .option('--page-token <token>', 'Continue from a previous response')
     .option('--include-snippet <boolean>', 'Request or suppress message previews', booleanOption)
     .option('--include-search-context <boolean>', 'Include a body excerpt around the search match', booleanOption);
+  command.option('--all', 'Fetch every page up to --max-results');
+  command.option('--max-results <count>', 'Maximum results with --all (default 1000, maximum 10000)');
   if (includeText) command.option('--text <query>', 'Filter by literal full-text search');
   return command;
 }
@@ -283,6 +284,59 @@ function queryString(options: QueryOptions, typedQuery?: string): string {
     query.set('includeSearchContext', String(options.includeSearchContext));
   }
   return query.size ? `?${query}` : '';
+}
+
+async function mailListing(
+  client: InstanceClient,
+  accountId: string,
+  options: QueryOptions,
+  typedQuery?: string,
+): Promise<ApiEnvelope<unknown[]>> {
+  const path = `/api/v1/accounts/${encodeURIComponent(accountId)}/messages`;
+  if (!options.all) {
+    if (options.maxResults !== undefined) throw new EmailError('invalid_request', '--max-results requires --all.');
+    return client.jsonEnvelope<unknown[]>(`${path}${queryString(options, typedQuery)}`);
+  }
+  const maximum = options.maxResults === undefined ? 1000 : Number(options.maxResults);
+  if (!Number.isInteger(maximum) || maximum < 1 || maximum > 10_000) {
+    throw new EmailError('invalid_request', '--max-results must be between 1 and 10000.');
+  }
+  const requestedPageSize = options.pageSize === undefined ? 100 : Number(options.pageSize);
+  if (!Number.isInteger(requestedPageSize) || requestedPageSize < 1 || requestedPageSize > 100) {
+    throw new EmailError('invalid_request', '--page-size must be between 1 and 100.');
+  }
+  const data: unknown[] = [];
+  const warnings: string[] = [];
+  let pageToken = options.pageToken;
+  const seenTokens = new Set<string>();
+  let meta: Record<string, unknown> = { exhausted: false };
+  for (;;) {
+    if (pageToken) {
+      if (seenTokens.has(pageToken))
+        throw new EmailError('provider_unavailable', 'The provider repeated a page token.');
+      seenTokens.add(pageToken);
+    }
+    const page = await client.jsonEnvelope<unknown[]>(
+      `${path}${queryString(
+        {
+          ...options,
+          pageSize: String(Math.min(requestedPageSize, maximum - data.length)),
+          pageToken,
+        },
+        typedQuery,
+      )}`,
+    );
+    data.push(...page.data.slice(0, maximum - data.length));
+    warnings.push(...(page.warnings ?? []));
+    meta = page.meta ?? {};
+    const next = typeof meta.nextPageToken === 'string' ? meta.nextPageToken : undefined;
+    if (!next || data.length >= maximum) {
+      if (data.length >= maximum && next) meta = { ...meta, exhausted: false, nextPageToken: next };
+      break;
+    }
+    pageToken = next;
+  }
+  return { data, meta, ...(warnings.length ? { warnings } : {}) };
 }
 
 async function resolveAccountId(client: InstanceClient, requested?: string): Promise<string> {
@@ -321,10 +375,10 @@ async function resolveAccountId(client: InstanceClient, requested?: string): Pro
 }
 
 async function responseError(response: Response): Promise<never> {
-  let error: { code?: string; message?: string; data?: Record<string, unknown> } | undefined;
+  let error: { code?: string; message?: string; data?: Record<string, unknown>; requestId?: string } | undefined;
   try {
     const body = (await response.json()) as {
-      error?: { code?: string; message?: string; data?: Record<string, unknown> };
+      error?: { code?: string; message?: string; data?: Record<string, unknown>; requestId?: string };
     };
     error = body.error;
   } catch {
@@ -335,6 +389,7 @@ async function responseError(response: Response): Promise<never> {
     error?.message ?? `Request failed with HTTP ${response.status}.`,
     response.status,
     error?.data,
+    error?.requestId,
   );
 }
 
@@ -361,7 +416,8 @@ export function registerMailCommands(program: Command, options: MailCommandOptio
     const accountId = await resolveAccountId(client, options.selectedAccount());
     return { client, accountId };
   };
-  const printEnvelope = async <T>(request: Promise<ApiEnvelope<T>>): Promise<void> => printJson(await request);
+  const printEnvelope = async <T>(request: Promise<ApiEnvelope<T>>): Promise<void> =>
+    printOutput(await request, options.selectedFormat());
 
   const folders = program.command('folders').description('Work with navigable mailbox folders');
   folders
@@ -390,9 +446,7 @@ export function registerMailCommands(program: Command, options: MailCommandOptio
   listEmails.action(async (query: QueryOptions) =>
     run(async () => {
       const { client, accountId } = await accountContext();
-      await printEnvelope(
-        client.jsonEnvelope(`/api/v1/accounts/${encodeURIComponent(accountId)}/messages${queryString(query)}`),
-      );
+      await printEnvelope(mailListing(client, accountId, query));
     })(),
   );
 
@@ -412,11 +466,7 @@ export function registerMailCommands(program: Command, options: MailCommandOptio
         console.error(`Search warning: ${warning.message}`);
       }
       const { client, accountId } = await accountContext();
-      await printEnvelope(
-        client.jsonEnvelope(
-          `/api/v1/accounts/${encodeURIComponent(accountId)}/messages${queryString(queryOptions, query)}`,
-        ),
-      );
+      await printEnvelope(mailListing(client, accountId, queryOptions, query));
     })(),
   );
 
@@ -489,9 +539,9 @@ export function registerMailCommands(program: Command, options: MailCommandOptio
           '/api/v1/messages/search',
           jsonRequest(request),
         );
-        printJson(response);
+        printOutput(response, options.selectedFormat());
         if (response.data.some((group) => group.error !== undefined)) {
-          options.reportPartialFailure('account_failure');
+          options.reportPartialFailure('partial_failure');
         }
       })(),
   );
@@ -537,12 +587,33 @@ export function registerMailCommands(program: Command, options: MailCommandOptio
           ...(sendOptions.sendAt ? { sendAt: sendOptions.sendAt } : {}),
         };
       }
+      if (!sendOptions.idempotencyKey) {
+        throw new EmailError('invalid_request', 'Pass --idempotency-key and reuse it when retrying this send.');
+      }
+      const { client, accountId } = await accountContext();
+      const response = await client.jsonEnvelope<{ status: string; error?: { code: string } }>(
+        `/api/v1/accounts/${encodeURIComponent(accountId)}/send`,
+        jsonRequest(request, { 'idempotency-key': sendOptions.idempotencyKey }),
+      );
+      printOutput(response, options.selectedFormat());
+      if (response.data.status === 'uncertain' || response.data.status === 'sending')
+        options.reportPartialFailure('uncertain');
+      else if (response.data.status === 'failed') options.reportPartialFailure(response.data.error?.code ?? 'internal');
+    })(),
+  );
+
+  const preview = addMessageContentOptions(
+    emails.command('preview').description('Preview sender, recipients, and attachments'),
+  ).option('--draft <draft-id>', 'Preview an existing draft');
+  preview.action(async (previewOptions: MessageContentOptions & { draft?: string }) =>
+    run(async () => {
+      if (previewOptions.draft && (previewOptions.input || hasMessageContentOptions(previewOptions))) {
+        throw new EmailError('invalid_request', '--draft cannot be combined with message content.');
+      }
+      const request = previewOptions.draft ? { draftId: previewOptions.draft } : messageRequest(previewOptions);
       const { client, accountId } = await accountContext();
       await printEnvelope(
-        client.jsonEnvelope(
-          `/api/v1/accounts/${encodeURIComponent(accountId)}/send`,
-          jsonRequest(request, { 'idempotency-key': sendOptions.idempotencyKey ?? randomUUID() }),
-        ),
+        client.jsonEnvelope(`/api/v1/accounts/${encodeURIComponent(accountId)}/send/preview`, jsonRequest(request)),
       );
     })(),
   );
@@ -581,15 +652,35 @@ export function registerMailCommands(program: Command, options: MailCommandOptio
           includeAttachments: forwardOptions.attachments,
         };
       }
+      if (!forwardOptions.idempotencyKey) {
+        throw new EmailError('invalid_request', 'Pass --idempotency-key and reuse it when retrying this forward.');
+      }
       const { client, accountId } = await accountContext();
-      await printEnvelope(
-        client.jsonEnvelope(
-          `/api/v1/accounts/${encodeURIComponent(accountId)}/messages/${encodeURIComponent(messageId)}/forward`,
-          jsonRequest(request, { 'idempotency-key': forwardOptions.idempotencyKey ?? randomUUID() }),
-        ),
+      const response = await client.jsonEnvelope<{ status: string; error?: { code: string } }>(
+        `/api/v1/accounts/${encodeURIComponent(accountId)}/messages/${encodeURIComponent(messageId)}/forward`,
+        jsonRequest(request, { 'idempotency-key': forwardOptions.idempotencyKey }),
       );
+      printOutput(response, options.selectedFormat());
+      if (response.data.status === 'uncertain' || response.data.status === 'sending')
+        options.reportPartialFailure('uncertain');
+      else if (response.data.status === 'failed') options.reportPartialFailure(response.data.error?.code ?? 'internal');
     })(),
   );
+
+  emails
+    .command('delivery-status')
+    .argument('<operation-id>', 'Delivery operation ID')
+    .description('Check a send or forward outcome')
+    .action(async (operationId: string) =>
+      run(async () => {
+        const { client, accountId } = await accountContext();
+        await printEnvelope(
+          client.jsonEnvelope(
+            `/api/v1/accounts/${encodeURIComponent(accountId)}/delivery-operations/${encodeURIComponent(operationId)}`,
+          ),
+        );
+      })(),
+    );
 
   const modify = emails
     .command('modify')
@@ -628,12 +719,14 @@ export function registerMailCommands(program: Command, options: MailCommandOptio
           };
         }
         const { client, accountId } = await accountContext();
-        await printEnvelope(
-          client.jsonEnvelope(
-            `/api/v1/accounts/${encodeURIComponent(accountId)}/messages/actions`,
-            jsonRequest(request),
-          ),
+        const response = await client.jsonEnvelope<{ failed: unknown[]; uncertainIds: string[] }>(
+          `/api/v1/accounts/${encodeURIComponent(accountId)}/messages/actions`,
+          jsonRequest(request),
         );
+        printOutput(response, options.selectedFormat());
+        if (response.data.failed.length || response.data.uncertainIds.length) {
+          options.reportPartialFailure('partial_failure');
+        }
       })(),
   );
 
@@ -654,6 +747,20 @@ export function registerMailCommands(program: Command, options: MailCommandOptio
     );
 
   const drafts = program.command('drafts').description('Create and manage drafts');
+  drafts
+    .command('get')
+    .argument('<draft-id>', 'Provider draft ID')
+    .description('Read a draft')
+    .action(async (draftId: string) =>
+      run(async () => {
+        const { client, accountId } = await accountContext();
+        await printEnvelope(
+          client.jsonEnvelope(
+            `/api/v1/accounts/${encodeURIComponent(accountId)}/drafts/${encodeURIComponent(draftId)}`,
+          ),
+        );
+      })(),
+    );
   const createDraft = addMessageContentOptions(drafts.command('create').description('Create a draft'));
   createDraft.action(async (draftOptions: MessageContentOptions) =>
     run(async () => {
@@ -750,14 +857,17 @@ export function registerMailCommands(program: Command, options: MailCommandOptio
           );
         }
         const warning = response.headers.get('fluxmail-warning');
-        printJson({
-          data: {
-            output: outputPath,
-            mimeType: response.headers.get('content-type') ?? 'application/octet-stream',
-            sizeBytes: content.length,
+        printOutput(
+          {
+            data: {
+              output: outputPath,
+              mimeType: response.headers.get('content-type') ?? 'application/octet-stream',
+              sizeBytes: content.length,
+            },
+            ...(warning ? { warnings: [warning] } : {}),
           },
-          ...(warning ? { warnings: [warning] } : {}),
-        });
+          options.selectedFormat(),
+        );
       })(),
     );
 }
