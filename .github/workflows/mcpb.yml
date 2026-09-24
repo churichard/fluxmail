@@ -9,34 +9,69 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: mcpb-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  bundle:
+    name: Build and verify
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      cross-platform: ${{ steps.changes.outputs.cross-platform }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Check for native dependency changes
+        id: changes
+        shell: bash
+        run: |
+          # Pull requests check out a merge commit whose first parent is the base branch.
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            cross_platform=true
+          else
+            changed=$(git diff --name-only HEAD^1 HEAD)
+            if grep -qE '^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|packages/[^/]+/package\.json|scripts/(build|setup|verify)-mcpb\.mjs|\.github/workflows/mcpb\.yml)$|^mcpb/' <<< "$changed"; then
+              cross_platform=true
+            else
+              cross_platform=false
+            fi
+          fi
+          echo "cross-platform=$cross_platform" >> "$GITHUB_OUTPUT"
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # The build also verifies the extracted bundle on this runner.
       - run: pnpm mcpb:build
+      - name: Verify on Alpine Linux
+        shell: bash
+        run: |
+          version=$(node -p "require('./packages/server/package.json').version")
+          mkdir -p .context/mcpb/extracted
+          unzip -qq ".context/mcpb/fluxmail-$version.mcpb" -d .context/mcpb/extracted
+          docker run --rm -v "$PWD:/workspace" -w /workspace node:22-alpine node scripts/verify-mcpb.mjs .context/mcpb/extracted "$version"
       - uses: actions/upload-artifact@v4
+        if: steps.changes.outputs.cross-platform == 'true'
         with:
           name: fluxmail-mcpb
           path: .context/mcpb/fluxmail-*.mcpb
           include-hidden-files: true
           if-no-files-found: error
 
-  verify:
-    needs: build
+  cross-platform:
+    name: Verify on ${{ matrix.os }}
+    needs: bundle
+    if: needs.bundle.outputs.cross-platform == 'true'
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-latest
           - ubuntu-24.04-arm
           - macos-15-intel
           - macos-15
