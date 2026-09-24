@@ -81,7 +81,7 @@ Docker Compose and process-manager env files still work because those tools popu
 
 If Gmail or Google sign-in requests need an HTTP proxy, set `HTTPS_PROXY` in the Fluxmail process environment before starting the server. Fluxmail also accepts `https_proxy`, `HTTP_PROXY`, and `http_proxy`. When several are set, it uses the first of `HTTPS_PROXY`, `https_proxy`, `HTTP_PROXY`, and `http_proxy`. Use an `http://` or `https://` proxy URL.
 
-Fluxmail keeps proxy connections open on supported Node.js versions. A Gmail search can reuse a tunnel while reading messages.
+Fluxmail keeps proxy connections open on supported Node.js versions. A Gmail search can reuse a tunnel while reading messages. With an `https://` proxy, Fluxmail includes the proxy hostname in the TLS handshake so the proxy can present the right certificate.
 
 To send some requests directly, list hosts in `NO_PROXY` (or `no_proxy`), separated by commas. Each entry can be:
 
