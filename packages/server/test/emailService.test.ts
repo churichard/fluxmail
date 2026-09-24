@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EmailError, type Message, type SearchCapabilities } from '@fluxmail/core';
 import { buildForwardBody, EmailService, resolveSendAt } from '../src/service/emailService.js';
+import { DeliveryCoordinator } from '../src/service/deliveryCoordinator.js';
 import { accountSendAs, accounts, members, openDb, type FluxmailDb } from '../src/storage/db.js';
-import { createScheduledSend } from '../src/storage/scheduledSends.js';
+import { createScheduledSend, listScheduledSends } from '../src/storage/scheduledSends.js';
 import { FULL_PERMISSION_POLICY, permissionPolicyForProfile, type PermissionPolicy } from '../src/permissions.js';
 import { listConfiguredSendAs, replaceConfiguredSendAs } from '../src/storage/sendAs.js';
 
@@ -162,6 +163,37 @@ describe('EmailService bulk and content limits', () => {
     ).rejects.toMatchObject({ code: 'invalid_request' });
     expect(modify).toHaveBeenCalledTimes(5);
   });
+
+  it.each(['active', 'auth_error'] as const)(
+    'keeps account authentication status accurate after a bulk auth failure from %s',
+    async (initialStatus) => {
+      const account = {
+        id: 'acct_1',
+        provider: 'gmail',
+        email: 'me@example.com',
+        status: initialStatus as 'active' | 'auth_error',
+        capabilities: {},
+      };
+      const markStatus = vi.fn((_id: string, status: 'active' | 'auth_error') => {
+        account.status = status;
+      });
+      const service = new EmailService(
+        {
+          resolveAccountId: () => account.id,
+          getAccount: () => account,
+          getProvider: () => ({ modify: vi.fn().mockRejectedValue(new EmailError('auth_expired', 'expired')) }),
+          markStatus,
+        } as never,
+        testDb(),
+      );
+
+      const result = await service.modify(account.id, ['m1'], 'markRead');
+
+      expect(result.failed).toEqual([{ messageId: 'm1', code: 'auth_expired' }]);
+      expect(account.status).toBe('auth_error');
+      expect(markStatus).toHaveBeenLastCalledWith(account.id, 'auth_error');
+    },
+  );
 
   it('previews reply-all recipients and subject without sending', async () => {
     const send = vi.fn();
@@ -1304,6 +1336,9 @@ describe('EmailService scheduling', () => {
       email: 'me@example.com',
       status: 'active',
       capabilities: {},
+      ownerMemberId: 'member_1',
+      sharedWithAll: false,
+      grantedMemberIds: [],
     };
     const registry = {
       resolveAccountId: () => 'acct_1',
@@ -1349,6 +1384,41 @@ describe('EmailService scheduling', () => {
     expect(info.scheduleId).toMatch(/^sch_/);
     expect(onScheduleChanged).toHaveBeenCalled();
     expect(service.listScheduled()).toHaveLength(1);
+  });
+
+  it('links an immediately due schedule before waking the scheduler', async () => {
+    const getDraft = vi.fn().mockResolvedValue(draftMessage);
+    const { service, db } = schedulingService({ getDraft });
+    const scoped = service.withPrincipal({
+      kind: 'api_key',
+      principalId: 'key_1',
+      keyId: 'key_1',
+      memberId: 'member_1',
+      role: 'member',
+      permissions: FULL_PERMISSION_POLICY,
+      accountIds: null,
+    });
+    const coordinator = new DeliveryCoordinator(db);
+    const wake = vi.fn(() => {
+      const schedule = listScheduledSends(db)[0]!;
+      if (!coordinator.findScheduled(schedule.accountId, schedule.id)) {
+        coordinator.queueScheduled(schedule.accountId, schedule.id, schedule.draftId);
+      }
+    });
+    service.onScheduleChanged = wake;
+
+    const operation = await scoped.scheduleDelivery(
+      'acct_1',
+      { draftId: 'draft_1' },
+      new Date(Date.now() - 1_000).toISOString(),
+      'due-now',
+    );
+
+    expect(operation).toMatchObject({ status: 'queued', scheduleId: expect.stringMatching(/^sch_/) });
+    expect(coordinator.findScheduled('acct_1', operation.scheduleId!)).toMatchObject({
+      operationId: operation.operationId,
+    });
+    expect(wake).toHaveBeenCalledOnce();
   });
 
   it('rejects recipientless content before creating a draft', async () => {

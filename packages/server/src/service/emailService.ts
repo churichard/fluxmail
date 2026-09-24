@@ -811,7 +811,8 @@ export class EmailService {
   ): Promise<DeliveryOperation> {
     const resolvedId = this.resolveScopedAccountId(accountId);
     if (!this.principal) throw new EmailError('permission_denied', 'A member session is required.');
-    return new DeliveryCoordinator(this.db).schedule(
+    let createdSchedule = false;
+    const scheduled = new DeliveryCoordinator(this.db).schedule(
       {
         principalId: this.principal.principalId,
         memberId: this.principal.memberId,
@@ -819,8 +820,15 @@ export class EmailService {
         key,
         request: { input, sendAt },
       },
-      () => this.scheduleSend(resolvedId, input, sendAt),
+      async () => {
+        const result = await this.createSchedule(resolvedId, input, sendAt);
+        createdSchedule = true;
+        return result;
+      },
     );
+    return scheduled.finally(() => {
+      if (createdSchedule) this.onScheduleChanged();
+    });
   }
 
   async send(accountId: string | undefined, input: SendInput | { draftId: string }): Promise<SendResult> {
@@ -853,6 +861,16 @@ export class EmailService {
     input: SendInput | { draftId: string },
     sendAtIso: string,
   ): Promise<ScheduledSendInfo> {
+    const scheduled = await this.createSchedule(accountId, input, sendAtIso);
+    this.onScheduleChanged();
+    return scheduled;
+  }
+
+  private async createSchedule(
+    accountId: string | undefined,
+    input: SendInput | { draftId: string },
+    sendAtIso: string,
+  ): Promise<ScheduledSendInfo> {
     if (!('draftId' in input)) this.assertMailContent(input);
     const sendAt = resolveSendAt(sendAtIso);
     const { draft, resolvedId } = await this.withProvider(accountId, async (p, id, account) => {
@@ -878,7 +896,6 @@ export class EmailService {
       ...(draft.subject !== undefined ? { subject: draft.subject } : {}),
       ...(draft.to?.length ? { toRecipients: formatAddressList(draft.to) } : {}),
     });
-    this.onScheduleChanged();
     return toScheduledInfo(row);
   }
 
@@ -1067,7 +1084,8 @@ export class EmailService {
     if (unique.length < 1 || unique.length > 100) {
       throw new ClientInputError('invalid_request', 'Modify between 1 and 100 distinct messages.');
     }
-    return this.withProvider(accountId, async (provider) => {
+    const resolvedId = this.resolveScopedAccountId(accountId);
+    const result = await this.withProvider(resolvedId, async (provider) => {
       const outcomes: Array<'succeeded' | { code: string } | 'uncertain'> = Array.from(
         { length: unique.length },
         () => 'uncertain',
@@ -1098,6 +1116,10 @@ export class EmailService {
         uncertainIds: unique.filter((_, index) => outcomes[index] === 'uncertain'),
       };
     });
+    if (result.failed.some(({ code }) => code === 'auth_expired')) {
+      this.registry.markStatus(resolvedId, 'auth_error');
+    }
+    return result;
   }
 
   getAttachment(
