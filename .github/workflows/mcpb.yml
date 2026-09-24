@@ -33,7 +33,7 @@ jobs:
             cross_platform=true
           else
             changed=$(git diff --name-only HEAD^1 HEAD)
-            if grep -qE '^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|packages/[^/]+/package\.json|scripts/(build|setup|verify)-mcpb\.mjs|\.github/workflows/mcpb\.yml)$|^mcpb/' <<< "$changed"; then
+            if grep -qE '^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|packages/[^/]+/package\.json|scripts/(build-mcpb|setup-mcpb-check|verify-mcpb)\.mjs|\.github/workflows/mcpb\.yml)$|^mcpb/' <<< "$changed"; then
               cross_platform=true
             else
               cross_platform=false
