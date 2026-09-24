@@ -75,6 +75,14 @@ export class InstanceApiError extends Error {
   }
 }
 
+function requestTimeoutError(): InstanceApiError {
+  return new InstanceApiError(
+    'request_timeout',
+    'The request timed out. Check the operation status before retrying a send.',
+    0,
+  );
+}
+
 export function instanceResponseError(
   code: string,
   message: string,
@@ -248,6 +256,7 @@ export class InstanceClient {
   async request(pathname: string, init: RequestInit = {}, authenticated = true): Promise<Response> {
     const deadline = AbortSignal.timeout(requestDeadlineMs);
     const signal = init.signal ? AbortSignal.any([init.signal, deadline]) : deadline;
+    if (signal.aborted) throw requestTimeoutError();
     const headers = new Headers(init.headers);
     if (authenticated) {
       if (!this.token) throw new EmailError('permission_denied', `Log in to instance "${this.name}" first.`);
@@ -255,28 +264,41 @@ export class InstanceClient {
     }
     if (this.profile.kind === 'local') {
       const context = createContext();
-      try {
-        // A local instance handles the request in this process, so the CLI command
-        // already reports the outcome. Withholding telemetry keeps one user action
-        // from being counted twice and keeps the rest surface meaning a real HTTP
-        // call. The logger stays, so local logs still record the failure.
-        const response = await createApp({ ...context, telemetry: undefined }).request(pathname, {
-          ...init,
-          headers,
-          signal,
-        });
-        const body = response.body ? await response.arrayBuffer() : null;
-        return new Response(body?.byteLength ? body : null, {
-          status: response.status,
-          statusText: response.statusText,
-          headers: response.headers,
-        });
-      } finally {
+      const requestTask = (async () => {
         try {
-          await context.registry.close();
+          // A local instance handles the request in this process, so the CLI command
+          // already reports the outcome. Withholding telemetry keeps one user action
+          // from being counted twice and keeps the rest surface meaning a real HTTP
+          // call. The logger stays, so local logs still record the failure.
+          const response = await createApp({ ...context, telemetry: undefined }).request(pathname, {
+            ...init,
+            headers,
+            signal,
+          });
+          const body = response.body ? await response.arrayBuffer() : null;
+          return new Response(body?.byteLength ? body : null, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers,
+          });
         } finally {
-          (context.db as unknown as { $client: { close(): void } }).$client.close();
+          try {
+            await context.registry.close();
+          } finally {
+            (context.db as unknown as { $client: { close(): void } }).$client.close();
+          }
         }
+      })();
+      let onAbort: (() => void) | undefined;
+      const timedOut = new Promise<never>((_resolve, reject) => {
+        onAbort = () => reject(requestTimeoutError());
+        if (signal.aborted) onAbort();
+        else signal.addEventListener('abort', onAbort, { once: true });
+      });
+      try {
+        return await Promise.race([requestTask, timedOut]);
+      } finally {
+        if (onAbort) signal.removeEventListener('abort', onAbort);
       }
     }
     const baseUrl = new URL(`${this.profile.serverUrl}/`);
@@ -288,12 +310,7 @@ export class InstanceClient {
     try {
       response = await fetch(url, { ...init, headers, signal, redirect: 'manual' });
     } catch (error) {
-      if (signal.aborted)
-        throw new InstanceApiError(
-          'request_timeout',
-          'The request timed out. Check the operation status before retrying a send.',
-          0,
-        );
+      if (signal.aborted) throw requestTimeoutError();
       throw error;
     }
     if (response.status >= 300 && response.status < 400) {

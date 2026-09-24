@@ -9,7 +9,8 @@ import { DeliveryCoordinator } from '../src/service/deliveryCoordinator.js';
 
 describe('delivery operations', () => {
   it('replays one confirmed result without calling the provider again', async () => {
-    const coordinator = new DeliveryCoordinator(openDb(':memory:'));
+    const db = openDb(':memory:');
+    const coordinator = new DeliveryCoordinator(db);
     const deliver = vi.fn(async () => ({ id: 'sent_1', threadId: 'thread_1' }));
     const input = {
       principalId: 'credential_1',
@@ -20,6 +21,10 @@ describe('delivery operations', () => {
       request: { subject: 'private subject' },
     };
     const first = await coordinator.run(input, deliver);
+    db.update(deliveryOperations)
+      .set({ createdAt: Date.now() - 25 * 60 * 60_000, updatedAt: Date.now() - 25 * 60 * 60_000 })
+      .where(eq(deliveryOperations.id, first.operationId))
+      .run();
     const replay = await coordinator.run(input, deliver);
     expect(first.status).toBe('succeeded');
     expect(replay).toEqual(first);

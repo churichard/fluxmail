@@ -254,7 +254,7 @@ function toolFeatureProperties(tool: string, args: unknown): TelemetryProperties
     case 'modify_emails':
       return typeof input.action === 'string' ? { action: input.action } : {};
     case 'download_attachment':
-      return { destination: 'inline' };
+      return { destination: input.inline === true ? 'inline' : 'resource' };
     default:
       return {};
   }

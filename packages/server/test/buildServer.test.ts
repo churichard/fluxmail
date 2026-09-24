@@ -843,6 +843,55 @@ describe('reply permissions', () => {
 });
 
 describe('tool telemetry', () => {
+  it('records attachment delivery mode on success and error without private input', async () => {
+    const { telemetry, capture } = telemetrySpy();
+    const getAttachment = vi
+      .fn()
+      .mockResolvedValueOnce({
+        meta: { id: 'private-attachment', filename: 'private.pdf', mimeType: 'application/pdf', sizeBytes: 3 },
+        content: Buffer.from('pdf'),
+      })
+      .mockResolvedValueOnce({
+        meta: { id: 'private-attachment', filename: 'private.pdf', mimeType: 'application/pdf', sizeBytes: 3 },
+        content: Buffer.from('pdf'),
+      })
+      .mockRejectedValueOnce(new EmailError('not_found', 'private provider response'))
+      .mockRejectedValueOnce(new EmailError('not_found', 'private provider response'));
+    const client = await connectMcp({ enforceQuota: () => undefined, getAttachment } as Partial<EmailService>, {
+      permissions: permissionPolicyForProfile('read-only'),
+      telemetry,
+    });
+    const args = {
+      accountId: 'private-account',
+      messageId: 'private-message',
+      attachmentId: 'private-attachment',
+    };
+    await client.callTool({ name: 'download_attachment', arguments: args });
+    await client.callTool({ name: 'download_attachment', arguments: { ...args, inline: true } });
+    await client.callTool({ name: 'download_attachment', arguments: args });
+    await client.callTool({ name: 'download_attachment', arguments: { ...args, inline: true } });
+
+    const events = capture.mock.calls
+      .filter(([, properties]) => properties.operation === 'download_attachment')
+      .map(([, properties]) => properties);
+    expect(events).toEqual([
+      expect.objectContaining({ product_surface: 'mcp', outcome: 'success', destination: 'resource' }),
+      expect.objectContaining({ product_surface: 'mcp', outcome: 'success', destination: 'inline' }),
+      expect.objectContaining({ product_surface: 'mcp', outcome: 'error', destination: 'resource' }),
+      expect.objectContaining({ product_surface: 'mcp', outcome: 'error', destination: 'inline' }),
+    ]);
+    const captured = JSON.stringify(capture.mock.calls);
+    for (const privateValue of [
+      'private-account',
+      'private-message',
+      'private-attachment',
+      'private.pdf',
+      'private provider response',
+    ]) {
+      expect(captured).not.toContain(privateValue);
+    }
+  });
+
   it('records sanitized send-as discovery success and errors', async () => {
     const { telemetry, capture } = telemetrySpy();
     const listSendAs = vi

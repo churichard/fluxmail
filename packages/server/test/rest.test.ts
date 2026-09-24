@@ -534,6 +534,23 @@ describe('REST email operations', () => {
     expect(JSON.stringify(error)).not.toContain('private throttle response');
   });
 
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1])(
+    'omits an invalid provider retry delay of %s',
+    async (retryAfterMs) => {
+      const { app, auth, service } = fixture();
+      service.getMessage.mockRejectedValueOnce(
+        new EmailError('rate_limited', 'private throttle response', { retryAfterMs }),
+      );
+      const response = await app.request('/api/v1/accounts/acct_1/messages/msg_1', { headers: auth });
+      expect(response.status).toBe(429);
+      expect(response.headers.get('retry-after')).toBeNull();
+      const body = await response.json();
+      expect(body).toMatchObject({ error: { code: 'rate_limited', requestId: expect.any(String) } });
+      expect(JSON.stringify(body)).not.toContain('private throttle response');
+      expect(JSON.stringify(body)).not.toContain('retryAfterMs');
+    },
+  );
+
   it('links a safe error response to its local log entry', async () => {
     const { auth, config, db, service } = fixture();
     const warn = vi.fn();

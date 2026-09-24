@@ -631,11 +631,13 @@ function apiFailure(err: unknown, requestId = randomUUID()): ApiFailure {
       rate_limited: 429,
       provider_unavailable: 503,
     };
+    const safe = publicError(err, requestId);
+    const retryAfterMs = safe.data?.retryAfterMs;
     return {
       status: status[err.code] ?? 500,
-      payload: { error: publicError(err, requestId) },
-      ...(typeof err.data?.retryAfterMs === 'number'
-        ? { retryAfter: String(Math.max(1, Math.ceil(err.data.retryAfterMs / 1000))) }
+      payload: { error: safe },
+      ...(typeof retryAfterMs === 'number' && Number.isFinite(retryAfterMs) && retryAfterMs >= 0
+        ? { retryAfter: String(Math.max(1, Math.ceil(retryAfterMs / 1000))) }
         : {}),
     };
   }

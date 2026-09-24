@@ -23,4 +23,10 @@ describe('Microsoft Graph errors', () => {
     const error = toEmailError(new GraphHttpError(429, 'TooManyRequests', 'private provider response', 12_000));
     expect(error).toMatchObject({ code: 'rate_limited', data: { retryAfterMs: 12_000 } });
   });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1])('drops invalid retry delays (%s)', (retryAfterMs) => {
+    const error = toEmailError(new GraphHttpError(429, 'TooManyRequests', 'private provider response', retryAfterMs));
+    expect(error).toMatchObject({ code: 'rate_limited' });
+    expect(error.data).toBeUndefined();
+  });
 });

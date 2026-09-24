@@ -13,6 +13,7 @@ import {
   saveLocalInstance,
   saveRemoteInstance,
   saveSessionToken,
+  setRequestDeadlineMs,
   validateRemoteServerUrl,
 } from '../src/cliInstances.js';
 import { createContext } from '../src/context.js';
@@ -164,6 +165,49 @@ describe('CLI instance profiles', () => {
     ).resolves.toEqual([]);
 
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('times out a local request without closing its in-flight provider', async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), 'fluxmail-cli-local-timeout-'));
+    vi.stubEnv('FLUXMAIL_DATA_DIR', dataDir);
+    vi.stubEnv('FLUXMAIL_ENCRYPTION_KEY', '88'.repeat(32));
+    vi.stubEnv('FLUXMAIL_TELEMETRY', '0');
+    const setupContext = createContext();
+    const setup = await setupInitialAdmin(setupContext.db, {
+      name: 'Local Owner',
+      email: 'local@example.com',
+      password: 'River42!',
+    });
+    const account = setupContext.registry.addImapAccount(
+      'local@example.com',
+      {
+        imap: { host: 'imap.example.com', port: 993, security: 'tls', user: 'local', password: 'private' },
+        smtp: { host: 'smtp.example.com', port: 465, security: 'tls', user: 'local', password: 'private' },
+        saveSent: false,
+      },
+      undefined,
+      setup.member.id,
+    );
+    (setupContext.db as unknown as { $client: { close(): void } }).$client.close();
+    let release!: () => void;
+    const pending = new Promise<{ items: [] }>((resolve) => {
+      release = () => resolve({ items: [] });
+    });
+    vi.spyOn(ImapProvider.prototype, 'listMessages').mockImplementation(() => pending);
+    const close = vi.spyOn(ImapProvider.prototype, 'close').mockResolvedValue();
+    const client = new InstanceClient('local', { kind: 'local' }, setup.session.token);
+    setRequestDeadlineMs(1_000);
+    try {
+      await expect(
+        client.request(`/api/v1/accounts/${encodeURIComponent(account.id)}/messages?folder=inbox&pageSize=100`),
+      ).rejects.toMatchObject({ code: 'request_timeout' });
+      expect(close).not.toHaveBeenCalled();
+      release();
+      await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+    } finally {
+      release();
+      setRequestDeadlineMs(30_000);
+    }
   });
 
   it('handles a local request without telemetry so one action is not counted twice', async () => {

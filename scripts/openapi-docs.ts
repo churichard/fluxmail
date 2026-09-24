@@ -269,13 +269,15 @@ function retrySafetySection(operation: OpenApiOperation): string | undefined {
   return [
     '## Safe retries',
     '',
-    'Fluxmail keeps each idempotency result for 24 hours and scopes it to the authenticated credential.',
+    'Fluxmail scopes each delivery key to the authenticated credential. Delivery operations and their keys have no automatic expiry.',
     '',
-    '- Repeating a completed request with the same key returns the stored response and sets `Idempotency-Replayed: true`.',
+    '- Repeating a request with the same key and request data returns the stored delivery operation. It does not send again.',
     '- Reusing the key with different request data returns `409 idempotency_conflict`.',
-    '- A request that is still running, or whose outcome became uncertain during a restart, returns `409 idempotency_in_progress` with `Retry-After: 1`.',
+    '- An `uncertain` operation may have been delivered. Fluxmail does not retry it automatically.',
     '',
-    'Reuse the original key when retrying the same request. If the outcome is uncertain, do not create a new key. Check the Sent folder before deciding whether to start a new delivery.',
+    'Save the key with the request and reuse it if the response is lost. Look up the operation status before taking further action. For an `uncertain` result, check the Sent folder or recipient before creating a new delivery request.',
+    '',
+    'REST keys created before the delivery-operation upgrade keep their original 24 hour lifetime. A retry with one of those keys may return the legacy response shape and `Idempotency-Replayed: true`.',
   ].join('\n');
 }
 
