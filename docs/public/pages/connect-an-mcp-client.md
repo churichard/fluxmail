@@ -1,7 +1,7 @@
 ---
 title: 'Connect an MCP client'
 description: 'Connect Claude, ChatGPT, Codex, Cursor, Hermes, Gemini, or another MCP client to Fluxmail.'
-updated: '2026-07-17'
+updated: '2026-09-23'
 ---
 
 Complete the [Quickstart](/docs/quickstart) before configuring an MCP client.
@@ -18,6 +18,14 @@ Configure either stdio or Streamable HTTP. You do not need both.
 For most local setups, choose stdio. Choose Streamable HTTP when Fluxmail runs in Docker, on another machine, or when the client requires a URL.
 
 Both transports provide the same MCP tools. The examples use the default `full` permission profile. See [Permissions](/docs/permissions) if the client should have less access.
+
+Every `send_email` and `forward_email` call now needs an `idempotencyKey`. Keep the key and reuse it if a call times out. The result includes an `operationId`; call `get_delivery_operation` to check whether delivery succeeded, failed, or is uncertain. Inspect an uncertain message before attempting a new send. Use `preview_send` to check recipients and attachments without sending.
+
+An uncertain or failed send is marked as an MCP tool error, but its structured result still contains the operation ID and status. Bulk changes with failed or uncertain messages behave the same way, so inspect their per-message result before retrying.
+
+Input errors from Fluxmail explain which field needs attention. Search syntax errors also include `data.diagnostics`. Provider error text is replaced with a safe message.
+
+Mail tools return typed `structuredContent` and readable text. `get_email` and `get_thread` accept `bodyFormat` to select text, HTML, both, or no body. Large bodies include truncation metadata; use `get_email_body` to read the remaining text. Thread messages are paged. `download_attachment` returns a protected resource link by default. Set `inline` only when the attachment bytes must be embedded in the tool response.
 
 ## Option 1: Connect over stdio
 

@@ -18,6 +18,7 @@ Required capabilities: `mail.read` + `mail.send`.
 
 | Name | Required | Type | Details |
 | --- | --- | --- | --- |
+| `idempotencyKey` | Yes | `string` | Reuse this key when retrying the same forward |
 | `accountId` | No | `string` | Account to operate on. Optional when exactly one account is connected. Minimum length: 1. |
 | `messageId` | Yes | `string` | Minimum length: 1. |
 | `from` | No | `string` | Connected address or an available send-as address Format: `email`. |
@@ -33,6 +34,11 @@ Required capabilities: `mail.read` + `mail.send`.
 {
   "type": "object",
   "properties": {
+    "idempotencyKey": {
+      "type": "string",
+      "pattern": "^[\\x21-\\x7e]{1,255}$",
+      "description": "Reuse this key when retrying the same forward"
+    },
     "accountId": {
       "type": "string",
       "minLength": 1,
@@ -72,6 +78,7 @@ Required capabilities: `mail.read` + `mail.send`.
     }
   },
   "required": [
+    "idempotencyKey",
     "messageId",
     "to"
   ],

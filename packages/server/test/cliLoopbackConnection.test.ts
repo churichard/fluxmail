@@ -132,7 +132,7 @@ describe('CLI loopback connection', () => {
     try {
       await addGmail(telemetry);
 
-      expect(process.exitCode).toBe(1);
+      expect(process.exitCode).toBe(2);
       expect(output.join('\n')).toContain('Waiting for Google to redirect back...');
       expect(output.join('\n')).not.toContain('paste it here');
       expect(errors.join('\n')).toContain('Timed out after 10 minutes');

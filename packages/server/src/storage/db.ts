@@ -8,7 +8,7 @@ import { VERSION } from '../version.js';
 import { decryptString } from './crypto.js';
 import { withFileLock } from './fileLock.js';
 
-export const CURRENT_STORE_FORMAT = 3;
+export const CURRENT_STORE_FORMAT = 5;
 export const MIN_SUPPORTED_STORE_FORMAT = 1;
 export const MAX_SUPPORTED_STORE_FORMAT = CURRENT_STORE_FORMAT;
 export const LEGACY_STORE_FORMAT = 0;
@@ -306,6 +306,30 @@ export const restIdempotency = sqliteTable(
   (table) => [
     primaryKey({ columns: [table.principalId, table.idempotencyKey] }),
     index('rest_idempotency_expires_at').on(table.expiresAt),
+  ],
+);
+
+export const deliveryOperations = sqliteTable(
+  'delivery_operations',
+  {
+    id: text('id').primaryKey(),
+    principalId: text('principal_id').notNull(),
+    memberId: text('member_id'),
+    idempotencyKey: text('idempotency_key').notNull(),
+    requestHash: text('request_hash').notNull(),
+    accountId: text('account_id').notNull(),
+    kind: text('kind').notNull(),
+    status: text('status').notNull(),
+    resultJson: text('result_json'),
+    errorCode: text('error_code'),
+    scheduleId: text('schedule_id'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('delivery_operations_principal_key').on(table.principalId, table.idempotencyKey),
+    index('delivery_operations_account').on(table.accountId),
+    uniqueIndex('delivery_operations_schedule').on(table.scheduleId),
   ],
 );
 
@@ -824,10 +848,49 @@ function migrateToFormatThree(sqlite: Database.Database): void {
   `);
 }
 
+function migrateToFormatFour(sqlite: Database.Database): void {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS delivery_operations (
+      id TEXT PRIMARY KEY,
+      principal_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      request_hash TEXT NOT NULL,
+      account_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL,
+      result_json TEXT,
+      error_code TEXT,
+      schedule_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS delivery_operations_principal_key
+      ON delivery_operations(principal_id, idempotency_key);
+    CREATE INDEX IF NOT EXISTS delivery_operations_account
+      ON delivery_operations(account_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS delivery_operations_schedule
+      ON delivery_operations(schedule_id);
+  `);
+}
+
+function migrateToFormatFive(sqlite: Database.Database): void {
+  sqlite.exec('ALTER TABLE delivery_operations ADD COLUMN member_id TEXT');
+  sqlite.exec(`
+    UPDATE delivery_operations
+    SET member_id = COALESCE(
+      (SELECT member_id FROM api_keys WHERE id = delivery_operations.principal_id),
+      (SELECT member_id FROM member_sessions WHERE id = delivery_operations.principal_id)
+    )
+    WHERE member_id IS NULL
+  `);
+}
+
 const MIGRATIONS = [
   { format: 1, run: migrateToFormatOne },
   { format: 2, run: migrateToFormatTwo },
   { format: 3, run: migrateToFormatThree },
+  { format: 4, run: migrateToFormatFour },
+  { format: 5, run: migrateToFormatFive },
 ] as const;
 
 function openCompatibleDb(dbPath: string, dataDir: string, options: { backupBeforeMigration?: boolean }): FluxmailDb {

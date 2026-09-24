@@ -1,5 +1,6 @@
 import { createHash, createHmac, hkdfSync, timingSafeEqual } from 'node:crypto';
 import { EmailError, type EmailQuery, type Provider } from '@fluxmail/core';
+import { ClientInputError } from './publicErrors.js';
 
 const CURSOR_VERSION = 1;
 const CURSOR_LIFETIME_MS = 60 * 60 * 1_000;
@@ -20,7 +21,7 @@ interface SearchCursorPayload {
 }
 
 function invalidCursor(): EmailError {
-  return new EmailError('invalid_request', 'Invalid or expired search page token.');
+  return new ClientInputError('invalid_request', 'Invalid or expired search page token.');
 }
 
 function canonicalQuery(query: EmailQuery): string {

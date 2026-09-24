@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
@@ -20,7 +20,7 @@ import type { LicenseController } from '../licensing/refresher.js';
 import type { EmailService, SendInput } from '../service/emailService.js';
 import type { FluxmailDb } from '../storage/db.js';
 import { authenticateBearer, isBootstrapComplete, type Principal } from '../auth.js';
-import { completeIdempotencyKey, reserveIdempotencyKey } from '../storage/restIdempotency.js';
+import { completeIdempotencyKey, lookupIdempotencyKey, reserveIdempotencyKey } from '../storage/restIdempotency.js';
 import { type Capability, type McpCapability } from '../permissions.js';
 import { allowsCapability } from '../authorization.js';
 import { captureOperation, type OperationOutcome, type Telemetry, type TelemetryProperties } from '../telemetry.js';
@@ -30,6 +30,7 @@ import { recordAdminAuditEvent } from '../storage/adminAudit.js';
 import { identityOperationId, registerIdentityRoutes } from './identity.js';
 import { operationProperties } from './operationTelemetry.js';
 import { logCodedFailure, logFailure, type Logger } from '../logging.js';
+import { ClientInputError, publicError } from '../service/publicErrors.js';
 
 interface RestVariables {
   restAuth: Principal;
@@ -257,10 +258,11 @@ const AccountSchema = z
 const ScheduledSendSchema = z
   .object({
     scheduleId: z.string(),
+    operationId: z.string().optional(),
     accountId: z.string(),
     draftId: z.string(),
     sendAt: z.string(),
-    status: z.enum(['pending', 'sending', 'sent', 'failed', 'canceled']),
+    status: z.enum(['pending', 'sending', 'sent', 'failed', 'uncertain', 'canceled']),
     attempts: z.number().int().nonnegative(),
     subject: z.string().optional(),
     to: z.string().optional(),
@@ -274,9 +276,52 @@ const SendResultSchema = z
   .object({ id: z.string(), threadId: z.string(), warnings: z.array(z.string()).optional() })
   .strict()
   .openapi('SendResult');
+const DeliveryOperationSchema = z
+  .object({
+    operationId: z.string(),
+    accountId: z.string(),
+    kind: z.enum(['send', 'forward', 'scheduled']),
+    status: z.enum(['queued', 'sending', 'succeeded', 'failed', 'uncertain']),
+    result: SendResultSchema.optional(),
+    error: z.object({ code: z.string() }).strict().optional(),
+    scheduleId: z.string().optional(),
+  })
+  .strict()
+  .openapi('DeliveryOperation');
+const SendPreviewSchema = z
+  .object({
+    accountId: z.string(),
+    from: z.string(),
+    to: z.array(EmailAddressSchema),
+    cc: z.array(EmailAddressSchema),
+    bcc: z.array(EmailAddressSchema),
+    subject: z.string(),
+    attachments: z.array(
+      z.object({ filename: z.string(), mimeType: z.string(), sizeBytes: z.number().int() }).strict(),
+    ),
+    bodyTextChars: z.number().int(),
+    bodyHtmlChars: z.number().int(),
+  })
+  .strict()
+  .openapi('SendPreview');
+const ModifyResultSchema = z
+  .object({
+    action: z.string(),
+    succeededIds: z.array(z.string()),
+    failed: z.array(z.object({ messageId: z.string(), code: z.string() }).strict()),
+    uncertainIds: z.array(z.string()),
+  })
+  .strict();
 const ErrorSchema = z
   .object({
-    error: z.object({ code: z.string(), message: z.string(), data: z.record(z.unknown()).optional() }).strict(),
+    error: z
+      .object({
+        code: z.string(),
+        message: z.string(),
+        requestId: z.string().optional(),
+        data: z.record(z.unknown()).optional(),
+      })
+      .strict(),
   })
   .strict()
   .openapi('RestError');
@@ -420,7 +465,10 @@ const modifyActionNames = [
 type ModifyActionName = (typeof modifyActionNames)[number];
 const ModifyRequestSchema = z
   .object({
-    messageIds: z.array(messageId).min(1),
+    messageIds: z
+      .array(messageId)
+      .min(1)
+      .refine((ids) => new Set(ids).size <= 100, 'At most 100 distinct message IDs are allowed.'),
     action: z.enum(modifyActionNames),
     folder: z
       .string()
@@ -527,7 +575,7 @@ const MODIFY_CAPABILITIES: Record<ModifyActionName, McpCapability> = {
 const PROTECTED_MOVE_DESTINATIONS = new Set(['archive', 'trash']);
 interface ApiFailure {
   status: number;
-  payload: { error: { code: string; message: string; data?: Record<string, unknown> } };
+  payload: { error: { code: string; message: string; requestId?: string; data?: Record<string, unknown> } };
   retryAfter?: string;
 }
 
@@ -543,11 +591,18 @@ class RestFailure extends Error {
   }
 }
 
-function logRestFailure(deps: RestApiDeps, operation: string, error: unknown, startedAt: number): void {
+function logRestFailure(
+  deps: RestApiDeps,
+  operation: string,
+  error: unknown,
+  startedAt: number,
+  requestId?: string,
+): void {
   const context = {
     productSurface: 'rest' as const,
     operation,
     durationMs: performance.now() - startedAt,
+    ...(requestId ? { details: { request_id: requestId } } : {}),
   };
   if (error instanceof RestFailure) {
     logCodedFailure(deps.logger, 'rest.operation_failed', error.code, error.message, context);
@@ -556,17 +611,18 @@ function logRestFailure(deps: RestApiDeps, operation: string, error: unknown, st
   }
 }
 
-function apiFailure(err: unknown): ApiFailure {
+function apiFailure(err: unknown, requestId = randomUUID()): ApiFailure {
   if (err instanceof RestFailure) {
     return {
       status: err.status,
-      payload: { error: { code: err.code, message: err.message, ...(err.data ? { data: err.data } : {}) } },
+      payload: { error: { code: err.code, message: err.message, requestId, ...(err.data ? { data: err.data } : {}) } },
       ...(err.retryAfter ? { retryAfter: err.retryAfter } : {}),
     };
   }
   if (isEmailError(err)) {
     const status: Record<string, number> = {
       invalid_request: 400,
+      idempotency_conflict: 409,
       permission_denied: 403,
       entitlement_exceeded: 403,
       not_found: 404,
@@ -575,16 +631,19 @@ function apiFailure(err: unknown): ApiFailure {
       rate_limited: 429,
       provider_unavailable: 503,
     };
+    const safe = publicError(err, requestId);
+    const retryAfterMs = safe.data?.retryAfterMs;
     return {
       status: status[err.code] ?? 500,
-      payload: {
-        error: { code: err.code, message: err.message, ...(err.data ? { data: err.data } : {}) },
-      },
+      payload: { error: safe },
+      ...(typeof retryAfterMs === 'number' && Number.isFinite(retryAfterMs) && retryAfterMs >= 0
+        ? { retryAfter: String(Math.max(1, Math.ceil(retryAfterMs / 1000))) }
+        : {}),
     };
   }
   return {
     status: 500,
-    payload: { error: { code: 'internal', message: 'The request could not be completed.' } },
+    payload: { error: publicError(err, requestId) },
   };
 }
 
@@ -648,6 +707,7 @@ async function runJson(
     successStatus?: number;
     request?: unknown;
     idempotent?: boolean;
+    legacyReplay?: boolean;
     accountId?: string;
     telemetry?: TelemetryProperties;
   },
@@ -655,6 +715,7 @@ async function runJson(
 ): Promise<never> {
   const finishActivity = deps.telemetry?.beginActivity?.();
   const startedAt = performance.now();
+  const requestId = randomUUID();
   let outcome: OperationOutcome = 'error';
   let errorCode: string | undefined;
   let idempotencyStatus: string | undefined;
@@ -667,6 +728,36 @@ async function runJson(
       throw new EmailError('permission_denied', `This API key does not allow: ${missing.join(', ')}.`);
     }
     const service = c.get('restService');
+
+    if (options.legacyReplay) {
+      const key = c.req.header('idempotency-key');
+      if (!key || !/^[\x21-\x7e]{1,255}$/.test(key)) {
+        throw new RestFailure('invalid_request', 'Idempotency-Key is required.', 400);
+      }
+      if (options.accountId !== undefined) service.assertAccountAccess(options.accountId);
+      const legacy = lookupIdempotencyKey(deps.db, auth.principalId, key);
+      if (legacy) {
+        if (legacy.requestHash !== requestHash(options.operation, options.request)) {
+          throw new RestFailure(
+            'idempotency_conflict',
+            'This Idempotency-Key was already used for a different request.',
+            409,
+          );
+        }
+        if (legacy.state !== 'completed' || legacy.responseStatus === null || legacy.responseBody === null) {
+          throw new RestFailure('idempotency_in_progress', 'The earlier delivery outcome is uncertain.', 409);
+        }
+        return new Response(legacy.responseBody, {
+          status: legacy.responseStatus,
+          headers: {
+            'content-type': 'application/json; charset=UTF-8',
+            'cache-control': 'no-store',
+            'idempotency-replayed': 'true',
+            'x-request-id': requestId,
+          },
+        }) as never;
+      }
+    }
 
     if (options.idempotent) {
       const idempotencyKey = c.req.header('idempotency-key');
@@ -716,6 +807,7 @@ async function runJson(
             'content-type': 'application/json; charset=UTF-8',
             'cache-control': 'no-store',
             'idempotency-replayed': 'true',
+            'x-request-id': requestId,
           },
         }) as never;
       }
@@ -739,11 +831,15 @@ async function runJson(
       if (result.operationFailed) errorCode = 'account_failure';
       return new Response(body, {
         status,
-        headers: { 'content-type': 'application/json; charset=UTF-8', 'cache-control': 'no-store' },
+        headers: {
+          'content-type': 'application/json; charset=UTF-8',
+          'cache-control': 'no-store',
+          'x-request-id': requestId,
+        },
       }) as never;
     } catch (err) {
-      logRestFailure(deps, options.operation, err, startedAt);
-      const failure = apiFailure(err);
+      logRestFailure(deps, options.operation, err, startedAt, requestId);
+      const failure = apiFailure(err, requestId);
       const body = JSON.stringify(failure.payload);
       if (reservation) {
         completeIdempotencyKey(deps.db, {
@@ -758,19 +854,19 @@ async function runJson(
         headers: {
           'content-type': 'application/json; charset=UTF-8',
           'cache-control': 'no-store',
+          'x-request-id': requestId,
           ...(failure.retryAfter ? { 'retry-after': failure.retryAfter } : {}),
         },
       }) as never;
     }
   } catch (err) {
-    logRestFailure(deps, options.operation, err, startedAt);
-    const failure = apiFailure(err);
+    logRestFailure(deps, options.operation, err, startedAt, requestId);
+    const failure = apiFailure(err, requestId);
     errorCode = failure.payload.error.code;
-    return jsonResponse(
-      failure.payload,
-      failure.status,
-      failure.retryAfter ? { 'retry-after': failure.retryAfter } : {},
-    ) as never;
+    return jsonResponse(failure.payload, failure.status, {
+      'x-request-id': requestId,
+      ...(failure.retryAfter ? { 'retry-after': failure.retryAfter } : {}),
+    }) as never;
   } finally {
     captureOperation(deps.telemetry, {
       productSurface: 'rest',
@@ -796,6 +892,7 @@ async function runAttachment(
 ): Promise<never> {
   const finishActivity = deps.telemetry?.beginActivity?.();
   const startedAt = performance.now();
+  const requestId = randomUUID();
   let outcome: OperationOutcome = 'error';
   let errorCode: string | undefined;
   try {
@@ -812,7 +909,7 @@ async function runAttachment(
       deps.config.maxAttachmentBytes,
     );
     if (content.length > deps.config.maxAttachmentBytes) {
-      throw new EmailError('invalid_request', 'Attachment is too large to return through the REST API.', {
+      throw new ClientInputError('invalid_request', 'Attachment is too large to return through the REST API.', {
         sizeBytes: content.length,
         maxBytes: deps.config.maxAttachmentBytes,
       });
@@ -830,14 +927,15 @@ async function runAttachment(
         'content-length': String(content.length),
         'content-disposition': `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeContentDispositionFilename(safeName)}`,
         'cache-control': 'no-store',
+        'x-request-id': requestId,
         ...(warning ? { 'fluxmail-warning': warning.replace(/[\r\n]/g, ' ') } : {}),
       },
     }) as never;
   } catch (err) {
-    logRestFailure(deps, 'downloadAttachment', err, startedAt);
-    const failure = apiFailure(err);
+    logRestFailure(deps, 'downloadAttachment', err, startedAt, requestId);
+    const failure = apiFailure(err, requestId);
     errorCode = failure.payload.error.code;
-    return jsonResponse(failure.payload, failure.status) as never;
+    return jsonResponse(failure.payload, failure.status, { 'x-request-id': requestId }) as never;
   } finally {
     captureOperation(deps.telemetry, {
       productSurface: 'rest',
@@ -882,13 +980,13 @@ function toEmailQuery(input: z.infer<typeof messageQuerySchema>): {
     const parsed = parseEmailSearch(input.query);
     diagnostics = parsed.diagnostics;
     if (!parsed.valid) {
-      throw new EmailError('invalid_request', parsed.diagnostics.map((item) => item.message).join(' '), {
+      throw new ClientInputError('invalid_request', parsed.diagnostics.map((item) => item.message).join(' '), {
         diagnostics: parsed.diagnostics,
       });
     }
     const merged = mergeEmailQueries(parsed.query, structured);
     if (!merged.success) {
-      throw new EmailError('invalid_request', merged.diagnostics.map((item) => item.message).join(' '), {
+      throw new ClientInputError('invalid_request', merged.diagnostics.map((item) => item.message).join(' '), {
         diagnostics: merged.diagnostics,
       });
     }
@@ -931,7 +1029,7 @@ function modifyAction(input: z.infer<typeof ModifyRequestSchema>): ModifyAction 
   if (input.action === 'move') {
     const folder = input.folder!;
     if (PROTECTED_MOVE_DESTINATIONS.has(folder.trim().toLowerCase())) {
-      throw new EmailError('invalid_request', 'Use the dedicated archive or trash action for this folder.');
+      throw new ClientInputError('invalid_request', 'Use the dedicated archive or trash action for this folder.');
     }
     return { move: folder };
   }
@@ -1173,6 +1271,15 @@ export function createRestApi(deps: RestApiDeps): OpenAPIHono<RestEnv> {
       );
     }
     c.set('restAuth', auth);
+    if (!administrative && ['POST', 'PATCH', 'PUT'].includes(c.req.method)) {
+      const limit = Math.ceil((deps.config.maxAttachmentBytes * 4) / 3) + 2 * 1024 * 1024;
+      if (await requestBodyExceedsLimit(c.req.raw, limit)) {
+        return jsonResponse(
+          { error: { code: 'request_too_large', message: 'Mail request body exceeds the size limit.' } },
+          413,
+        );
+      }
+    }
     if (administrative && (c.req.method === 'POST' || c.req.method === 'PATCH' || c.req.method === 'PUT')) {
       const mediaType = c.req.header('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
       if (mediaType !== 'application/json') {
@@ -1434,7 +1541,7 @@ export function createRestApi(deps: RestApiDeps): OpenAPIHono<RestEnv> {
       const input = c.req.valid('json');
       const parsed = parseEmailSearch(input.query);
       if (!parsed.valid) {
-        throw new EmailError('invalid_request', parsed.diagnostics.map((item) => item.message).join(' '), {
+        throw new ClientInputError('invalid_request', parsed.diagnostics.map((item) => item.message).join(' '), {
           diagnostics: parsed.diagnostics,
         });
       }
@@ -1447,7 +1554,7 @@ export function createRestApi(deps: RestApiDeps): OpenAPIHono<RestEnv> {
       }
       const merged = mergeEmailQueries(parsed.query, structured);
       if (!merged.success) {
-        throw new EmailError('invalid_request', merged.diagnostics.map((item) => item.message).join(' '), {
+        throw new ClientInputError('invalid_request', merged.diagnostics.map((item) => item.message).join(' '), {
           diagnostics: merged.diagnostics,
         });
       }
@@ -1520,6 +1627,25 @@ export function createRestApi(deps: RestApiDeps): OpenAPIHono<RestEnv> {
     const { accountId, threadId } = c.req.valid('param');
     return runJson(c, deps, { operation: 'getThread', capabilities: ['mail.read'] }, async () => ({
       data: await c.get('restService').getThread(accountId, threadId),
+    }));
+  });
+
+  const getDraftRoute = createRoute({
+    method: 'get',
+    path: '/api/v1/accounts/{accountId}/drafts/{draftId}',
+    operationId: 'getDraft',
+    summary: 'Get a draft',
+    request: { params: draftParams },
+    ...protectedRoute,
+    responses: {
+      200: { content: { 'application/json': { schema: dataEnvelope(MessageSchema) } }, description: 'Draft' },
+      ...errorResponses,
+    },
+  });
+  app.openapi(getDraftRoute, (c) => {
+    const { accountId, draftId } = c.req.valid('param');
+    return runJson(c, deps, { operation: 'getDraft', capabilities: ['mail.drafts'] }, async () => ({
+      data: await c.get('restService').getDraft(accountId, draftId),
     }));
   });
 
@@ -1597,6 +1723,37 @@ export function createRestApi(deps: RestApiDeps): OpenAPIHono<RestEnv> {
     });
   });
 
+  const previewSendRoute = createRoute({
+    method: 'post',
+    path: '/api/v1/accounts/{accountId}/send/preview',
+    operationId: 'previewSend',
+    summary: 'Preview a send',
+    request: {
+      params: accountParams,
+      body: { required: true, content: { 'application/json': { schema: SendRequestSchema } } },
+    },
+    ...protectedRoute,
+    responses: {
+      200: {
+        content: { 'application/json': { schema: dataEnvelope(SendPreviewSchema) } },
+        description: 'Resolved send details',
+      },
+      ...errorResponses,
+    },
+  });
+  app.openapi(previewSendRoute, (c) => {
+    const { accountId } = c.req.valid('param');
+    const input = c.req.valid('json');
+    const capabilities: McpCapability[] = ['mail.send'];
+    if ('draftId' in input) capabilities.push('mail.drafts');
+    if ('replyToMessageId' in input && input.replyToMessageId) capabilities.push('mail.read');
+    const request: SendInput | { draftId: string } =
+      'draftId' in input ? { draftId: input.draftId } : toSendInput(input);
+    return runJson(c, deps, { operation: 'previewSend', capabilities }, async () => ({
+      data: await c.get('restService').previewSend(accountId, request),
+    }));
+  });
+
   const sendRoute = createRoute({
     method: 'post',
     path: '/api/v1/accounts/{accountId}/send',
@@ -1610,9 +1767,12 @@ export function createRestApi(deps: RestApiDeps): OpenAPIHono<RestEnv> {
     },
     ...protectedRoute,
     responses: {
-      200: { content: { 'application/json': { schema: dataEnvelope(SendResultSchema) } }, description: 'Message sent' },
+      200: {
+        content: { 'application/json': { schema: dataEnvelope(DeliveryOperationSchema) } },
+        description: 'Delivery operation',
+      },
       202: {
-        content: { 'application/json': { schema: dataEnvelope(ScheduledSendSchema) } },
+        content: { 'application/json': { schema: dataEnvelope(DeliveryOperationSchema) } },
         description: 'Message scheduled',
       },
       ...errorResponses,
@@ -1636,7 +1796,7 @@ export function createRestApi(deps: RestApiDeps): OpenAPIHono<RestEnv> {
         capabilities,
         successStatus: sendAt ? 202 : 200,
         request: { accountId, input },
-        idempotent: true,
+        legacyReplay: true,
         accountId,
         telemetry: {
           mode: 'draftId' in input ? 'draft' : input.replyToMessageId ? 'reply' : 'direct',
@@ -1644,12 +1804,42 @@ export function createRestApi(deps: RestApiDeps): OpenAPIHono<RestEnv> {
           reply_all: 'replyAll' in input && input.replyAll === true,
         },
       },
-      async () => ({
-        data: sendAt
-          ? await c.get('restService').scheduleSend(accountId, request, sendAt)
-          : await c.get('restService').send(accountId, request),
-      }),
+      async () => {
+        const service = c.get('restService');
+        const key = c.req.header('idempotency-key')!;
+        if (sendAt) {
+          const operation = await service.scheduleDelivery(accountId, request, sendAt, key);
+          return {
+            data: operation,
+            operationFailed: operation.status === 'failed' || operation.status === 'uncertain',
+          };
+        }
+        const operation = await service.deliver(accountId, request, key);
+        return { data: operation, operationFailed: operation.status === 'failed' || operation.status === 'uncertain' };
+      },
     );
+  });
+
+  const deliveryStatusRoute = createRoute({
+    method: 'get',
+    path: '/api/v1/accounts/{accountId}/delivery-operations/{operationId}',
+    operationId: 'getDeliveryOperation',
+    summary: 'Get a delivery outcome',
+    request: { params: z.object({ accountId, operationId: id }).strict() },
+    ...protectedRoute,
+    responses: {
+      200: {
+        content: { 'application/json': { schema: dataEnvelope(DeliveryOperationSchema) } },
+        description: 'Delivery outcome',
+      },
+      ...errorResponses,
+    },
+  });
+  app.openapi(deliveryStatusRoute, (c) => {
+    const { accountId, operationId } = c.req.valid('param');
+    return runJson(c, deps, { operation: 'getDeliveryOperation', capabilities: ['mail.send'], quota: false }, () => ({
+      data: c.get('restService').getDelivery(accountId, operationId),
+    }));
   });
 
   const listScheduledRoute = createRoute({
@@ -1722,7 +1912,10 @@ export function createRestApi(deps: RestApiDeps): OpenAPIHono<RestEnv> {
     },
     ...protectedRoute,
     responses: {
-      200: { content: { 'application/json': { schema: dataEnvelope(SendResultSchema) } }, description: 'Forward sent' },
+      200: {
+        content: { 'application/json': { schema: dataEnvelope(DeliveryOperationSchema) } },
+        description: 'Forward delivery operation',
+      },
       ...errorResponses,
     },
   });
@@ -1736,13 +1929,16 @@ export function createRestApi(deps: RestApiDeps): OpenAPIHono<RestEnv> {
         operation: 'forwardMessage',
         capabilities: ['mail.send', 'mail.read'],
         request: { accountId, messageId, input },
-        idempotent: true,
+        legacyReplay: true,
         accountId,
         telemetry: { include_attachments: input.includeAttachments !== false },
       },
-      async () => ({
-        data: await c.get('restService').forward(accountId, { messageId, ...input }),
-      }),
+      async () => {
+        const operation = await c
+          .get('restService')
+          .deliverForward(accountId, { messageId, ...input }, c.req.header('idempotency-key')!);
+        return { data: operation, operationFailed: operation.status === 'failed' || operation.status === 'uncertain' };
+      },
     );
   });
 
@@ -1761,7 +1957,7 @@ export function createRestApi(deps: RestApiDeps): OpenAPIHono<RestEnv> {
       200: {
         content: {
           'application/json': {
-            schema: dataEnvelope(z.object({ modified: z.number().int(), action: z.enum(modifyActionNames) }).strict()),
+            schema: dataEnvelope(ModifyResultSchema),
           },
         },
         description: 'Messages modified',
@@ -1782,8 +1978,11 @@ export function createRestApi(deps: RestApiDeps): OpenAPIHono<RestEnv> {
         telemetry: { action: input.action },
       },
       async () => {
-        await c.get('restService').modify(accountId, input.messageIds, modifyAction(input));
-        return { data: { modified: input.messageIds.length, action: input.action } };
+        const result = await c.get('restService').modify(accountId, input.messageIds, modifyAction(input));
+        return {
+          data: { ...result, action: input.action },
+          operationFailed: result.failed.length > 0 || result.uncertainIds.length > 0,
+        };
       },
     );
   });
@@ -1825,13 +2024,17 @@ export function createRestApi(deps: RestApiDeps): OpenAPIHono<RestEnv> {
     jsonResponse({ error: { code: 'not_found', message: 'No REST route matches this request.' } }, 404),
   );
   app.onError((err) => {
+    const requestId = randomUUID();
     const malformedJson =
       err instanceof SyntaxError || (err instanceof HTTPException && err.status === 400)
-        ? new EmailError('invalid_request', 'Malformed JSON body.')
+        ? new ClientInputError('invalid_request', 'Malformed JSON body.')
         : err;
-    logFailure(deps.logger, 'rest.unhandled_error', malformedJson, { productSurface: 'rest' });
-    const failure = apiFailure(malformedJson);
-    return jsonResponse(failure.payload, failure.status);
+    logFailure(deps.logger, 'rest.unhandled_error', malformedJson, {
+      productSurface: 'rest',
+      details: { request_id: requestId },
+    });
+    const failure = apiFailure(malformedJson, requestId);
+    return jsonResponse(failure.payload, failure.status, { 'x-request-id': requestId });
   });
 
   return app;

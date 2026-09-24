@@ -15,6 +15,10 @@ The `operation` property contains the CLI command path, MCP tool name, or REST O
 
 Batch search reports `emails search-batch`, `search_emails_batch`, or `searchMessages`, depending on the surface. Its outcome is `error` when any account group fails, including mixed results. The event does not contain account IDs, query text, page tokens, or provider error text.
 
+Delivery status, preview, draft retrieval, and body continuation each use their CLI command path, MCP tool name, or REST operation ID. Bulk modification reports an error outcome when any item fails or is uncertain. These events carry no operation ID, message ID, recipient, or body content.
+
+MCP attachment downloads record `destination` as `resource` for a link or `inline` for embedded content. The same value is recorded when the download fails. The event does not contain an attachment ID, name, or content.
+
 ## Mailbox connection properties
 
 Mailbox connection and removal events may add these properties to `operation completed`:

@@ -1,6 +1,7 @@
 import { VERSION } from '../version.js';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
   EmailError,
@@ -17,6 +18,7 @@ import {
   type SendAsIdentity,
 } from '@fluxmail/core';
 import type { EmailService, SendInput } from '../service/emailService.js';
+import type { DeliveryOperation } from '../service/deliveryCoordinator.js';
 import { DEFAULT_MAX_ATTACHMENT_BYTES } from '../config.js';
 import {
   FULL_PERMISSION_POLICY,
@@ -27,6 +29,8 @@ import {
 } from '../permissions.js';
 import { captureOperation, type Telemetry, type TelemetryProperties } from '../telemetry.js';
 import { logFailure, type Logger } from '../logging.js';
+import { ClientInputError, publicError } from '../service/publicErrors.js';
+import { outputSchemas } from './outputSchemas.js';
 
 const MAX_BODY_CHARS = 50_000;
 const TELEMETRY_ERROR = Symbol('telemetryError');
@@ -101,7 +105,7 @@ function parseAddresses(raw: string[] | undefined): EmailAddress[] | undefined {
   if (!raw) return undefined;
   const parsed = raw.map((r) => {
     const addr = parseSingleAddress(r);
-    if (!addr) throw new EmailError('invalid_request', `Could not parse email address: "${r}"`);
+    if (!addr) throw new ClientInputError('invalid_request', `Could not parse email address: "${r}"`);
     return addr;
   });
   return parsed;
@@ -123,7 +127,7 @@ type DraftArgs = {
 
 function toSendInput(args: DraftArgs): SendInput {
   if (args.replyAll && !args.replyToMessageId) {
-    throw new EmailError('invalid_request', 'replyAll requires replyToMessageId');
+    throw new ClientInputError('invalid_request', 'replyAll requires replyToMessageId');
   }
   const input: SendInput = {
     body: {
@@ -160,7 +164,7 @@ export function toSendRequest(args: DraftArgs & { draftId?: string }): SendInput
       'from',
     ] as const;
     if (contentKeys.some((key) => args[key] !== undefined)) {
-      throw new EmailError(
+      throw new ClientInputError(
         'invalid_request',
         'draftId cannot be combined with message content; update the draft before sending it',
       );
@@ -170,28 +174,53 @@ export function toSendRequest(args: DraftArgs & { draftId?: string }): SendInput
   return toSendInput(args);
 }
 
-function truncateBody(message: Message): Message {
-  if (!message.body) return message;
-  const body = { ...message.body };
+type BodyFormat = 'text' | 'html' | 'both' | 'none';
+
+function selectBody(
+  message: Message,
+  format: BodyFormat,
+  budget: number,
+): Message & {
+  bodyTruncation?: Record<string, { totalChars: number; nextOffset?: number }>;
+} {
+  if (!message.body || format === 'none') return { ...message, body: undefined };
+  const body: { text?: string; html?: string } = {};
+  const bodyTruncation: Record<string, { totalChars: number; nextOffset?: number }> = {};
+  let remaining = budget;
   for (const key of ['text', 'html'] as const) {
-    const value = body[key];
-    if (value && value.length > MAX_BODY_CHARS) {
-      body[key] = value.slice(0, MAX_BODY_CHARS) + `\n… [truncated ${value.length - MAX_BODY_CHARS} characters]`;
-    }
+    if (format !== 'both' && format !== key) continue;
+    const value = message.body[key];
+    if (value === undefined) continue;
+    const selected = value.slice(0, remaining);
+    body[key] = selected;
+    bodyTruncation[key] = {
+      totalChars: value.length,
+      ...(selected.length < value.length ? { nextOffset: selected.length } : {}),
+    };
+    remaining -= selected.length;
   }
-  return { ...message, body };
+  return { ...message, body, bodyTruncation };
 }
 
 function ok(data: unknown): CallToolResult {
   return {
-    content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+    structuredContent: { data },
+    content: [{ type: 'text', text: JSON.stringify({ data }, null, 2) }],
   };
 }
 
-function toolError(err: unknown): CallToolResult {
-  const payload = isEmailError(err)
-    ? { error: err.code, message: err.message, ...(err.data ? { data: err.data } : {}) }
-    : { error: 'internal', message: err instanceof Error ? err.message : String(err) };
+function deliveryResult(operation: DeliveryOperation): CallToolResult {
+  const result = ok(operation) as TelemetryCallToolResult;
+  if (operation.status === 'failed' || operation.status === 'uncertain') {
+    result.isError = true;
+    result[TELEMETRY_ERROR] = true;
+  }
+  return result;
+}
+
+function toolError(err: unknown, requestId: string): CallToolResult {
+  const safe = publicError(err, requestId);
+  const payload = { error: safe.code, message: safe.message, requestId, ...(safe.data ? { data: safe.data } : {}) };
   return { isError: true, content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }] };
 }
 
@@ -225,7 +254,7 @@ function toolFeatureProperties(tool: string, args: unknown): TelemetryProperties
     case 'modify_emails':
       return typeof input.action === 'string' ? { action: input.action } : {};
     case 'download_attachment':
-      return { destination: 'inline' };
+      return { destination: input.inline === true ? 'inline' : 'resource' };
     default:
       return {};
   }
@@ -258,10 +287,12 @@ function handleResult<A extends unknown[]>(
       });
       return result;
     } catch (err) {
+      const requestId = randomUUID();
       logFailure(options.logger, 'mcp.operation_failed', err, {
         productSurface: 'mcp',
         operation: tool,
         durationMs: performance.now() - startedAt,
+        details: { request_id: requestId },
       });
       captureOperation(options.telemetry, {
         productSurface: 'mcp',
@@ -272,7 +303,7 @@ function handleResult<A extends unknown[]>(
         transport: options.transport ?? 'unknown',
         properties: toolFeatureProperties(tool, args[0]),
       });
-      return toolError(err);
+      return toolError(err, requestId);
     } finally {
       finishActivity?.();
     }
@@ -413,9 +444,15 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
         'than echoing raw payloads, ids, or field names.',
     },
   );
+  const registerTool = ((name: string, config: Record<string, unknown>, callback: unknown) =>
+    server.registerTool(
+      name,
+      { ...config, outputSchema: outputSchemas[name as keyof typeof outputSchemas] },
+      callback as Parameters<McpServer['registerTool']>[2],
+    )) as McpServer['registerTool'];
 
   if (can('mail.read'))
-    server.registerTool(
+    registerTool(
       'list_accounts',
       {
         description: 'List connected email accounts (id, provider, email, status, capabilities).',
@@ -426,7 +463,7 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
     );
 
   if (can('mail.read'))
-    server.registerTool(
+    registerTool(
       'get_status',
       {
         description:
@@ -439,7 +476,7 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
     );
 
   if (can('mail.read'))
-    server.registerTool(
+    registerTool(
       'list_folders',
       {
         description: 'List navigable folders for an account, with roles (inbox, sent, drafts, trash, spam, starred).',
@@ -450,7 +487,7 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
     );
 
   if (can('mail.read'))
-    server.registerTool(
+    registerTool(
       'list_labels',
       {
         description: 'List Gmail user labels or Outlook categories for an account.',
@@ -461,7 +498,7 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
     );
 
   if (can('mail.read'))
-    server.registerTool(
+    registerTool(
       'list_send_as',
       {
         description: 'List sender addresses available for an account.',
@@ -476,7 +513,7 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
     );
 
   if (can('mail.read'))
-    server.registerTool(
+    registerTool(
       'list_emails',
       {
         description:
@@ -496,7 +533,7 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
 
   const { text: _text, ...searchFilterShape } = queryShape;
   if (can('mail.read'))
-    server.registerTool(
+    registerTool(
       'search_emails',
       {
         description:
@@ -517,13 +554,13 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
         ) => {
           const parsed = parseEmailSearch(args.query);
           if (!parsed.valid) {
-            throw new EmailError('invalid_request', parsed.diagnostics.map((item) => item.message).join(' '), {
+            throw new ClientInputError('invalid_request', parsed.diagnostics.map((item) => item.message).join(' '), {
               diagnostics: parsed.diagnostics,
             });
           }
           const merged = mergeEmailQueries(parsed.query, emailQuery(args));
           if (!merged.success) {
-            throw new EmailError('invalid_request', merged.diagnostics.map((item) => item.message).join(' '), {
+            throw new ClientInputError('invalid_request', merged.diagnostics.map((item) => item.message).join(' '), {
               diagnostics: merged.diagnostics,
             });
           }
@@ -544,7 +581,7 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
     ...batchSearchFilterShape
   } = searchFilterShape;
   if (can('mail.read'))
-    server.registerTool(
+    registerTool(
       'search_emails_batch',
       {
         description: 'Search up to 20 accounts with one portable query and return one result group per account.',
@@ -573,13 +610,13 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
         ) => {
           const parsed = parseEmailSearch(args.query);
           if (!parsed.valid) {
-            throw new EmailError('invalid_request', parsed.diagnostics.map((item) => item.message).join(' '), {
+            throw new ClientInputError('invalid_request', parsed.diagnostics.map((item) => item.message).join(' '), {
               diagnostics: parsed.diagnostics,
             });
           }
           const merged = mergeEmailQueries(parsed.query, emailQuery(args));
           if (!merged.success) {
-            throw new EmailError('invalid_request', merged.diagnostics.map((item) => item.message).join(' '), {
+            throw new ClientInputError('invalid_request', merged.diagnostics.map((item) => item.message).join(' '), {
               diagnostics: merged.diagnostics,
             });
           }
@@ -611,34 +648,146 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
     );
 
   if (can('mail.read'))
-    server.registerTool(
+    registerTool(
       'get_email',
       {
         description: 'Fetch one email in full: body (text and/or HTML), recipients, attachment metadata.',
-        inputSchema: { accountId: accountIdParam, messageId: idParam },
+        inputSchema: {
+          accountId: accountIdParam,
+          messageId: idParam,
+          bodyFormat: z.enum(['text', 'html', 'both', 'none']).optional(),
+        },
         annotations: { readOnlyHint: true },
       },
-      gated('get_email', 'mail.read', async (args: { accountId?: string; messageId: string }) =>
-        truncateBody(await service.getMessage(args.accountId, args.messageId)),
+      gated(
+        'get_email',
+        'mail.read',
+        async (args: { accountId?: string; messageId: string; bodyFormat?: BodyFormat }) =>
+          selectBody(
+            await service.getMessage(args.accountId, args.messageId),
+            args.bodyFormat ?? 'both',
+            MAX_BODY_CHARS,
+          ),
       ),
     );
 
   if (can('mail.read'))
-    server.registerTool(
-      'get_thread',
+    registerTool(
+      'get_email_body',
       {
-        description: 'Fetch a full conversation thread with all message bodies.',
-        inputSchema: { accountId: accountIdParam, threadId: idParam },
+        description: 'Read a bounded portion of one email body. Use nextOffset to continue.',
+        inputSchema: {
+          accountId: accountIdParam,
+          messageId: idParam,
+          format: z.enum(['text', 'html']),
+          offset: z.number().int().min(0).optional(),
+          maxChars: z.number().int().min(1).max(MAX_BODY_CHARS).optional(),
+        },
         annotations: { readOnlyHint: true },
       },
-      gated('get_thread', 'mail.read', async (args: { accountId?: string; threadId: string }) => {
-        const thread = await service.getThread(args.accountId, args.threadId);
-        return { ...thread, messages: thread.messages.map(truncateBody) };
-      }),
+      gated(
+        'get_email_body',
+        'mail.read',
+        async (args: {
+          accountId?: string;
+          messageId: string;
+          format: 'text' | 'html';
+          offset?: number;
+          maxChars?: number;
+        }) => {
+          const message = await service.getMessage(args.accountId, args.messageId);
+          const value = message.body?.[args.format] ?? '';
+          const offset = args.offset ?? 0;
+          const text = value.slice(offset, offset + (args.maxChars ?? MAX_BODY_CHARS));
+          return {
+            format: args.format,
+            text,
+            offset,
+            totalChars: value.length,
+            ...(offset + text.length < value.length ? { nextOffset: offset + text.length } : {}),
+          };
+        },
+      ),
+    );
+
+  if (can('mail.read'))
+    registerTool(
+      'get_thread',
+      {
+        description: 'Fetch a page of conversation messages with bounded body content.',
+        inputSchema: {
+          accountId: accountIdParam,
+          threadId: idParam,
+          pageSize: z.number().int().min(1).max(25).optional(),
+          pageToken: z.string().min(1).optional(),
+          bodyFormat: z.enum(['text', 'html', 'both', 'none']).optional(),
+        },
+        annotations: { readOnlyHint: true },
+      },
+      gated(
+        'get_thread',
+        'mail.read',
+        async (args: {
+          accountId?: string;
+          threadId: string;
+          pageSize?: number;
+          pageToken?: string;
+          bodyFormat?: BodyFormat;
+        }) => {
+          const thread = await service.getThread(args.accountId, args.threadId);
+          let offset = 0;
+          if (args.pageToken) {
+            try {
+              const parsed = JSON.parse(Buffer.from(args.pageToken, 'base64url').toString('utf8')) as {
+                threadId: string;
+                offset: number;
+              };
+              if (parsed.threadId !== args.threadId || !Number.isInteger(parsed.offset) || parsed.offset < 0)
+                throw new Error('token');
+              offset = parsed.offset;
+            } catch {
+              throw new ClientInputError('invalid_request', 'Invalid thread page token.');
+            }
+          }
+          const pageSize = args.pageSize ?? 10;
+          let budget = MAX_BODY_CHARS;
+          const messages = thread.messages.slice(offset, offset + pageSize).map((message) => {
+            const selected = selectBody(message, args.bodyFormat ?? 'both', budget);
+            budget -= (selected.body?.text?.length ?? 0) + (selected.body?.html?.length ?? 0);
+            return selected;
+          });
+          const nextOffset = offset + messages.length;
+          return {
+            id: thread.id,
+            subject: thread.subject,
+            messages,
+            ...(nextOffset < thread.messages.length
+              ? {
+                  nextPageToken: Buffer.from(JSON.stringify({ threadId: args.threadId, offset: nextOffset })).toString(
+                    'base64url',
+                  ),
+                }
+              : {}),
+          };
+        },
+      ),
     );
 
   if (can('mail.drafts'))
-    server.registerTool(
+    registerTool(
+      'get_draft',
+      {
+        description: 'Read an existing draft by its draft ID.',
+        inputSchema: { accountId: accountIdParam, draftId: idParam },
+        annotations: { readOnlyHint: true },
+      },
+      gated('get_draft', 'mail.drafts', async (args: { accountId?: string; draftId: string }) =>
+        service.getDraft(args.accountId, args.draftId),
+      ),
+    );
+
+  if (can('mail.drafts'))
+    registerTool(
       'create_draft',
       {
         description:
@@ -652,7 +801,7 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
     );
 
   if (can('mail.drafts'))
-    server.registerTool(
+    registerTool(
       'update_draft',
       {
         description: 'Replace the content of an existing draft (full replacement, not a patch).',
@@ -665,7 +814,7 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
     );
 
   if (can('mail.drafts'))
-    server.registerTool(
+    registerTool(
       'delete_draft',
       {
         description: 'Delete a draft.',
@@ -679,7 +828,22 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
     );
 
   if (can('mail.send'))
-    server.registerTool(
+    registerTool(
+      'preview_send',
+      {
+        description: 'Show the resolved sender, recipients, subject, and attachments without sending.',
+        inputSchema: { draftId: idParam.optional(), ...draftShape },
+        annotations: { readOnlyHint: true },
+      },
+      gated('preview_send', 'mail.send', async (args: DraftArgs & { draftId?: string }) => {
+        if (args.draftId) requireCapabilities(['mail.drafts']);
+        if (args.replyToMessageId) requireCapabilities(['mail.read']);
+        return service.previewSend(args.accountId, toSendRequest(args));
+      }),
+    );
+
+  if (can('mail.send'))
+    registerTool(
       'send_email',
       {
         description:
@@ -689,6 +853,10 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
           'where recipients, subject, and threading are derived from the original. Confirm with the user when ' +
           'intent is ambiguous. Add sendAt to any mode to schedule instead of sending now.',
         inputSchema: {
+          idempotencyKey: z
+            .string()
+            .regex(/^[\x21-\x7e]{1,255}$/)
+            .describe('Reuse this key when retrying the same delivery'),
           draftId: idParam.optional().describe('Send this existing draft'),
           ...draftShape,
           sendAt: z
@@ -704,15 +872,17 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
         },
         annotations: { destructiveHint: true },
       },
-      handle(
+      handleResult(
         'send_email',
-        async (args: DraftArgs & { draftId?: string; sendAt?: string }) => {
+        async (args: DraftArgs & { draftId?: string; sendAt?: string; idempotencyKey: string }) => {
           requireCapabilities(['mail.send']);
           if (args.replyToMessageId !== undefined) requireCapabilities(['mail.read']);
-          const { sendAt, ...sendArgs } = args;
-          return sendAt !== undefined
-            ? service.scheduleSend(args.accountId, toSendRequest(sendArgs), sendAt)
-            : service.send(args.accountId, toSendRequest(sendArgs));
+          const { sendAt, idempotencyKey, ...sendArgs } = args;
+          return deliveryResult(
+            await (sendAt !== undefined
+              ? service.scheduleDelivery(args.accountId, toSendRequest(sendArgs), sendAt, idempotencyKey)
+              : service.deliver(args.accountId, toSendRequest(sendArgs), idempotencyKey)),
+          );
         },
         () => service.enforceQuota(),
         options,
@@ -720,7 +890,7 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
     );
 
   if (can('mail.read'))
-    server.registerTool(
+    registerTool(
       'list_scheduled_emails',
       {
         description:
@@ -735,8 +905,21 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
       ),
     );
 
+  if (can('mail.send'))
+    registerTool(
+      'get_delivery_operation',
+      {
+        description: 'Check whether a send or forward succeeded, failed, or has an uncertain outcome.',
+        inputSchema: { accountId: idParam, operationId: idParam },
+        annotations: { readOnlyHint: true },
+      },
+      allowed('get_delivery_operation', 'mail.send', async (args: { accountId: string; operationId: string }) =>
+        service.getDelivery(args.accountId, args.operationId),
+      ),
+    );
+
   if (can('mail.drafts'))
-    server.registerTool(
+    registerTool(
       'cancel_scheduled_email',
       {
         description:
@@ -750,13 +933,17 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
     );
 
   if (canAll(['mail.send', 'mail.read']))
-    server.registerTool(
+    registerTool(
       'forward_email',
       {
         description:
           'Forward an email to new recipients: quoted original body, "Fwd:" subject, original attachments included ' +
           'unless includeAttachments=false. Optional comment appears above the forwarded content.',
         inputSchema: {
+          idempotencyKey: z
+            .string()
+            .regex(/^[\x21-\x7e]{1,255}$/)
+            .describe('Reuse this key when retrying the same forward'),
           accountId: accountIdParam,
           messageId: idParam,
           from: z.string().email().optional().describe('Connected address or an available send-as address'),
@@ -767,7 +954,7 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
         },
         annotations: { destructiveHint: true },
       },
-      handle(
+      handleResult(
         'forward_email',
         async (args: {
           accountId?: string;
@@ -777,18 +964,25 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
           comment?: string;
           includeAttachments?: boolean;
           from?: string;
+          idempotencyKey: string;
         }) => {
           requireCapabilities(['mail.send', 'mail.read']);
           const to = parseAddresses(args.to) ?? [];
           const cc = parseAddresses(args.cc);
-          return service.forward(args.accountId, {
-            messageId: args.messageId,
-            to,
-            ...(cc?.length ? { cc } : {}),
-            ...(args.comment !== undefined ? { comment: args.comment } : {}),
-            ...(args.includeAttachments !== undefined ? { includeAttachments: args.includeAttachments } : {}),
-            ...(args.from !== undefined ? { from: args.from } : {}),
-          });
+          return deliveryResult(
+            await service.deliverForward(
+              args.accountId,
+              {
+                messageId: args.messageId,
+                to,
+                ...(cc?.length ? { cc } : {}),
+                ...(args.comment !== undefined ? { comment: args.comment } : {}),
+                ...(args.includeAttachments !== undefined ? { includeAttachments: args.includeAttachments } : {}),
+                ...(args.from !== undefined ? { from: args.from } : {}),
+              },
+              args.idempotencyKey,
+            ),
+          );
         },
         () => service.enforceQuota(),
         options,
@@ -800,14 +994,17 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
   );
   if (modifyActions.length) {
     const allowedModifyActions = new Set<ModifyActionName>(modifyActions);
-    server.registerTool(
+    registerTool(
       'modify_emails',
       {
         description:
           'Batch-modify emails using the actions allowed for this connection. Moving requires folder; labels require labels.',
         inputSchema: {
           accountId: accountIdParam,
-          messageIds: z.array(idParam).min(1),
+          messageIds: z
+            .array(idParam)
+            .min(1)
+            .refine((ids) => new Set(ids).size <= 100, 'At most 100 distinct message IDs are allowed.'),
           action: z.enum(modifyActions as [ModifyActionName, ...ModifyActionName[]]),
           folder: z.string().min(1).optional().describe('Target folder for action=move'),
           labels: z.array(z.string().min(1)).max(100).optional().describe('Labels for addLabels/removeLabels'),
@@ -816,7 +1013,7 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
           destructiveHint: canAny(['mail.trash', 'mail.delete']),
         },
       },
-      handle(
+      handleResult(
         'modify_emails',
         async (args: {
           accountId?: string;
@@ -831,21 +1028,29 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
           requireCapabilities([MODIFY_CAPABILITIES[args.action]]);
           let action: ModifyAction;
           if (args.action === 'move') {
-            if (!args.folder) throw new EmailError('invalid_request', 'action=move requires "folder"');
+            if (!args.folder) throw new ClientInputError('invalid_request', 'action=move requires "folder"');
             if (PROTECTED_MOVE_DESTINATIONS.has(args.folder.trim().toLowerCase())) {
-              throw new EmailError('invalid_request', 'Use the dedicated archive or trash action for this folder');
+              throw new ClientInputError(
+                'invalid_request',
+                'Use the dedicated archive or trash action for this folder',
+              );
             }
             action = { move: args.folder };
           } else if (args.action === 'addLabels' || args.action === 'removeLabels') {
             if (!args.labels?.length) {
-              throw new EmailError('invalid_request', `action=${args.action} requires "labels"`);
+              throw new ClientInputError('invalid_request', `action=${args.action} requires "labels"`);
             }
             action = args.action === 'addLabels' ? { addLabels: args.labels } : { removeLabels: args.labels };
           } else {
             action = args.action;
           }
-          await service.modify(args.accountId, args.messageIds, action);
-          return { modified: args.messageIds.length, action: args.action };
+          const result = await service.modify(args.accountId, args.messageIds, action);
+          const response = ok({ ...result, action: args.action }) as TelemetryCallToolResult;
+          if (result.failed.length || result.uncertainIds.length) {
+            response.isError = true;
+            response[TELEMETRY_ERROR] = true;
+          }
+          return response;
         },
         () => service.enforceQuota(),
         options,
@@ -854,21 +1059,22 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
   }
 
   if (can('mail.read'))
-    server.registerTool(
+    registerTool(
       'download_attachment',
       {
-        description: 'Download an email attachment as an embedded MCP resource.',
+        description: 'Get attachment metadata and a fetchable resource link. Set inline to embed the bytes.',
         inputSchema: {
-          accountId: accountIdParam,
+          accountId: idParam,
           messageId: idParam,
           attachmentId: attachmentIdParam,
+          inline: z.boolean().optional(),
         },
         annotations: { readOnlyHint: true, destructiveHint: false },
       },
       gatedResult(
         'download_attachment',
         'mail.read',
-        async (args: { accountId?: string; messageId: string; attachmentId: string }) => {
+        async (args: { accountId: string; messageId: string; attachmentId: string; inline?: boolean }) => {
           const { meta, content } = await service.getAttachment(
             args.accountId,
             args.messageId,
@@ -876,33 +1082,62 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
             maxAttachmentBytes,
           );
           if (content.length > maxAttachmentBytes) {
-            throw new EmailError('invalid_request', 'Attachment is too large to return through MCP.', {
+            throw new ClientInputError('invalid_request', 'Attachment is too large to return through MCP.', {
               sizeBytes: content.length,
               maxBytes: maxAttachmentBytes,
             });
           }
           const uri = [
             'fluxmail://attachment',
-            encodeURIComponent(args.accountId ?? 'default'),
+            encodeURIComponent(args.accountId),
             encodeURIComponent(args.messageId),
             encodeURIComponent(args.attachmentId),
             encodeURIComponent(meta.filename),
           ].join('/');
           return {
+            structuredContent: { data: meta },
             content: [
-              { type: 'text', text: JSON.stringify(meta, null, 2) },
-              {
-                type: 'resource',
-                resource: {
-                  uri,
-                  mimeType: meta.mimeType || 'application/octet-stream',
-                  blob: content.toString('base64'),
-                },
-              },
+              { type: 'text', text: JSON.stringify({ data: meta }, null, 2) },
+              { type: 'resource_link', name: meta.filename, uri, mimeType: meta.mimeType },
+              ...(args.inline
+                ? [
+                    {
+                      type: 'resource' as const,
+                      resource: {
+                        uri,
+                        mimeType: meta.mimeType || 'application/octet-stream',
+                        blob: content.toString('base64'),
+                      },
+                    },
+                  ]
+                : []),
             ],
           };
         },
       ),
+    );
+
+  if (can('mail.read'))
+    server.registerResource(
+      'attachment',
+      new ResourceTemplate('fluxmail://attachment/{accountId}/{messageId}/{attachmentId}/{filename}', {
+        list: undefined,
+      }),
+      { description: 'Read one attachment from an authorized mailbox.' },
+      async (uri, variables) => {
+        requireCapabilities(['mail.read']);
+        service.enforceQuota();
+        const { meta, content } = await service.getAttachment(
+          decodeURIComponent(String(variables.accountId)),
+          decodeURIComponent(String(variables.messageId)),
+          decodeURIComponent(String(variables.attachmentId)),
+          maxAttachmentBytes,
+        );
+        if (content.length > maxAttachmentBytes) {
+          throw new ClientInputError('invalid_request', 'Attachment is too large to return through MCP.');
+        }
+        return { contents: [{ uri: uri.href, mimeType: meta.mimeType, blob: content.toString('base64') }] };
+      },
     );
 
   return server;

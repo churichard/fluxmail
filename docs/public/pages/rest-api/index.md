@@ -115,10 +115,13 @@ If a reverse proxy terminates TLS and connects to Fluxmail from a non-loopback a
 | [Search multiple accounts](/docs/rest-api/search-messages) | Search up to 20 email accounts with one portable query. |
 | [Get a message](/docs/rest-api/get-message) | Get one message by its provider ID. |
 | [Get a thread](/docs/rest-api/get-thread) | Get a complete email thread by its provider ID. |
-| [Create a draft](/docs/rest-api/create-draft) | Create a new draft or a reply draft in an email account. |
+| [Get a draft](/docs/rest-api/get-draft) | Get a draft |
 | [Replace a draft](/docs/rest-api/update-draft) | Replace the full content of an existing draft. |
 | [Delete a draft](/docs/rest-api/delete-draft) | Delete an existing draft from an email account. |
+| [Create a draft](/docs/rest-api/create-draft) | Create a new draft or a reply draft in an email account. |
+| [Preview a send](/docs/rest-api/preview-send) | Preview a send |
 | [Send or schedule a message](/docs/rest-api/send-message) | Send a message now or schedule it for a specified time. |
+| [Get a delivery outcome](/docs/rest-api/get-delivery-operation) | Get a delivery outcome |
 | [List scheduled sends](/docs/rest-api/list-scheduled-sends) | List scheduled messages in an email account. |
 | [Cancel a scheduled send](/docs/rest-api/cancel-scheduled-send) | Cancel a pending scheduled send and keep its provider draft. |
 | [Forward a message](/docs/rest-api/forward-message) | Forward a message to one or more recipients. |

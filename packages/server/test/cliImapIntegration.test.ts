@@ -78,7 +78,9 @@ describe.skipIf(!host || !existsSync(cliPath)).sequential('IMAP CLI integration'
 
     const listed = run(['accounts', 'list']);
     expect(listed.status, listed.stderr).toBe(0);
-    expect(listed.stdout).toContain(`${accountId}  imap  cli@example.com  [active]`);
+    expect(JSON.parse(listed.stdout).data).toContainEqual(
+      expect.objectContaining({ id: accountId, provider: 'imap', email: 'cli@example.com', status: 'active' }),
+    );
 
     const configured = run(['accounts', 'configure', accountId!, '--sent-folder', 'Sent']);
     expect(configured.status, configured.stderr).toBe(0);
@@ -89,17 +91,29 @@ describe.skipIf(!host || !existsSync(cliPath)).sequential('IMAP CLI integration'
     const reauthorized = run(['accounts', 'add', 'imap', '--reauthorize', accountId!, ...connectionArgs]);
     expect(reauthorized.status, reauthorized.stderr).toBe(0);
     expect(reauthorized.stdout).toContain(`account id: ${accountId}`);
-    expect(run(['accounts', 'list']).stdout.match(/cli@example.com/g)).toHaveLength(1);
+    const accounts = JSON.parse(run(['accounts', 'list']).stdout).data as Array<{ email: string }>;
+    expect(accounts.filter((account) => account.email === 'cli@example.com')).toHaveLength(1);
   }, 30_000);
 
   it('rejects nonexistent folder mappings and literal password flags', () => {
     const listed = run(['accounts', 'list']);
-    const accountId = listed.stdout.match(/^(acct_\S+)\s+imap\s+cli@example\.com/m)?.[1];
+    expect(listed.status, listed.stderr).toBe(0);
+    const accounts = JSON.parse(listed.stdout).data as Array<{ id: string; provider: string; email: string }>;
+    const accountId = accounts.find(
+      (account) => account.provider === 'imap' && account.email === 'cli@example.com',
+    )?.id;
     expect(accountId).toBeTruthy();
 
     const missing = run(['accounts', 'configure', accountId!, '--trash-folder', 'Does Not Exist']);
-    expect(missing.status).toBe(1);
-    expect(missing.stderr).toMatch(/trash folder override "Does Not Exist" does not match a selectable mailbox/);
+    expect(missing.status).toBe(2);
+    const structuredError = missing.stderr.split('\n').find((line) => line.startsWith('{"error":'));
+    expect(structuredError).toBeDefined();
+    expect(JSON.parse(structuredError!)).toMatchObject({
+      error: {
+        code: 'invalid_request',
+        message: expect.stringContaining('trash folder override "Does Not Exist" does not match a selectable mailbox'),
+      },
+    });
 
     const literal = run([
       'accounts',

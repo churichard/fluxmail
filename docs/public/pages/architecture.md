@@ -36,4 +36,4 @@ Authentication and management operations append rows to `admin_audit_events`. Da
 
 Attachments are returned as embedded MCP resources or raw REST responses. Attachment IDs are opaque strings and can contain punctuation such as `part:1.2`. Every provider enforces the configured decoded-size limit before returning the file. The default limit is 10 MB, and the hard maximum is 25 MB.
 
-REST send, scheduled-send, and forward requests use idempotency records in SQLite. Each record is scoped to the authenticated session or API key and retained for 24 hours. This prevents a client retry from repeating the provider call during that period.
+Sends and forwards through REST, MCP, and CLI use delivery operations in SQLite. Each idempotency key is scoped to the authenticated credential and has no automatic expiry. Reusing a key with the same request returns the saved operation without sending again. If an operation is uncertain, check the Sent folder or recipient before creating another request. REST keys created before the delivery-operation upgrade keep their original 24 hour lifetime.

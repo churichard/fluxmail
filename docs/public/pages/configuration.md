@@ -128,6 +128,10 @@ HTTP MCP requests require an API key. REST requests accept an active member sess
 
 Fluxmail sends anonymous operation events to its PostHog project by default. Events record the CLI command, MCP tool, or REST operation, plus the outcome, duration, selected feature modes, a random installation ID, and basic runtime information.
 
+For MCP attachment downloads, telemetry records whether the tool returned a resource link or inline content. It records the same choice if the download fails, without sending the attachment name or content.
+
+Delivery status, send preview, draft retrieval, body continuation, and bulk actions use the same event format. Fluxmail does not send delivery IDs, message IDs, recipients, or message content in these events.
+
 After Fluxmail connects or removes a mailbox, telemetry records its provider and the installation's mailbox totals. OAuth connection events also record whether the callback used your public URL or the local port, and whether Google used Fluxmail's built-in application or one you registered. Local connections record whether the redirect reached Fluxmail directly, you pasted the callback URL, or the command timed out. The pasted URL is never sent. Connection events report whether they replaced credentials for an existing mailbox.
 
 Fluxmail never sends command arguments, email or mailbox data, identifiers, search text, file paths, credentials, configuration values, request payloads, provider responses, stack traces, or error text. PostHog person profiles and GeoIP lookup are disabled.

@@ -333,7 +333,11 @@ export class OutlookProvider implements EmailProvider {
           // Some Exchange gateways return an HTML or empty error response.
         }
         const retryAfter = response.headers.get('retry-after');
-        const retryAfterMs = retryAfter ? Math.max(0, Number(retryAfter) * 1_000) : undefined;
+        const parsedRetryAfterMs = retryAfter ? Number(retryAfter) * 1_000 : undefined;
+        const retryAfterMs =
+          parsedRetryAfterMs !== undefined && Number.isFinite(parsedRetryAfterMs) && parsedRetryAfterMs >= 0
+            ? parsedRetryAfterMs
+            : undefined;
         const error = new GraphHttpError(
           response.status,
           payload.error?.code,

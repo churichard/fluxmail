@@ -40,3 +40,5 @@ fluxmail emails search <query> [options]
 | `--page-token <token>` | No | Continue from a previous response | None |
 | `--include-snippet <boolean>` | No | Request or suppress message previews | None |
 | `--include-search-context <boolean>` | No | Include a body excerpt around the search match | None |
+| `--all` | No | Fetch every page up to --max-results | None |
+| `--max-results <count>` | No | Maximum results with --all (default 1000, maximum 10000) | None |

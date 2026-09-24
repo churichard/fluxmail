@@ -144,7 +144,9 @@ describe('OpenAPI documentation generation', () => {
     const page = reference.pages.get('create-item.md');
     expect(page?.match(/Reuse this key for the same request\./g)).toHaveLength(1);
     expect(page).toContain('## Safe retries');
-    expect(page).toContain('do not create a new key');
+    expect(page).toContain('no automatic expiry');
+    expect(page).toContain('returns the stored delivery operation');
+    expect(page).toContain('check the Sent folder or recipient');
     expect(page).toContain('### 200 response');
     expect(page).toContain('"title": "CreatedItem"');
     expect(page).toContain('### 202 response');
