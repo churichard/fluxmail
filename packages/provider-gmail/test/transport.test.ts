@@ -1,45 +1,36 @@
+import { Agent as HttpsAgent } from 'node:https';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { HttpsProxyAgent } from 'https-proxy-agent';
-import { googleRequestAgent } from '../src/transport.js';
+import { googleTransporterOptions } from '../src/transport.js';
 
-const GMAIL_URL = new URL('https://gmail.googleapis.com/gmail/v1/users/me/messages');
-
-describe('googleRequestAgent', () => {
+describe('googleTransporterOptions', () => {
   beforeEach(() => {
-    for (const name of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'NO_PROXY', 'no_proxy']) {
+    for (const name of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy']) {
       vi.stubEnv(name, '');
     }
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
   });
 
-  it('leaves requests on the default agent without a proxy', () => {
-    expect(googleRequestAgent(GMAIL_URL)).toBeUndefined();
+  it('leaves proxy handling to gaxios without HTTPS_PROXY', () => {
+    expect(googleTransporterOptions()).toEqual({});
+    vi.stubEnv('HTTP_PROXY', 'http://proxy.test:3128');
+    expect(googleTransporterOptions()).toEqual({});
   });
 
-  it('reuses one keep-alive agent for every request through the same proxy', () => {
+  it('shares one keep-alive agent across clients behind an HTTPS proxy', () => {
     vi.stubEnv('HTTPS_PROXY', 'http://proxy.test:3128');
-    const first = googleRequestAgent(GMAIL_URL);
-    const second = googleRequestAgent(new URL('https://oauth2.googleapis.com/token'));
-    expect(first).toBeInstanceOf(HttpsProxyAgent);
+    const first = googleTransporterOptions().agent;
+    expect(first).toBeInstanceOf(HttpsAgent);
     expect(first?.keepAlive).toBe(true);
-    expect(second).toBe(first);
+    expect(googleTransporterOptions().agent).toBe(first);
   });
 
-  it('falls back to HTTP_PROXY', () => {
-    vi.stubEnv('http_proxy', 'http://fallback.test:8080');
-    const agent = googleRequestAgent(GMAIL_URL) as HttpsProxyAgent<string> | undefined;
-    expect(agent?.proxy.href).toBe('http://fallback.test:8080/');
+  it('leaves proxy handling to gaxios on Node 20', () => {
+    vi.stubEnv('https_proxy', 'http://proxy.test:3128');
+    vi.spyOn(process, 'versions', 'get').mockReturnValue({ ...process.versions, node: '20.20.0' });
+    expect(googleTransporterOptions()).toEqual({});
   });
-
-  it.each(['*', 'gmail.googleapis.com', '.googleapis.com', '*.googleapis.com', 'https://gmail.googleapis.com'])(
-    'skips the proxy when NO_PROXY contains %s',
-    (rule) => {
-      vi.stubEnv('HTTPS_PROXY', 'http://proxy.test:3128');
-      vi.stubEnv('NO_PROXY', `localhost, ${rule}`);
-      expect(googleRequestAgent(GMAIL_URL)).toBeUndefined();
-    },
-  );
 });

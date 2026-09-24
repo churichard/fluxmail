@@ -1,46 +1,21 @@
-import type { Agent } from 'node:http';
-import { HttpsProxyAgent } from 'https-proxy-agent';
+import { Agent as HttpsAgent, type AgentOptions } from 'node:https';
 
-const proxyAgents = new Map<string, HttpsProxyAgent<string>>();
-
-function proxyUrl(): string | undefined {
-  return process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy;
-}
-
-/** Follows gaxios's NO_PROXY matching, plus the common `*` rule that bypasses the proxy for every host. */
-function bypassesProxy(url: URL): boolean {
-  const rules = (process.env.NO_PROXY ?? process.env.no_proxy)?.split(',') ?? [];
-  return rules.some((raw) => {
-    const rule = raw.trim();
-    if (rule === '*') return true;
-    if (rule.startsWith('*.') || rule.startsWith('.')) return url.hostname.endsWith(rule.replace(/^\*\./, '.'));
-    return rule === url.origin || rule === url.hostname || rule === url.href;
-  });
-}
+let proxyAgent: HttpsAgent | undefined;
 
 /**
- * HTTP agent for Google API and OAuth requests.
+ * Transport options for google-auth-library clients.
  *
  * gaxios builds its HTTPS proxy agent without keep-alive, so behind a proxy
- * every request opens a new CONNECT tunnel and TLS session. On slow egress
- * paths that turns one search into several full connection setups. Reuse a
- * keep-alive proxy agent instead. Without a proxy, return undefined so Node's
- * default keep-alive agent handles the request.
+ * every request opens a new CONNECT tunnel and TLS session. Node 22 and later
+ * can tunnel through the proxy from a keep-alive agent, which reuses tunnels and
+ * applies NO_PROXY itself. Any agent passed to gaxios turns off its own proxy
+ * handling, so return no agent when Node would not proxy the request: without
+ * HTTPS_PROXY, and on Node 20, which ignores proxyEnv.
  */
-export function googleRequestAgent(url: URL): Agent | undefined {
-  const proxy = proxyUrl();
-  if (!proxy || bypassesProxy(url)) return undefined;
-  let agent = proxyAgents.get(proxy);
-  if (!agent) {
-    agent = new HttpsProxyAgent(proxy, { keepAlive: true });
-    proxyAgents.set(proxy, agent);
-  }
-  return agent;
+export function googleTransporterOptions(): { agent?: HttpsAgent } {
+  if (!(process.env.HTTPS_PROXY || process.env.https_proxy)) return {};
+  if (Number(process.versions.node.split('.')[0]) < 22) return {};
+  // @types/node 22 does not declare proxyEnv yet.
+  proxyAgent ??= new HttpsAgent({ keepAlive: true, proxyEnv: process.env } as AgentOptions);
+  return { agent: proxyAgent };
 }
-
-/** Options for google-auth-library clients so their requests use {@link googleRequestAgent}. */
-export const googleTransporterOptions = {
-  // gaxios types the function form as always returning an agent; node-fetch
-  // falls back to Node's default agent when it returns undefined.
-  agent: googleRequestAgent as (url: URL) => Agent,
-};

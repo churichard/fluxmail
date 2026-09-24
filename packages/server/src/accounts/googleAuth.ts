@@ -51,7 +51,7 @@ export function createOAuthClient(
   oauthClient: StoredGoogleOAuthApp = requireGoogleConfig(config),
 ): OAuth2Client {
   const { clientId, clientSecret } = oauthClient;
-  return new OAuth2Client({ clientId, clientSecret, redirectUri, transporterOptions: googleTransporterOptions });
+  return new OAuth2Client({ clientId, clientSecret, redirectUri, transporterOptions: googleTransporterOptions() });
 }
 
 export function gmailScopes(

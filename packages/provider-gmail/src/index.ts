@@ -2,4 +2,4 @@ export { GmailProvider, GMAIL_CAPABILITIES, type GmailProviderOptions } from './
 export { toGmailQuery } from './query.js';
 export { parseGmailMessage, walkParts } from './parse.js';
 export { toEmailError, withRetry } from './errors.js';
-export { googleRequestAgent, googleTransporterOptions } from './transport.js';
+export { googleTransporterOptions } from './transport.js';

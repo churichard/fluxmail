@@ -325,7 +325,7 @@ export class AccountRegistry {
       );
     }
     const { clientId, clientSecret } = configuredClient;
-    const auth = new OAuth2Client({ clientId, clientSecret, transporterOptions: googleTransporterOptions });
+    const auth = new OAuth2Client({ clientId, clientSecret, transporterOptions: googleTransporterOptions() });
     auth.setCredentials(this.gmailTokens(stored));
     const provider = new GmailProvider({
       accountId,
