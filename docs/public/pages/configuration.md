@@ -1,7 +1,7 @@
 ---
 title: 'Configuration'
-description: 'Deployment configuration, encrypted instance settings, local logging, secret files, and telemetry controls.'
-updated: '2026-09-23'
+description: 'Deployment configuration, encrypted instance settings, outbound proxies, local logging, secret files, and telemetry controls.'
+updated: '2026-09-24'
 ---
 
 Fluxmail has two configuration domains. Deployment configuration controls how the process starts. Instance settings control OAuth applications and the license used by a running instance.
@@ -76,6 +76,21 @@ If the source file sets `FLUXMAIL_DATA_DIR`, that directory is the migration tar
 The command validates imported deployment values and checks the database format before writing anything. If the target database already contains encrypted values, you must provide its existing encryption key. Fluxmail will not generate a replacement key for that database. The command writes deployment settings to `config.toml`, stores OAuth applications and the license in encrypted SQLite records, and preserves the source file. If the encrypted settings step fails, Fluxmail removes only the new `config.toml` and `encryption.key` files created by that import. Run `fluxmail config show` and `fluxmail oauth status` after the import. Remove the old `config.env` after you verify the result.
 
 Docker Compose and process-manager env files still work because those tools populate the process environment before Fluxmail starts.
+
+## Outbound proxy
+
+If Gmail or Google sign-in requests need an HTTP proxy, set `HTTPS_PROXY` in the Fluxmail process environment before starting the server. Fluxmail also accepts `https_proxy`, `HTTP_PROXY`, and `http_proxy`. When several are set, it uses the first of `HTTPS_PROXY`, `https_proxy`, `HTTP_PROXY`, and `http_proxy`. Use an `http://` or `https://` proxy URL.
+
+Fluxmail keeps proxy connections open on supported Node.js versions. A Gmail search can reuse a tunnel while reading messages.
+
+To send some requests directly, list hosts in `NO_PROXY` (or `no_proxy`), separated by commas. Each entry can be:
+
+- `*`, which skips the proxy for every host
+- A hostname, such as `gmail.googleapis.com`
+- A domain suffix, such as `.googleapis.com` or `*.googleapis.com`
+- An origin, such as `https://gmail.googleapis.com`
+
+These variables apply to Gmail API and Google sign-in requests. They do not change Outlook or IMAP connections. Restart Fluxmail after changing them.
 
 ## Local logs
 
