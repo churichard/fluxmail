@@ -46,7 +46,9 @@ export function googleRequestAgent(url: URL): HttpAgent | undefined {
   const selectedProxy = proxyUrl();
   if (!selectedProxy || bypassesProxy(url)) return undefined;
   const proxy = validProxyUrl(selectedProxy);
-  const nativeProxy = supportsAgentProxyEnv();
+  // Node's proxyEnv omits SNI for HTTPS proxy connections. HttpsProxyAgent
+  // supplies the proxy hostname, which shared TLS listeners need.
+  const nativeProxy = supportsAgentProxyEnv() && proxy.startsWith('http://');
   const key = `${nativeProxy}:${url.protocol}${proxy}`;
   let agent = proxyAgents.get(key);
   if (!agent) {
@@ -71,8 +73,8 @@ export function googleRequestAgent(url: URL): HttpAgent | undefined {
  * gaxios builds its proxy agent without keep-alive, so behind a proxy every
  * request opens a new CONNECT tunnel and TLS session. Any agent passed to gaxios
  * replaces its proxy handling, so googleRequestAgent chooses the proxy using
- * gaxios's environment variable precedence. Older Node versions use
- * HttpsProxyAgent with keep-alive instead of Node's proxyEnv support.
+ * gaxios's environment variable precedence. For HTTPS proxy endpoints or Node
+ * versions without proxyEnv, HttpsProxyAgent provides a keep-alive tunnel.
  */
 export function googleTransporterOptions(): { agent: (url: URL) => HttpAgent } {
   // gaxios types the function form as always returning an agent; node-fetch

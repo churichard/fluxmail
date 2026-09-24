@@ -1,6 +1,8 @@
+import { readFileSync } from 'node:fs';
 import { Agent as HttpAgent, createServer, type Server } from 'node:http';
 import { Agent as HttpsAgent, get } from 'node:https';
 import type { AddressInfo } from 'node:net';
+import { createServer as createTlsServer } from 'node:tls';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { googleRequestAgent, googleTransporterOptions } from '../src/transport.js';
@@ -124,6 +126,46 @@ describe('Google request transport', () => {
     const agent = googleTransporterOptions().agent(GMAIL_URL);
     expect(agent).toBeInstanceOf(HttpsAgent);
     expect(agent.keepAlive).toBe(true);
+  });
+
+  it.each(['22.22.0', '24.5.0', '25.0.0'])('uses HttpsProxyAgent for HTTPS proxies on Node %s', (version) => {
+    vi.spyOn(process, 'versions', 'get').mockReturnValue({ ...process.versions, node: version });
+    vi.stubEnv('HTTPS_PROXY', 'https://proxy.test:3128');
+    const agent = googleRequestAgent(GMAIL_URL);
+    expect(agent).toBeInstanceOf(HttpsProxyAgent);
+    expect(agent?.keepAlive).toBe(true);
+    expect(googleRequestAgent(new URL('https://oauth2.googleapis.com/token'))).toBe(agent);
+  });
+
+  it('sends the proxy hostname as SNI before CONNECT', async () => {
+    vi.spyOn(process, 'versions', 'get').mockReturnValue({ ...process.versions, node: '22.22.0' });
+    const servernames: (string | false)[] = [];
+    const connects: string[] = [];
+    const cert = readFileSync(new URL('./fixtures/proxy-cert.pem', import.meta.url));
+    const proxy = createTlsServer(
+      {
+        key: readFileSync(new URL('./fixtures/proxy-key.pem', import.meta.url)),
+        cert,
+      },
+      (socket) => {
+        servernames.push(socket.servername);
+        socket.once('data', (data) => {
+          connects.push(data.toString());
+          socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+        });
+      },
+    );
+    await new Promise<void>((resolve) => proxy.listen(0, 'localhost', resolve));
+    try {
+      vi.stubEnv('HTTPS_PROXY', `https://localhost:${(proxy.address() as AddressInfo).port}`);
+      const agent = googleRequestAgent(GMAIL_URL) as HttpsProxyAgent<string>;
+      agent.connectOpts.ca = cert;
+      await request(GMAIL_URL, agent);
+      expect(servernames).toEqual(['localhost']);
+      expect(connects[0]).toMatch(/^CONNECT gmail\.googleapis\.com:443 HTTP\/1\.1\r\n/);
+    } finally {
+      proxy.close();
+    }
   });
 
   it('uses the proxy on Node 20 rather than connecting directly', async () => {
