@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EmailError, type Message, type SearchCapabilities } from '@fluxmail/core';
 import { buildForwardBody, EmailService, resolveSendAt } from '../src/service/emailService.js';
+import { DeliveryCoordinator } from '../src/service/deliveryCoordinator.js';
 import { accountSendAs, accounts, members, openDb, type FluxmailDb } from '../src/storage/db.js';
-import { createScheduledSend } from '../src/storage/scheduledSends.js';
+import { createScheduledSend, listScheduledSends } from '../src/storage/scheduledSends.js';
 import { FULL_PERMISSION_POLICY, permissionPolicyForProfile, type PermissionPolicy } from '../src/permissions.js';
 import { listConfiguredSendAs, replaceConfiguredSendAs } from '../src/storage/sendAs.js';
 
@@ -112,6 +113,154 @@ describe('EmailService.forward', () => {
         ],
       }),
     );
+  });
+});
+
+describe('EmailService bulk and content limits', () => {
+  function serviceWith(provider: Record<string, unknown>, attachmentLimit = 1024) {
+    const registry = {
+      resolveAccountId: () => 'acct_1',
+      getAccount: () => ({
+        id: 'acct_1',
+        provider: 'gmail',
+        email: 'me@example.com',
+        status: 'active',
+        capabilities: {},
+      }),
+      getProvider: () => provider,
+      markStatus: vi.fn(),
+    };
+    return new EmailService(registry as never, testDb(), undefined, undefined, attachmentLimit);
+  }
+
+  it('deduplicates IDs, continues after failures, and reports ambiguous changes', async () => {
+    let active = 0;
+    let peak = 0;
+    const modify = vi.fn(async (ids: string[]) => {
+      active++;
+      peak = Math.max(peak, active);
+      await Promise.resolve();
+      active--;
+      if (ids[0] === 'm2') throw new EmailError('not_found', 'missing');
+      if (ids[0] === 'm3') throw new EmailError('provider_unavailable', 'ambiguous');
+    });
+    const service = serviceWith({ modify });
+    const result = await service.modify('acct_1', ['m1', 'm2', 'm1', 'm3', 'm4', 'm5'], 'markRead');
+    expect(result).toEqual({
+      action: 'markRead',
+      succeededIds: ['m1', 'm4', 'm5'],
+      failed: [{ messageId: 'm2', code: 'not_found' }],
+      uncertainIds: ['m3'],
+    });
+    expect(modify).toHaveBeenCalledTimes(5);
+    expect(peak).toBeLessThanOrEqual(4);
+    await expect(
+      service.modify(
+        'acct_1',
+        Array.from({ length: 101 }, (_, index) => `m${index}`),
+        'markRead',
+      ),
+    ).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(modify).toHaveBeenCalledTimes(5);
+  });
+
+  it.each(['active', 'auth_error'] as const)(
+    'keeps account authentication status accurate after a bulk auth failure from %s',
+    async (initialStatus) => {
+      const account = {
+        id: 'acct_1',
+        provider: 'gmail',
+        email: 'me@example.com',
+        status: initialStatus as 'active' | 'auth_error',
+        capabilities: {},
+      };
+      const markStatus = vi.fn((_id: string, status: 'active' | 'auth_error') => {
+        account.status = status;
+      });
+      const service = new EmailService(
+        {
+          resolveAccountId: () => account.id,
+          getAccount: () => account,
+          getProvider: () => ({ modify: vi.fn().mockRejectedValue(new EmailError('auth_expired', 'expired')) }),
+          markStatus,
+        } as never,
+        testDb(),
+      );
+
+      const result = await service.modify(account.id, ['m1'], 'markRead');
+
+      expect(result.failed).toEqual([{ messageId: 'm1', code: 'auth_expired' }]);
+      expect(account.status).toBe('auth_error');
+      expect(markStatus).toHaveBeenLastCalledWith(account.id, 'auth_error');
+    },
+  );
+
+  it('previews reply-all recipients and subject without sending', async () => {
+    const send = vi.fn();
+    const getMessage = vi.fn().mockResolvedValue(original);
+    const service = serviceWith({ send, getMessage });
+    const preview = await service.previewSend('acct_1', {
+      replyToMessageId: 'm1',
+      replyAll: true,
+      body: { text: 'Thanks' },
+    });
+    expect(preview).toMatchObject({
+      from: 'me@example.com',
+      to: [{ email: 'ann@example.com' }],
+      cc: [{ email: 'carol@example.com' }],
+      subject: 'Re: Report',
+    });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('rejects oversized bodies and combined attachments before provider work', async () => {
+    const send = vi.fn();
+    const service = serviceWith({ send }, 4);
+    await expect(
+      service.send('acct_1', { body: { text: 'x'.repeat(1024 * 1024 + 1) }, to: [{ email: 'recipient@example.com' }] }),
+    ).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(
+      service.send('acct_1', {
+        body: { text: 'hi' },
+        attachments: [
+          { filename: 'a', mimeType: 'text/plain', content: Buffer.from('abc').toString('base64') },
+          { filename: 'b', mimeType: 'text/plain', content: Buffer.from('def').toString('base64') },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(
+      service.send('acct_1', {
+        body: { text: 'hi' },
+        attachments: Array.from({ length: 21 }, (_, index) => ({
+          filename: `a${index}`,
+          mimeType: 'text/plain',
+          content: '',
+        })),
+      }),
+    ).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(send).not.toHaveBeenCalled();
+
+    const getAttachment = vi.fn();
+    const forwardService = serviceWith(
+      {
+        getMessage: vi.fn().mockResolvedValue({
+          ...original,
+          attachments: Array.from({ length: 21 }, (_, index) => ({
+            id: `a${index}`,
+            filename: 'a',
+            mimeType: 'text/plain',
+            sizeBytes: 1,
+          })),
+        }),
+        getAttachment,
+        send,
+      },
+      1024,
+    );
+    await expect(
+      forwardService.forward('acct_1', { messageId: 'm1', to: [{ email: 'recipient@example.com' }] }),
+    ).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(getAttachment).not.toHaveBeenCalled();
   });
 });
 
@@ -1187,6 +1336,9 @@ describe('EmailService scheduling', () => {
       email: 'me@example.com',
       status: 'active',
       capabilities: {},
+      ownerMemberId: 'member_1',
+      sharedWithAll: false,
+      grantedMemberIds: [],
     };
     const registry = {
       resolveAccountId: () => 'acct_1',
@@ -1232,6 +1384,41 @@ describe('EmailService scheduling', () => {
     expect(info.scheduleId).toMatch(/^sch_/);
     expect(onScheduleChanged).toHaveBeenCalled();
     expect(service.listScheduled()).toHaveLength(1);
+  });
+
+  it('links an immediately due schedule before waking the scheduler', async () => {
+    const getDraft = vi.fn().mockResolvedValue(draftMessage);
+    const { service, db } = schedulingService({ getDraft });
+    const scoped = service.withPrincipal({
+      kind: 'api_key',
+      principalId: 'key_1',
+      keyId: 'key_1',
+      memberId: 'member_1',
+      role: 'member',
+      permissions: FULL_PERMISSION_POLICY,
+      accountIds: null,
+    });
+    const coordinator = new DeliveryCoordinator(db);
+    const wake = vi.fn(() => {
+      const schedule = listScheduledSends(db)[0]!;
+      if (!coordinator.findScheduled(schedule.accountId, schedule.id)) {
+        coordinator.queueScheduled(schedule.accountId, schedule.id, schedule.draftId);
+      }
+    });
+    service.onScheduleChanged = wake;
+
+    const operation = await scoped.scheduleDelivery(
+      'acct_1',
+      { draftId: 'draft_1' },
+      new Date(Date.now() - 1_000).toISOString(),
+      'due-now',
+    );
+
+    expect(operation).toMatchObject({ status: 'queued', scheduleId: expect.stringMatching(/^sch_/) });
+    expect(coordinator.findScheduled('acct_1', operation.scheduleId!)).toMatchObject({
+      operationId: operation.operationId,
+    });
+    expect(wake).toHaveBeenCalledOnce();
   });
 
   it('rejects recipientless content before creating a draft', async () => {

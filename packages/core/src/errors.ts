@@ -3,6 +3,7 @@ export type EmailErrorCode =
   | 'rate_limited'
   | 'not_found'
   | 'invalid_request'
+  | 'idempotency_conflict'
   | 'provider_unavailable'
   | 'entitlement_exceeded'
   | 'permission_denied'

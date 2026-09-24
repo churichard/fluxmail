@@ -20,6 +20,7 @@ Required capabilities: `mail.read`.
 | --- | --- | --- | --- |
 | `accountId` | No | `string` | Account to operate on. Optional when exactly one account is connected. Minimum length: 1. |
 | `messageId` | Yes | `string` | Minimum length: 1. |
+| `bodyFormat` | No | `text` or `html` or `both` or `none` | None |
 
 <details>
 <summary>JSON input schema</summary>
@@ -36,6 +37,15 @@ Required capabilities: `mail.read`.
     "messageId": {
       "type": "string",
       "minLength": 1
+    },
+    "bodyFormat": {
+      "type": "string",
+      "enum": [
+        "text",
+        "html",
+        "both",
+        "none"
+      ]
     }
   },
   "required": [

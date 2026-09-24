@@ -59,6 +59,9 @@ curl 'http://localhost:8977/api/v1/accounts/acct_123/scheduled-sends' \
           "scheduleId": {
             "type": "string"
           },
+          "operationId": {
+            "type": "string"
+          },
           "accountId": {
             "type": "string"
           },
@@ -75,6 +78,7 @@ curl 'http://localhost:8977/api/v1/accounts/acct_123/scheduled-sends' \
               "sending",
               "sent",
               "failed",
+              "uncertain",
               "canceled"
             ]
           },

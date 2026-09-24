@@ -1,7 +1,7 @@
 ---
 title: 'Use the CLI'
 description: 'Read and manage email, then configure the Fluxmail instance from the same command line.'
-updated: '2026-09-16'
+updated: '2026-09-23'
 ---
 
 The Fluxmail CLI can read, draft, send, schedule, and organize email. It also configures and runs the service. Mail commands call the same authenticated REST operations for local and remote instances, so permissions and mailbox access rules stay the same across CLI, MCP, and REST.
@@ -39,9 +39,12 @@ fluxmail emails search "from:ann@example.com is:unread quarterly report" --inclu
 fluxmail emails search-batch "subject:invoice is:unread" --account <first-account-id> --account <second-account-id>
 fluxmail emails get <message-id>
 fluxmail threads get <thread-id>
+fluxmail emails list --all --max-results 1000
 ```
 
 The search string uses Fluxmail's [portable search syntax](/docs/email-search). Add `--include-snippet true` to request IMAP previews, or pass `false` to suppress previews. Add `--include-search-context true` to include an excerpt around literal search text. List responses include `meta.nextPageToken` when another page is available. Pass it back with `--page-token` and the same query, page size, snippet setting, and search context setting. Check `meta.exhausted` before treating an empty page as a confirmed negative result.
+
+Use `--all` on `emails list` or `emails search` to follow every page. It stops after 1,000 messages by default. Set `--max-results` to another limit up to 10,000. Set the global `--timeout <seconds>` option when a slow mailbox needs more than the default 30 seconds per request.
 
 `emails search-batch` accepts 1 through 20 repeated `--account` options. It prints every account group and exits nonzero if any group fails. Use `--input <file|->` to send an exact batch request with per-account continuation tokens.
 
@@ -65,11 +68,14 @@ fluxmail drafts create \
   --body-file report.txt \
   --attach report.pdf
 
+fluxmail drafts get <draft-id>
+
 fluxmail emails send \
   --to ann@example.com \
   --subject "Quarterly report" \
   --body "The report is attached." \
-  --attach report.pdf
+  --attach report.pdf \
+  --idempotency-key quarterly-report-2026-09
 ```
 
 Use `--html` or `--html-file` for an HTML body. Repeat `--to`, `--cc`, `--bcc`, and `--attach` as needed. If standard input is redirected and no body option is present, Fluxmail uses standard input as the plain-text body.
@@ -77,13 +83,15 @@ Use `--html` or `--html-file` for an HTML body. Repeat `--to`, `--cc`, `--bcc`, 
 Reply, send an existing draft, schedule delivery, or forward a message:
 
 ```bash
-fluxmail emails send --reply-to <message-id> --reply-all --body "Thanks, everyone."
-fluxmail emails send --draft <draft-id>
-fluxmail emails send --to ann@example.com --body "Later" --send-at 2026-08-01T12:00:00Z
-fluxmail emails forward <message-id> --to lee@example.com --no-attachments
+fluxmail emails preview --reply-to <message-id> --reply-all --body "Thanks, everyone."
+fluxmail emails send --reply-to <message-id> --reply-all --body "Thanks, everyone." --idempotency-key reply-2026-09
+fluxmail emails send --draft <draft-id> --idempotency-key draft-2026-09
+fluxmail emails send --to ann@example.com --body "Later" --send-at 2026-10-01T12:00:00Z --idempotency-key later-2026-09
+fluxmail emails forward <message-id> --to lee@example.com --no-attachments --idempotency-key forward-2026-09
+fluxmail emails delivery-status <operation-id>
 ```
 
-Fluxmail creates an idempotency key for each send or forward command. Pass `--idempotency-key` when a script needs to retry the same delivery request.
+Every send and forward needs an idempotency key that you choose. Save the key with the request and reuse it if the command times out or you need to check the result. The response contains an `operationId`. Use `emails delivery-status` to inspect it. If the status is `uncertain`, inspect the recipient mailbox or sent folder before sending again. Reusing the key never starts a second delivery.
 
 ## Organize messages
 
@@ -97,6 +105,8 @@ fluxmail emails modify add-labels <message-id> --label Customer
 ```
 
 The available actions are `mark-read`, `mark-unread`, `star`, `unstar`, `archive`, `trash`, `untrash`, `delete`, `move`, `add-labels`, and `remove-labels`. Label actions work with Gmail labels and Outlook categories.
+
+A modify request accepts up to 100 distinct message IDs. Its result lists `succeededIds`, `failed` entries with safe error codes, and `uncertainIds`. Check uncertain messages before retrying. Other IDs continue processing when one fails.
 
 List or cancel scheduled sends:
 
@@ -120,11 +130,17 @@ Fluxmail will not replace an existing file unless you pass `--force`. Attachment
 Draft, send, forward, and modify commands accept an exact REST request body from a file or standard input:
 
 ```bash
-fluxmail emails send --input request.json
+fluxmail emails send --input request.json --idempotency-key request-2026-09
 fluxmail emails modify --input - < request.json
 ```
 
 `--input` cannot be combined with flags that build the same request body. Send and forward commands still accept `--idempotency-key` with JSON input.
+
+## Script output and exit codes
+
+The default output is a JSON envelope with `data`, plus `meta` and `warnings` when present. Mail, account list, and root status commands return their API data in `data`. Other management commands wrap their displayed lines in `data`; interactive setup and connection flows still print prompts directly. Use the root `--format table` option for a compact display or `--format ndjson` for one record per line. Errors in JSON and NDJSON mode go to stderr as JSON.
+
+The exit code is `0` for success, `2` for invalid input, `3` for partial or uncertain results, `4` for access errors, `5` for provider or network errors, and `1` for internal or uncategorized errors. Scripts should inspect the response as well as the exit code.
 
 ## Run the HTTP server
 

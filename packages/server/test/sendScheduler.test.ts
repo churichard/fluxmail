@@ -11,6 +11,7 @@ import {
   listPending,
 } from '../src/storage/scheduledSends.js';
 import { SendScheduler } from '../src/scheduler/sendScheduler.js';
+import { DeliveryCoordinator } from '../src/service/deliveryCoordinator.js';
 import type { Logger } from '../src/logging.js';
 
 function testDb(): FluxmailDb {
@@ -231,6 +232,33 @@ describe('SendScheduler', () => {
     await vi.advanceTimersByTimeAsync(31_000); // past the 30s first backoff
     expect(send).toHaveBeenCalledTimes(2);
     expect(getScheduledSend(db, row.id)).toMatchObject({ status: 'sent' });
+  });
+
+  it('retries a confirmed 429 through the durable delivery coordinator', async () => {
+    const coordinator = new DeliveryCoordinator(db);
+    const dispatch = vi
+      .fn()
+      .mockRejectedValueOnce(new EmailError('rate_limited', 'Gmail returned 429'))
+      .mockResolvedValueOnce({ id: 'sent_1', threadId: 'thread_1' });
+    scheduler = new SendScheduler(
+      db,
+      {
+        send,
+        enforceQuota,
+        deliverScheduled: (accountId, draftId, scheduleId) =>
+          coordinator.fireScheduled(accountId, draftId, scheduleId, async () => undefined, dispatch),
+      },
+      logger,
+    );
+    const row = createScheduledSend(db, { accountId: 'acct_1', draftId: 'draft_1', sendAt: Date.now() - 1_000 });
+    scheduler.start();
+    await settle();
+
+    expect(getScheduledSend(db, row.id)).toMatchObject({ status: 'pending', attempts: 1 });
+    expect(coordinator.findScheduled('acct_1', row.id)?.status).toBe('queued');
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(getScheduledSend(db, row.id)).toMatchObject({ status: 'sent', sentMessageId: 'sent_1' });
+    expect(dispatch).toHaveBeenCalledTimes(2);
   });
 
   it('does not retry a delivered message that returns a Sent-copy warning', async () => {

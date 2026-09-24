@@ -1,0 +1,48 @@
+---
+title: 'Get delivery operation'
+description: 'Check whether a send or forward succeeded, failed, or has an uncertain outcome.'
+updated: '2026-07-15'
+---
+
+<!-- This page is generated from the MCP tool definitions. Run pnpm docs:generate to update it. -->
+
+`get_delivery_operation`
+
+Check whether a send or forward succeeded, failed, or has an uncertain outcome.
+
+## Permissions
+
+Required capabilities: `mail.send`.
+
+## Inputs
+
+| Name | Required | Type | Details |
+| --- | --- | --- | --- |
+| `accountId` | Yes | `string` | Minimum length: 1. |
+| `operationId` | Yes | `string` | None |
+
+<details>
+<summary>JSON input schema</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "accountId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "operationId": {
+      "$ref": "#/properties/accountId"
+    }
+  },
+  "required": [
+    "accountId",
+    "operationId"
+  ],
+  "additionalProperties": false,
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}
+```
+
+</details>

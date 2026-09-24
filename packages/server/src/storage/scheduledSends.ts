@@ -3,7 +3,7 @@ import { and, eq, lte, or } from 'drizzle-orm';
 import { EmailError } from '@fluxmail/core';
 import { scheduledSends, type FluxmailDb } from './db.js';
 
-export type ScheduledSendStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'canceled';
+export type ScheduledSendStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'uncertain' | 'canceled';
 
 export interface ScheduledSendRow {
   id: string;
@@ -172,6 +172,13 @@ export function completeClaim(
 export function failClaim(db: FluxmailDb, id: string, token: string, error: string): void {
   db.update(scheduledSends)
     .set({ status: 'failed', lastError: error, claimToken: null, claimUntil: null })
+    .where(and(eq(scheduledSends.id, id), eq(scheduledSends.claimToken, token)))
+    .run();
+}
+
+export function uncertainClaim(db: FluxmailDb, id: string, token: string, error: string): void {
+  db.update(scheduledSends)
+    .set({ status: 'uncertain', lastError: error, claimToken: null, claimUntil: null })
     .where(and(eq(scheduledSends.id, id), eq(scheduledSends.claimToken, token)))
     .run();
 }

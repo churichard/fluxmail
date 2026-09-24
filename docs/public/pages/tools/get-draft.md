@@ -1,28 +1,25 @@
 ---
-title: 'Get thread'
-description: 'Fetch a page of conversation messages with bounded body content.'
+title: 'Get draft'
+description: 'Read an existing draft by its draft ID.'
 updated: '2026-07-15'
 ---
 
 <!-- This page is generated from the MCP tool definitions. Run pnpm docs:generate to update it. -->
 
-`get_thread`
+`get_draft`
 
-Fetch a page of conversation messages with bounded body content.
+Read an existing draft by its draft ID.
 
 ## Permissions
 
-Required capabilities: `mail.read`.
+Required capabilities: `mail.drafts`.
 
 ## Inputs
 
 | Name | Required | Type | Details |
 | --- | --- | --- | --- |
 | `accountId` | No | `string` | Account to operate on. Optional when exactly one account is connected. Minimum length: 1. |
-| `threadId` | Yes | `string` | Minimum length: 1. |
-| `pageSize` | No | `integer` | Minimum: 1. Maximum: 25. |
-| `pageToken` | No | `string` | Minimum length: 1. |
-| `bodyFormat` | No | `text` or `html` or `both` or `none` | None |
+| `draftId` | Yes | `string` | Minimum length: 1. |
 
 <details>
 <summary>JSON input schema</summary>
@@ -36,31 +33,13 @@ Required capabilities: `mail.read`.
       "minLength": 1,
       "description": "Account to operate on. Optional when exactly one account is connected."
     },
-    "threadId": {
+    "draftId": {
       "type": "string",
       "minLength": 1
-    },
-    "pageSize": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 25
-    },
-    "pageToken": {
-      "type": "string",
-      "minLength": 1
-    },
-    "bodyFormat": {
-      "type": "string",
-      "enum": [
-        "text",
-        "html",
-        "both",
-        "none"
-      ]
     }
   },
   "required": [
-    "threadId"
+    "draftId"
   ],
   "additionalProperties": false,
   "$schema": "http://json-schema.org/draft-07/schema#"

@@ -123,29 +123,46 @@ Content type: `application/json`
     "data": {
       "type": "object",
       "properties": {
-        "modified": {
-          "type": "integer"
-        },
         "action": {
-          "type": "string",
-          "enum": [
-            "markRead",
-            "markUnread",
-            "star",
-            "unstar",
-            "archive",
-            "trash",
-            "untrash",
-            "delete",
-            "move",
-            "addLabels",
-            "removeLabels"
-          ]
+          "type": "string"
+        },
+        "succeededIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "failed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "messageId": {
+                "type": "string"
+              },
+              "code": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "messageId",
+              "code"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "uncertainIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [
-        "modified",
-        "action"
+        "action",
+        "succeededIds",
+        "failed",
+        "uncertainIds"
       ],
       "additionalProperties": false
     },

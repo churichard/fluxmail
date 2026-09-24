@@ -7,6 +7,7 @@ import {
   isPortableFolderRole,
   normalizeEmailQuery,
   parseSingleAddress,
+  replySubject,
   supportsPortableEmailQuery,
   type Account,
   type AttachmentInput,
@@ -45,6 +46,9 @@ import {
   type ScheduledSendStatus,
 } from '../storage/scheduledSends.js';
 import { SearchCursorCodec } from './searchCursor.js';
+import { DeliveryCoordinator, isDefiniteDeliveryFailure, type DeliveryOperation } from './deliveryCoordinator.js';
+import { ClientInputError } from './publicErrors.js';
+import { DEFAULT_MAX_ATTACHMENT_BYTES } from '../config.js';
 import { listConfiguredSendAs, replaceConfiguredSendAs, type ConfiguredSendAsInput } from '../storage/sendAs.js';
 
 export interface SendInput extends DraftInput {
@@ -80,6 +84,7 @@ export interface ServiceStatus {
 
 export interface ScheduledSendInfo {
   scheduleId: string;
+  operationId?: string;
   accountId: string;
   draftId: string;
   /** ISO 8601 UTC. */
@@ -122,6 +127,25 @@ export interface BatchSearchGroup {
 export interface BatchSearchResult {
   groups: BatchSearchGroup[];
   exhausted: boolean;
+}
+
+export interface ModifyResult {
+  action: ModifyAction;
+  succeededIds: string[];
+  failed: Array<{ messageId: string; code: string }>;
+  uncertainIds: string[];
+}
+
+export interface SendPreview {
+  accountId: string;
+  from: string;
+  to: EmailAddress[];
+  cc: EmailAddress[];
+  bcc: EmailAddress[];
+  subject: string;
+  attachments: Array<{ filename: string; mimeType: string; sizeBytes: number }>;
+  bodyTextChars: number;
+  bodyHtmlChars: number;
 }
 
 const SCHEDULE_GRACE_MS = 60_000;
@@ -193,13 +217,13 @@ export function resolveSendAt(sendAtIso: string, now = Date.now()): number {
   // Require an ISO 8601 shape: Date.parse alone is lenient enough to accept junk.
   const sendAt = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(sendAtIso) ? Date.parse(sendAtIso) : NaN;
   if (Number.isNaN(sendAt)) {
-    throw new EmailError('invalid_request', `Could not parse sendAt: "${sendAtIso}" (expected ISO 8601)`);
+    throw new ClientInputError('invalid_request', `Could not parse sendAt: "${sendAtIso}" (expected ISO 8601)`);
   }
   if (sendAt < now - SCHEDULE_GRACE_MS) {
-    throw new EmailError('invalid_request', 'sendAt is in the past; leave it out to send now');
+    throw new ClientInputError('invalid_request', 'sendAt is in the past; leave it out to send now');
   }
   if (sendAt > now + SCHEDULE_MAX_HORIZON_MS) {
-    throw new EmailError('invalid_request', 'sendAt is more than a year away');
+    throw new ClientInputError('invalid_request', 'sendAt is more than a year away');
   }
   return sendAt;
 }
@@ -237,6 +261,7 @@ export class EmailService {
     private readonly db: FluxmailDb,
     private readonly principal?: Principal,
     cursorSecret?: Buffer,
+    private readonly maxAttachmentBytes = DEFAULT_MAX_ATTACHMENT_BYTES,
   ) {
     this.cursorSecret = cursorSecret ?? randomBytes(32);
     this.cursorCodec = new SearchCursorCodec(this.cursorSecret);
@@ -247,7 +272,7 @@ export class EmailService {
    * allowlist. Internal background workers use the default service instead.
    */
   withPrincipal(principal: Principal): EmailService {
-    const scoped = new EmailService(this.registry, this.db, principal, this.cursorSecret);
+    const scoped = new EmailService(this.registry, this.db, principal, this.cursorSecret, this.maxAttachmentBytes);
     scoped.onScheduleChanged = () => this.onScheduleChanged();
     return scoped;
   }
@@ -288,10 +313,10 @@ export class EmailService {
     if (this.isInternal()) return this.registry.resolveAccountId();
     const accessible = this.accessibleAccounts();
     if (accessible.length === 0) {
-      throw new EmailError('invalid_request', 'No email accounts are available for this member.');
+      throw new ClientInputError('invalid_request', 'No email accounts are available for this member.');
     }
     if (accessible.length > 1) {
-      throw new EmailError(
+      throw new ClientInputError(
         'invalid_request',
         `Multiple accounts are available; specify accountId. Available: ${accessible
           .map((a) => `${a.id} (${a.email})`)
@@ -314,7 +339,7 @@ export class EmailService {
     const resolvedId = this.resolveScopedAccountId(accountId);
     const account = this.registry.getAccount(resolvedId);
     if (account.status === 'disabled') {
-      throw new EmailError('invalid_request', `Account ${resolvedId} is disabled`);
+      throw new ClientInputError('invalid_request', `Account ${resolvedId} is disabled`);
     }
     try {
       const result = await fn(this.registry.getProvider(resolvedId), resolvedId, account);
@@ -462,13 +487,16 @@ export class EmailService {
     const seen = new Set<string>();
     const normalized = identities.map((identity) => {
       const parsed = parseSingleAddress(identity.email.trim());
-      if (!parsed) throw new EmailError('invalid_request', `Could not parse sender address: "${identity.email}"`);
+      if (!parsed) throw new ClientInputError('invalid_request', `Could not parse sender address: "${identity.email}"`);
       const email = parsed.email;
       const key = email.toLowerCase();
       if (key === account.email.toLowerCase()) {
-        throw new EmailError('invalid_request', 'Do not include the connected account address in configured aliases.');
+        throw new ClientInputError(
+          'invalid_request',
+          'Do not include the connected account address in configured aliases.',
+        );
       }
-      if (seen.has(key)) throw new EmailError('invalid_request', `Duplicate sender address: "${email}"`);
+      if (seen.has(key)) throw new ClientInputError('invalid_request', `Duplicate sender address: "${email}"`);
       seen.add(key);
       const name = identity.name?.trim();
       return { email, ...(name ? { name } : {}) };
@@ -488,13 +516,13 @@ export class EmailService {
   async listMessages(accountId: string | undefined, q: EmailQuery, page: PageOpts = {}): Promise<MessageSearchPage> {
     const normalized = normalizeEmailQuery(q);
     if (!normalized.success) {
-      throw new EmailError('invalid_request', normalized.diagnostics.map((item) => item.message).join(' '), {
+      throw new ClientInputError('invalid_request', normalized.diagnostics.map((item) => item.message).join(' '), {
         diagnostics: normalized.diagnostics,
       });
     }
     const query = normalized.query;
     if (page.includeSearchContext && !query.text) {
-      throw new EmailError('invalid_request', 'includeSearchContext requires a portable text query.');
+      throw new ClientInputError('invalid_request', 'includeSearchContext requires a portable text query.');
     }
     const pageSize = Math.min(Math.max(page.pageSize ?? 25, 1), 100);
     const ownsController = page.signal === undefined;
@@ -568,22 +596,23 @@ export class EmailService {
 
   async searchMessagesBatch(input: BatchSearchInput): Promise<BatchSearchResult> {
     if (input.accounts.length < 1 || input.accounts.length > 20) {
-      throw new EmailError('invalid_request', 'Batch search requires between 1 and 20 accounts.');
+      throw new ClientInputError('invalid_request', 'Batch search requires between 1 and 20 accounts.');
     }
     const seen = new Set<string>();
     for (const account of input.accounts) {
-      if (seen.has(account.accountId)) throw new EmailError('invalid_request', 'Batch account IDs must be distinct.');
+      if (seen.has(account.accountId))
+        throw new ClientInputError('invalid_request', 'Batch account IDs must be distinct.');
       seen.add(account.accountId);
     }
     const normalized = normalizeEmailQuery(input.query);
     if (!normalized.success) {
-      throw new EmailError('invalid_request', normalized.diagnostics.map((item) => item.message).join(' '), {
+      throw new ClientInputError('invalid_request', normalized.diagnostics.map((item) => item.message).join(' '), {
         diagnostics: normalized.diagnostics,
       });
     }
     const pageSize = Math.min(Math.max(input.pageSize ?? 25, 1), 100);
     if (input.includeSearchContext && !normalized.query.text) {
-      throw new EmailError('invalid_request', 'includeSearchContext requires a portable text query.');
+      throw new ClientInputError('invalid_request', 'includeSearchContext requires a portable text query.');
     }
     const controller = new AbortController();
     const startedAt = Date.now();
@@ -634,13 +663,15 @@ export class EmailService {
     return this.withProvider(accountId, (p) => p.getThread(threadId));
   }
 
-  createDraft(accountId: string | undefined, d: SendInput): Promise<Message> {
+  async createDraft(accountId: string | undefined, d: SendInput): Promise<Message> {
+    this.assertMailContent(d);
     return this.withProvider(accountId, async (p, _id, account) => {
       return p.createDraft(await this.resolveRecipients(p, account, d));
     });
   }
 
-  updateDraft(accountId: string | undefined, draftId: string, d: SendInput): Promise<Message> {
+  async updateDraft(accountId: string | undefined, draftId: string, d: SendInput): Promise<Message> {
+    this.assertMailContent(d);
     return this.withProvider(accountId, async (p, _id, account) => {
       return p.updateDraft(draftId, await this.resolveRecipients(p, account, d));
     });
@@ -650,7 +681,158 @@ export class EmailService {
     return this.withProvider(accountId, (p) => p.deleteDraft(draftId));
   }
 
-  send(accountId: string | undefined, input: SendInput | { draftId: string }): Promise<SendResult> {
+  getDraft(accountId: string | undefined, draftId: string): Promise<Message> {
+    return this.withProvider(accountId, (p) => p.getDraft(draftId));
+  }
+
+  previewSend(accountId: string | undefined, input: SendInput | { draftId: string }): Promise<SendPreview> {
+    return this.withProvider(accountId, async (provider, resolvedId, account) => {
+      if ('draftId' in input) {
+        const draft = await provider.getDraft(input.draftId);
+        if (draft.from?.email && draft.from.email.toLowerCase() !== account.email.toLowerCase()) {
+          await this.validateSender(provider, resolvedId, account, draft.from.email);
+        }
+        return {
+          accountId: resolvedId,
+          from: draft.from?.email ?? account.email,
+          to: draft.to,
+          cc: draft.cc ?? [],
+          bcc: draft.bcc ?? [],
+          subject: draft.subject,
+          attachments: (draft.attachments ?? []).map(({ filename, mimeType, sizeBytes }) => ({
+            filename,
+            mimeType,
+            sizeBytes,
+          })),
+          bodyTextChars: draft.body?.text?.length ?? 0,
+          bodyHtmlChars: draft.body?.html?.length ?? 0,
+        };
+      }
+      this.assertMailContent(input);
+      const resolved = await this.resolveRecipients(provider, account, input);
+      const subject =
+        resolved.subject ??
+        (input.replyToMessageId ? replySubject((await provider.getMessage(input.replyToMessageId)).subject) : '');
+      return {
+        accountId: resolvedId,
+        from: resolved.from ?? account.email,
+        to: resolved.to ?? [],
+        cc: resolved.cc ?? [],
+        bcc: resolved.bcc ?? [],
+        subject,
+        attachments: (resolved.attachments ?? []).map(({ filename, mimeType, content }) => ({
+          filename,
+          mimeType,
+          sizeBytes: Buffer.byteLength(content, 'base64'),
+        })),
+        bodyTextChars: resolved.body.text?.length ?? 0,
+        bodyHtmlChars: resolved.body.html?.length ?? 0,
+      };
+    });
+  }
+
+  getDelivery(accountId: string, operationId: string): DeliveryOperation {
+    this.assertAccountAccess(accountId);
+    if (!this.principal) throw new EmailError('permission_denied', 'A member session is required.');
+    return new DeliveryCoordinator(this.db).get(
+      this.principal.principalId,
+      this.principal.memberId,
+      accountId,
+      operationId,
+    );
+  }
+
+  deliver(
+    accountId: string | undefined,
+    input: SendInput | { draftId: string },
+    key: string,
+  ): Promise<DeliveryOperation> {
+    const resolvedId = this.resolveScopedAccountId(accountId);
+    if (!this.principal) throw new EmailError('permission_denied', 'A member session is required.');
+    return new DeliveryCoordinator(this.db).run(
+      {
+        principalId: this.principal.principalId,
+        memberId: this.principal.memberId,
+        accountId: resolvedId,
+        key,
+        kind: 'send',
+        request: input,
+      },
+      () => this.send(resolvedId, input),
+    );
+  }
+
+  deliverForward(accountId: string | undefined, input: ForwardInput, key: string): Promise<DeliveryOperation> {
+    const resolvedId = this.resolveScopedAccountId(accountId);
+    if (!this.principal) throw new EmailError('permission_denied', 'A member session is required.');
+    return new DeliveryCoordinator(this.db).run(
+      {
+        principalId: this.principal.principalId,
+        memberId: this.principal.memberId,
+        accountId: resolvedId,
+        key,
+        kind: 'forward',
+        request: input,
+      },
+      () => this.forward(resolvedId, input),
+    );
+  }
+
+  deliverScheduled(accountId: string, draftId: string, scheduleId: string): Promise<DeliveryOperation> {
+    return new DeliveryCoordinator(this.db).fireScheduled(
+      accountId,
+      draftId,
+      scheduleId,
+      () =>
+        this.withProvider(accountId, async (provider, resolvedId, account) => {
+          const draft = await provider.getDraft(draftId);
+          if (draft.from?.email && draft.from.email.toLowerCase() !== account.email.toLowerCase()) {
+            await this.validateSender(provider, resolvedId, account, draft.from.email);
+          }
+        }),
+      () =>
+        this.withProvider(accountId, async (provider, resolvedId) => {
+          const result = await provider.send({ draftId });
+          const pending = findPendingByDraft(this.db, resolvedId, draftId);
+          if (pending) {
+            markSent(this.db, pending.id, result);
+            this.onScheduleChanged();
+          }
+          return result;
+        }),
+    );
+  }
+
+  scheduleDelivery(
+    accountId: string | undefined,
+    input: SendInput | { draftId: string },
+    sendAt: string,
+    key: string,
+  ): Promise<DeliveryOperation> {
+    const resolvedId = this.resolveScopedAccountId(accountId);
+    if (!this.principal) throw new EmailError('permission_denied', 'A member session is required.');
+    let createdSchedule = false;
+    const scheduled = new DeliveryCoordinator(this.db).schedule(
+      {
+        principalId: this.principal.principalId,
+        memberId: this.principal.memberId,
+        accountId: resolvedId,
+        key,
+        request: { input, sendAt },
+      },
+      async () => {
+        const result = await this.createSchedule(resolvedId, input, sendAt);
+        createdSchedule = true;
+        return result;
+      },
+    );
+    return scheduled.finally(() => {
+      if (createdSchedule) this.onScheduleChanged();
+    });
+  }
+
+  async send(accountId: string | undefined, input: SendInput | { draftId: string }): Promise<SendResult> {
+    if (!('draftId' in input)) this.assertMailContent(input);
     return this.withProvider(accountId, async (p, resolvedId, account) => {
       if ('draftId' in input) {
         const draft = await p.getDraft(input.draftId);
@@ -679,6 +861,17 @@ export class EmailService {
     input: SendInput | { draftId: string },
     sendAtIso: string,
   ): Promise<ScheduledSendInfo> {
+    const scheduled = await this.createSchedule(accountId, input, sendAtIso);
+    this.onScheduleChanged();
+    return scheduled;
+  }
+
+  private async createSchedule(
+    accountId: string | undefined,
+    input: SendInput | { draftId: string },
+    sendAtIso: string,
+  ): Promise<ScheduledSendInfo> {
+    if (!('draftId' in input)) this.assertMailContent(input);
     const sendAt = resolveSendAt(sendAtIso);
     const { draft, resolvedId } = await this.withProvider(accountId, async (p, id, account) => {
       let message: Message;
@@ -687,7 +880,7 @@ export class EmailService {
       } else {
         const resolved = await this.resolveRecipients(p, account, input);
         if (!resolved.to?.length && !resolved.cc?.length && !resolved.bcc?.length) {
-          throw new EmailError('invalid_request', 'Cannot schedule a message with no recipients');
+          throw new ClientInputError('invalid_request', 'Cannot schedule a message with no recipients');
         }
         message = await p.createDraft(resolved);
       }
@@ -703,19 +896,23 @@ export class EmailService {
       ...(draft.subject !== undefined ? { subject: draft.subject } : {}),
       ...(draft.to?.length ? { toRecipients: formatAddressList(draft.to) } : {}),
     });
-    this.onScheduleChanged();
     return toScheduledInfo(row);
   }
 
   listScheduled(accountId?: string): ScheduledSendInfo[] {
+    const coordinator = new DeliveryCoordinator(this.db);
+    const withOperation = (row: ScheduledSendRow): ScheduledSendInfo => {
+      const operationId = coordinator.findScheduled(row.accountId, row.id)?.operationId;
+      return { ...toScheduledInfo(row), ...(operationId ? { operationId } : {}) };
+    };
     if (accountId !== undefined) {
-      return listScheduledSends(this.db, this.resolveScopedAccountId(accountId)).map(toScheduledInfo);
+      return listScheduledSends(this.db, this.resolveScopedAccountId(accountId)).map(withOperation);
     }
     // Listing must work across accounts, but a member key only sees its own mailboxes'.
     const rows = listScheduledSends(this.db);
-    if (this.isInternal()) return rows.map(toScheduledInfo);
+    if (this.isInternal()) return rows.map(withOperation);
     const accessible = new Set(this.accessibleAccounts().map((a) => a.id));
-    return rows.filter((r) => accessible.has(r.accountId)).map(toScheduledInfo);
+    return rows.filter((r) => accessible.has(r.accountId)).map(withOperation);
   }
 
   /** Cancels a pending schedule; the provider draft is kept. */
@@ -726,11 +923,12 @@ export class EmailService {
       throw new EmailError('not_found', `No scheduled send with id ${scheduleId}`);
     }
     if (row.status !== 'pending') {
-      throw new EmailError('invalid_request', `Scheduled send ${scheduleId} is already ${row.status}`);
+      throw new ClientInputError('invalid_request', `Scheduled send ${scheduleId} is already ${row.status}`);
     }
     if (!cancelScheduledSend(this.db, scheduleId)) {
-      throw new EmailError('invalid_request', `Scheduled send ${scheduleId} has already started sending`);
+      throw new ClientInputError('invalid_request', `Scheduled send ${scheduleId} has already started sending`);
     }
+    new DeliveryCoordinator(this.db).cancelScheduled(row.accountId, scheduleId);
     this.onScheduleChanged();
     return { scheduleId, draftId: row.draftId, draftKept: true };
   }
@@ -813,7 +1011,7 @@ export class EmailService {
     known?: SendAsIdentity[],
   ): Promise<SendAsIdentity> {
     const parsed = parseSingleAddress(sender.trim());
-    if (!parsed) throw new EmailError('invalid_request', `Could not parse sender address: "${sender}"`);
+    if (!parsed) throw new ClientInputError('invalid_request', `Could not parse sender address: "${sender}"`);
     if (parsed.email.toLowerCase() === account.email.toLowerCase()) {
       return {
         email: account.email,
@@ -825,7 +1023,7 @@ export class EmailService {
     const identity = (known ?? (await this.sendAsIdentities(provider, accountId, account))).find(
       (candidate) => candidate.email.toLowerCase() === parsed.email.toLowerCase(),
     );
-    if (!identity) throw new EmailError('invalid_request', `Sender address "${parsed.email}" is not available.`);
+    if (!identity) throw new ClientInputError('invalid_request', `Sender address "${parsed.email}" is not available.`);
     return identity;
   }
 
@@ -840,14 +1038,23 @@ export class EmailService {
     return identities.find((identity) => identity.isPrimary) ?? identities[0]!;
   }
 
-  forward(accountId: string | undefined, input: ForwardInput): Promise<SendResult> {
+  async forward(accountId: string | undefined, input: ForwardInput): Promise<SendResult> {
+    if (Buffer.byteLength(input.comment ?? '', 'utf8') > 1024 * 1024) {
+      throw new ClientInputError('invalid_request', 'Forward comment exceeds the 1 MiB body limit.');
+    }
     return this.withProvider(accountId, async (p, resolvedId, account) => {
       const original = await p.getMessage(input.messageId);
       const includeAttachments = input.includeAttachments ?? true;
 
       const attachments: AttachmentInput[] = [];
       if (includeAttachments) {
-        for (const meta of original.attachments ?? []) {
+        const metadata = original.attachments ?? [];
+        if (metadata.length > 20)
+          throw new ClientInputError('invalid_request', 'A message may have at most 20 attachments.');
+        if (metadata.reduce((total, item) => total + item.sizeBytes, 0) > this.maxAttachmentBytes) {
+          throw new ClientInputError('invalid_request', 'Combined attachments exceed the configured size limit.');
+        }
+        for (const meta of metadata) {
           const { content } = await p.getAttachment(original.id, meta.id);
           attachments.push({
             filename: meta.filename,
@@ -867,12 +1074,52 @@ export class EmailService {
         body: buildForwardBody(original, input.comment),
         ...(attachments.length ? { attachments } : {}),
       };
+      this.assertMailContent(draft);
       return p.send(draft);
     });
   }
 
-  modify(accountId: string | undefined, ids: string[], action: ModifyAction): Promise<void> {
-    return this.withProvider(accountId, (p) => p.modify(ids, action));
+  async modify(accountId: string | undefined, ids: string[], action: ModifyAction): Promise<ModifyResult> {
+    const unique = [...new Set(ids)];
+    if (unique.length < 1 || unique.length > 100) {
+      throw new ClientInputError('invalid_request', 'Modify between 1 and 100 distinct messages.');
+    }
+    const resolvedId = this.resolveScopedAccountId(accountId);
+    const result = await this.withProvider(resolvedId, async (provider) => {
+      const outcomes: Array<'succeeded' | { code: string } | 'uncertain'> = Array.from(
+        { length: unique.length },
+        () => 'uncertain',
+      );
+      let next = 0;
+      const worker = async () => {
+        for (;;) {
+          const index = next++;
+          if (index >= unique.length) return;
+          try {
+            await provider.modify([unique[index]!], action);
+            outcomes[index] = 'succeeded';
+          } catch (error) {
+            outcomes[index] = isDefiniteDeliveryFailure(error)
+              ? { code: isEmailError(error) ? error.code : 'internal' }
+              : 'uncertain';
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(4, unique.length) }, () => worker()));
+      return {
+        action,
+        succeededIds: unique.filter((_, index) => outcomes[index] === 'succeeded'),
+        failed: unique.flatMap((messageId, index) => {
+          const outcome = outcomes[index];
+          return typeof outcome === 'object' ? [{ messageId, code: outcome.code }] : [];
+        }),
+        uncertainIds: unique.filter((_, index) => outcomes[index] === 'uncertain'),
+      };
+    });
+    if (result.failed.some(({ code }) => code === 'auth_expired')) {
+      this.registry.markStatus(resolvedId, 'auth_error');
+    }
+    return result;
   }
 
   getAttachment(
@@ -882,6 +1129,27 @@ export class EmailService {
     maxBytes?: number,
   ): Promise<{ meta: AttachmentMeta; content: Buffer }> {
     return this.withProvider(accountId, (p) => p.getAttachment(messageId, attachmentId, { maxBytes }));
+  }
+
+  private assertMailContent(input: DraftInput): void {
+    const bodyBytes =
+      Buffer.byteLength(input.body.text ?? '', 'utf8') + Buffer.byteLength(input.body.html ?? '', 'utf8');
+    if (bodyBytes > 1024 * 1024) {
+      throw new ClientInputError('invalid_request', 'Text and HTML bodies together must be at most 1 MiB.');
+    }
+    const attachments = input.attachments ?? [];
+    if (attachments.length > 20)
+      throw new ClientInputError('invalid_request', 'A message may have at most 20 attachments.');
+    let total = 0;
+    for (const attachment of attachments) {
+      if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(attachment.content)) {
+        throw new ClientInputError('invalid_request', 'Attachment content must be base64.');
+      }
+      total += Buffer.byteLength(attachment.content, 'base64');
+      if (total > this.maxAttachmentBytes) {
+        throw new ClientInputError('invalid_request', 'Combined attachments exceed the configured size limit.');
+      }
+    }
   }
 }
 

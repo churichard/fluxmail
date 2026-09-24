@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import { EmailError, type Message } from '@fluxmail/core';
 import type { FluxmailConfig } from '../src/config.js';
 import { createRestApi } from '../src/http/rest.js';
 import { customPermissionPolicy, permissionPolicyForProfile } from '../src/permissions.js';
 import { createApiKey } from '../src/storage/apiKeys.js';
-import { openDb } from '../src/storage/db.js';
+import { openDb, restIdempotency } from '../src/storage/db.js';
 import { addMember } from '../src/storage/members.js';
 import { listAdminAuditEvents } from '../src/storage/adminAudit.js';
 
@@ -81,12 +82,45 @@ function fixture() {
       exhausted: false,
     })),
     getMessage: vi.fn(async () => message),
+    getDraft: vi.fn(async () => ({ ...message, draftId: 'draft_1', flags: { ...message.flags, draft: true } })),
+    previewSend: vi.fn(async () => ({
+      accountId: account.id,
+      from: account.email,
+      to: draftBody.to,
+      cc: [],
+      bcc: [],
+      subject: 'Hello',
+      attachments: [],
+      bodyTextChars: 6,
+      bodyHtmlChars: 0,
+    })),
     getThread: vi.fn(async () => ({ id: 'thread_1', subject: 'Hello', messages: [message] })),
     createDraft: vi.fn(async () => ({ ...message, draftId: 'draft_1', flags: { ...message.flags, draft: true } })),
     updateDraft: vi.fn(async () => ({ ...message, draftId: 'draft_1', flags: { ...message.flags, draft: true } })),
     deleteDraft: vi.fn(async () => undefined),
     send: vi.fn(async () => ({ id: 'sent_1', threadId: 'thread_1' })),
+    deliver: vi.fn(async () => ({
+      operationId: 'dop_1',
+      accountId: account.id,
+      kind: 'send',
+      status: 'succeeded',
+      result: { id: 'sent_1', threadId: 'thread_1' },
+    })),
+    getDelivery: vi.fn(() => ({
+      operationId: 'dop_1',
+      accountId: account.id,
+      kind: 'send',
+      status: 'succeeded',
+      result: { id: 'sent_1', threadId: 'thread_1' },
+    })),
     scheduleSend: vi.fn(async () => scheduled),
+    scheduleDelivery: vi.fn(async () => ({
+      operationId: 'dop_2',
+      accountId: account.id,
+      kind: 'scheduled',
+      status: 'queued',
+      scheduleId: 'schedule_1',
+    })),
     listScheduled: vi.fn(() => [scheduled]),
     cancelScheduled: vi.fn(() => ({
       scheduleId: scheduled.scheduleId,
@@ -94,7 +128,14 @@ function fixture() {
       draftKept: true as const,
     })),
     forward: vi.fn(async () => ({ id: 'sent_forward', threadId: 'thread_1' })),
-    modify: vi.fn(async () => undefined),
+    deliverForward: vi.fn(async () => ({
+      operationId: 'dop_3',
+      accountId: account.id,
+      kind: 'forward',
+      status: 'succeeded',
+      result: { id: 'sent_forward', threadId: 'thread_1' },
+    })),
+    modify: vi.fn(async (_accountId: string, ids: string[]) => ({ succeededIds: ids, failed: [], uncertainIds: [] })),
     getAttachment: vi.fn(async () => ({
       meta: { id: 'att_1', filename: 'report.txt', mimeType: 'text/plain', sizeBytes: 5 },
       content: Buffer.from('hello'),
@@ -425,6 +466,12 @@ describe('REST email operations', () => {
       { headers: auth },
     );
     expect(duplicate.status).toBe(400);
+    await expect(duplicate.json()).resolves.toMatchObject({
+      error: {
+        code: 'invalid_request',
+        data: { diagnostics: [expect.objectContaining({ severity: 'error' })] },
+      },
+    });
   });
 
   it('returns typed-query warnings in successful batch group metadata', async () => {
@@ -461,16 +508,60 @@ describe('REST email operations', () => {
     service.getMessage.mockRejectedValueOnce(new EmailError('provider_unavailable', 'Gmail is unavailable.'));
     const unavailable = await app.request('/api/v1/accounts/acct_1/messages/msg_1', { headers: auth });
     expect(unavailable.status).toBe(503);
-    await expect(unavailable.json()).resolves.toEqual({
-      error: { code: 'provider_unavailable', message: 'Gmail is unavailable.' },
+    await expect(unavailable.json()).resolves.toMatchObject({
+      error: {
+        code: 'provider_unavailable',
+        message: 'The mail provider could not complete the request.',
+        requestId: expect.any(String),
+      },
     });
 
     service.getMessage.mockRejectedValueOnce(new Error('database password leaked'));
     const internal = await app.request('/api/v1/accounts/acct_1/messages/msg_1', { headers: auth });
     expect(internal.status).toBe(500);
-    await expect(internal.json()).resolves.toEqual({
-      error: { code: 'internal', message: 'The request could not be completed.' },
+    await expect(internal.json()).resolves.toMatchObject({
+      error: { code: 'internal', message: 'The request could not be completed.', requestId: expect.any(String) },
     });
+
+    service.getMessage.mockRejectedValueOnce(
+      new EmailError('rate_limited', 'private throttle response', { retryAfterMs: 12_000 }),
+    );
+    const throttled = await app.request('/api/v1/accounts/acct_1/messages/msg_1', { headers: auth });
+    expect(throttled.status).toBe(429);
+    expect(throttled.headers.get('retry-after')).toBe('12');
+    const error = await throttled.json();
+    expect(error).toMatchObject({ error: { code: 'rate_limited', data: { retryAfterMs: 12_000 } } });
+    expect(JSON.stringify(error)).not.toContain('private throttle response');
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1])(
+    'omits an invalid provider retry delay of %s',
+    async (retryAfterMs) => {
+      const { app, auth, service } = fixture();
+      service.getMessage.mockRejectedValueOnce(
+        new EmailError('rate_limited', 'private throttle response', { retryAfterMs }),
+      );
+      const response = await app.request('/api/v1/accounts/acct_1/messages/msg_1', { headers: auth });
+      expect(response.status).toBe(429);
+      expect(response.headers.get('retry-after')).toBeNull();
+      const body = await response.json();
+      expect(body).toMatchObject({ error: { code: 'rate_limited', requestId: expect.any(String) } });
+      expect(JSON.stringify(body)).not.toContain('private throttle response');
+      expect(JSON.stringify(body)).not.toContain('retryAfterMs');
+    },
+  );
+
+  it('links a safe error response to its local log entry', async () => {
+    const { auth, config, db, service } = fixture();
+    const warn = vi.fn();
+    const logger = { info: vi.fn(), warn, error: vi.fn(), flush: vi.fn(), close: vi.fn() };
+    const app = createRestApi({ config, db, service: service as never, logger: logger as never });
+    service.getMessage.mockRejectedValueOnce(new Error('private database password'));
+    const response = await app.request('/api/v1/accounts/acct_1/messages/msg_1', { headers: auth });
+    const body = (await response.json()) as { error: { requestId: string } };
+    expect(response.headers.get('x-request-id')).toBe(body.error.requestId);
+    expect(JSON.stringify([...warn.mock.calls, ...logger.error.mock.calls])).toContain(body.error.requestId);
+    expect(JSON.stringify(body)).not.toContain('private database password');
   });
 
   it('keeps status available when plan quota blocks other operations', async () => {
@@ -745,7 +836,107 @@ describe('REST permissions', () => {
 });
 
 describe('REST send idempotency', () => {
-  it('requires a key, replays the same response, and rejects changed payloads', async () => {
+  it('replays a pre-upgrade REST record during its original lifetime', async () => {
+    const { app, auth, db, keyInfo, service } = fixture();
+    const requestHash = createHash('sha256')
+      .update(
+        '{"operation":"sendMessage","request":{"accountId":"acct_1","input":{"body":{"text":"Hi Ann"},"subject":"Hello","to":[{"email":"ann@example.com","name":"Ann"}]}}}',
+      )
+      .digest('hex');
+    const oldBody = JSON.stringify({ data: { id: 'sent_old', threadId: 'thread_old' } });
+    db.insert(restIdempotency)
+      .values({
+        principalId: keyInfo.id,
+        idempotencyKey: 'old-key',
+        requestHash,
+        state: 'completed',
+        responseStatus: 200,
+        responseBody: oldBody,
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 60_000,
+      })
+      .run();
+    const replay = await app.request(
+      '/api/v1/accounts/acct_1/send',
+      jsonRequest('POST', draftBody, { ...auth, 'idempotency-key': 'old-key' }),
+    );
+    expect(replay.status).toBe(200);
+    expect(replay.headers.get('idempotency-replayed')).toBe('true');
+    expect(await replay.text()).toBe(oldBody);
+    expect(service.deliver).not.toHaveBeenCalled();
+  });
+
+  it('provides draft lookup and a side effect free preview', async () => {
+    const { app, auth, service } = fixture();
+    const draft = await app.request('/api/v1/accounts/acct_1/drafts/draft_1', { headers: auth });
+    expect(draft.status).toBe(200);
+    await expect(draft.json()).resolves.toMatchObject({ data: { draftId: 'draft_1' } });
+    const preview = await app.request('/api/v1/accounts/acct_1/send/preview', jsonRequest('POST', draftBody, auth));
+    expect(preview.status).toBe(200);
+    await expect(preview.json()).resolves.toMatchObject({ data: { subject: 'Hello', from: 'me@example.com' } });
+    expect(service.previewSend).toHaveBeenCalledOnce();
+    expect(service.deliver).not.toHaveBeenCalled();
+  });
+
+  it('records lookup and preview outcomes without private input', async () => {
+    const { auth, config, db, service } = fixture();
+    const capture = vi.fn();
+    const app = createRestApi({
+      config,
+      db,
+      service: service as never,
+      telemetry: { capture, shutdown: vi.fn() } as never,
+    });
+    await app.request('/api/v1/accounts/acct_1/drafts/private-draft', { headers: auth });
+    await app.request(
+      '/api/v1/accounts/acct_1/send/preview',
+      jsonRequest('POST', { ...draftBody, subject: 'private subject' }, auth),
+    );
+    await app.request('/api/v1/accounts/acct_1/delivery-operations/private-operation', { headers: auth });
+    service.getDraft.mockRejectedValueOnce(new EmailError('not_found', 'private provider text'));
+    await app.request('/api/v1/accounts/acct_1/drafts/private-fail', { headers: auth });
+    service.previewSend.mockRejectedValueOnce(new EmailError('not_found', 'private preview'));
+    await app.request(
+      '/api/v1/accounts/acct_1/send/preview',
+      jsonRequest('POST', { ...draftBody, subject: 'private subject' }, auth),
+    );
+    service.getDelivery.mockImplementationOnce(() => {
+      throw new EmailError('not_found', 'private operation');
+    });
+    await app.request('/api/v1/accounts/acct_1/delivery-operations/private-operation', { headers: auth });
+    for (const operation of ['getDraft', 'previewSend', 'getDeliveryOperation']) {
+      expect(capture).toHaveBeenCalledWith(
+        'operation completed',
+        expect.objectContaining({ product_surface: 'rest', operation, outcome: 'success' }),
+      );
+    }
+    expect(capture).toHaveBeenCalledWith(
+      'operation completed',
+      expect.objectContaining({
+        product_surface: 'rest',
+        operation: 'getDraft',
+        outcome: 'error',
+        error_code: 'not_found',
+      }),
+    );
+    for (const operation of ['previewSend', 'getDeliveryOperation']) {
+      expect(capture).toHaveBeenCalledWith(
+        'operation completed',
+        expect.objectContaining({ product_surface: 'rest', operation, outcome: 'error', error_code: 'not_found' }),
+      );
+    }
+    const captured = JSON.stringify(capture.mock.calls);
+    for (const value of [
+      'private-draft',
+      'private subject',
+      'private-operation',
+      'private provider text',
+      'private preview',
+    ])
+      expect(captured).not.toContain(value);
+  });
+
+  it('requires a key and returns a delivery operation', async () => {
     const { app, auth, service } = fixture();
     const missing = await app.request('/api/v1/accounts/acct_1/send', jsonRequest('POST', draftBody, auth));
     expect(missing.status).toBe(400);
@@ -753,115 +944,60 @@ describe('REST send idempotency', () => {
     const headers = { ...auth, 'idempotency-key': 'send-1' };
     const first = await app.request('/api/v1/accounts/acct_1/send', jsonRequest('POST', draftBody, headers));
     expect(first.status).toBe(200);
-    const replay = await app.request('/api/v1/accounts/acct_1/send', jsonRequest('POST', draftBody, headers));
-    expect(replay.status).toBe(200);
-    expect(replay.headers.get('idempotency-replayed')).toBe('true');
-    expect(service.send).toHaveBeenCalledTimes(1);
-
-    const conflict = await app.request(
-      '/api/v1/accounts/acct_1/send',
-      jsonRequest('POST', { ...draftBody, subject: 'Changed' }, headers),
-    );
-    expect(conflict.status).toBe(409);
-    await expect(conflict.json()).resolves.toMatchObject({ error: { code: 'idempotency_conflict' } });
+    await expect(first.json()).resolves.toMatchObject({ data: { operationId: 'dop_1', status: 'succeeded' } });
+    expect(service.deliver).toHaveBeenCalledWith('acct_1', expect.objectContaining({ subject: 'Hello' }), 'send-1');
+    const status = await app.request('/api/v1/accounts/acct_1/delivery-operations/dop_1', { headers: auth });
+    expect(status.status).toBe(200);
+    expect(service.getDelivery).toHaveBeenCalledWith('acct_1', 'dop_1');
   });
 
-  it('rechecks mailbox scope before reserving or replaying a response', async () => {
+  it('rechecks mailbox scope before a delivery', async () => {
     const { app, auth, service } = fixture();
-    const replayHeaders = { ...auth, 'idempotency-key': 'scope-replay' };
-    expect(
-      (await app.request('/api/v1/accounts/acct_1/send', jsonRequest('POST', draftBody, replayHeaders))).status,
-    ).toBe(200);
-
+    const headers = { ...auth, 'idempotency-key': 'scope-replay' };
     service.assertAccountAccess.mockImplementationOnce(() => {
       throw new EmailError('not_found', 'No account with id "acct_1"');
     });
-    const deniedReplay = await app.request(
-      '/api/v1/accounts/acct_1/send',
-      jsonRequest('POST', draftBody, replayHeaders),
-    );
-    expect(deniedReplay.status).toBe(404);
-    expect(deniedReplay.headers.get('idempotency-replayed')).toBeNull();
-    expect(service.send).toHaveBeenCalledTimes(1);
-
-    const grantHeaders = { ...auth, 'idempotency-key': 'scope-grant' };
-    service.assertAccountAccess.mockImplementationOnce(() => {
-      throw new EmailError('not_found', 'No account with id "acct_1"');
-    });
-    expect(
-      (await app.request('/api/v1/accounts/acct_1/send', jsonRequest('POST', draftBody, grantHeaders))).status,
-    ).toBe(404);
-    const granted = await app.request('/api/v1/accounts/acct_1/send', jsonRequest('POST', draftBody, grantHeaders));
+    const denied = await app.request('/api/v1/accounts/acct_1/send', jsonRequest('POST', draftBody, headers));
+    expect(denied.status).toBe(404);
+    expect(service.deliver).not.toHaveBeenCalled();
+    const granted = await app.request('/api/v1/accounts/acct_1/send', jsonRequest('POST', draftBody, headers));
     expect(granted.status).toBe(200);
-    expect(granted.headers.get('idempotency-replayed')).toBeNull();
-    expect(service.send).toHaveBeenCalledTimes(2);
+    expect(service.deliver).toHaveBeenCalledOnce();
   });
 
-  it('prevents concurrent attempts and replays terminal failures', async () => {
+  it('returns an uncertain result without retrying through REST', async () => {
     const { app, auth, service } = fixture();
-    let resolveSend!: (value: { id: string; threadId: string }) => void;
-    service.send.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveSend = resolve;
-        }),
-    );
-    const headers = { ...auth, 'idempotency-key': 'concurrent-send' };
-    const firstPromise = app.request('/api/v1/accounts/acct_1/send', jsonRequest('POST', draftBody, headers));
-    await vi.waitFor(() => expect(service.send).toHaveBeenCalledTimes(1));
-    const concurrent = await app.request('/api/v1/accounts/acct_1/send', jsonRequest('POST', draftBody, headers));
-    expect(concurrent.status).toBe(409);
-    expect(concurrent.headers.get('retry-after')).toBe('1');
-    resolveSend({ id: 'sent_1', threadId: 'thread_1' });
-    expect((await firstPromise).status).toBe(200);
-
-    service.send.mockRejectedValueOnce(new EmailError('rate_limited', 'Try later.'));
-    const failureHeaders = { ...auth, 'idempotency-key': 'failed-send' };
-    const failure = await app.request('/api/v1/accounts/acct_1/send', jsonRequest('POST', draftBody, failureHeaders));
-    expect(failure.status).toBe(429);
-    const replay = await app.request('/api/v1/accounts/acct_1/send', jsonRequest('POST', draftBody, failureHeaders));
-    expect(replay.status).toBe(429);
-    expect(replay.headers.get('idempotency-replayed')).toBe('true');
-  });
-
-  it('separates keys by API-key principal and persists completed responses', async () => {
-    const { app, auth, db, member, config, service } = fixture();
-    const { key: secondKey } = createApiKey(db, 'second', member.id);
-    const idempotencyKey = 'shared-client-key';
-    expect(
-      (
-        await app.request(
-          '/api/v1/accounts/acct_1/send',
-          jsonRequest('POST', draftBody, { ...auth, 'idempotency-key': idempotencyKey }),
-        )
-      ).status,
-    ).toBe(200);
-    expect(
-      (
-        await app.request(
-          '/api/v1/accounts/acct_1/send',
-          jsonRequest('POST', draftBody, {
-            authorization: `Bearer ${secondKey}`,
-            'idempotency-key': idempotencyKey,
-          }),
-        )
-      ).status,
-    ).toBe(200);
-    expect(service.send).toHaveBeenCalledTimes(2);
-
-    const restartedService = { ...service, send: vi.fn() };
-    restartedService.withPrincipal = vi.fn(() => restartedService);
-    const restarted = createRestApi({ config, db, service: restartedService as never });
-    const replay = await restarted.request(
+    service.deliver.mockResolvedValueOnce({
+      operationId: 'dop_uncertain',
+      accountId: 'acct_1',
+      kind: 'send',
+      status: 'uncertain',
+      error: { code: 'provider_unavailable' },
+    });
+    const response = await app.request(
       '/api/v1/accounts/acct_1/send',
-      jsonRequest('POST', draftBody, { ...auth, 'idempotency-key': idempotencyKey }),
+      jsonRequest('POST', draftBody, { ...auth, 'idempotency-key': 'uncertain-send' }),
     );
-    expect(replay.status).toBe(200);
-    expect(replay.headers.get('idempotency-replayed')).toBe('true');
-    expect(restartedService.send).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: { status: 'uncertain', operationId: 'dop_uncertain' },
+    });
   });
 
-  it('protects scheduled sends and forwards with the same mechanism', async () => {
+  it('reports changed idempotency requests as a safe conflict', async () => {
+    const { app, auth, service } = fixture();
+    service.deliver.mockRejectedValueOnce(new EmailError('idempotency_conflict', 'private request data'));
+    const response = await app.request(
+      '/api/v1/accounts/acct_1/send',
+      jsonRequest('POST', draftBody, { ...auth, 'idempotency-key': 'changed-key' }),
+    );
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body).toMatchObject({ error: { code: 'idempotency_conflict', requestId: expect.any(String) } });
+    expect(JSON.stringify(body)).not.toContain('private request data');
+  });
+
+  it('uses the same operation shape for scheduled sends and forwards', async () => {
     const { app, auth, service } = fixture();
     const sendAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     const scheduled = await app.request(
@@ -869,13 +1005,14 @@ describe('REST send idempotency', () => {
       jsonRequest('POST', { ...draftBody, sendAt }, { ...auth, 'idempotency-key': 'scheduled-1' }),
     );
     expect(scheduled.status).toBe(202);
-    expect(service.scheduleSend).toHaveBeenCalledTimes(1);
+    expect(service.scheduleDelivery).toHaveBeenCalledTimes(1);
+    await expect(scheduled.json()).resolves.toMatchObject({ data: { operationId: 'dop_2', status: 'queued' } });
 
     const forwarded = await app.request(
       '/api/v1/accounts/acct_1/messages/msg_1/forward',
       jsonRequest('POST', { to: [{ email: 'bob@example.com' }] }, { ...auth, 'idempotency-key': 'forward-1' }),
     );
     expect(forwarded.status).toBe(200);
-    expect(service.forward).toHaveBeenCalledTimes(1);
+    expect(service.deliverForward).toHaveBeenCalledTimes(1);
   });
 });

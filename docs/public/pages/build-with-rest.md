@@ -1,10 +1,12 @@
 ---
 title: 'Build with REST'
 description: 'Connect an app or script to the Fluxmail REST API and make your first requests.'
-updated: '2026-09-16'
+updated: '2026-09-23'
 ---
 
 Fluxmail provides the same REST API for Gmail, Outlook, and IMAP/SMTP mailboxes. This guide follows a common workflow: find a mailbox, list its messages, fetch one message, and mark it as read.
+
+Errors include a safe code and request ID. Fluxmail input errors describe how to fix the request; search syntax errors also include `error.data.diagnostics`. Provider error text is not returned.
 
 ## Start the API
 
@@ -107,6 +109,14 @@ curl "$FLUXMAIL_API_URL/accounts/<account-id>/messages/actions" \
 ```
 
 The same endpoint can archive, star, move, label, trash, or permanently delete messages. See [Modify messages](/docs/rest-api/modify-messages) before using those actions.
+
+The response now reports each message in `succeededIds`, `failed`, or `uncertainIds`. Send at most 100 distinct IDs. If an ID is uncertain, inspect that message before retrying.
+
+## Send safely
+
+Pass an `Idempotency-Key` header with every send or forward request. Reuse the same key for retries of the same request. Fluxmail returns a delivery `operationId` and a status of `queued`, `sending`, `succeeded`, `failed`, or `uncertain`. Fetch `/accounts/<account-id>/delivery-operations/<operation-id>` to check the outcome. An uncertain status means the provider may have delivered the message, so Fluxmail will not send it again under that key.
+
+You can inspect a draft with `GET /accounts/<account-id>/drafts/<draft-id>`. The `/accounts/<account-id>/send/preview` operation resolves the sender, reply recipients, subject, and attachment metadata without sending. See the [REST API reference](/docs/rest-api) for request fields.
 
 ## Continue building
 

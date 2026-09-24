@@ -1,6 +1,6 @@
 ---
 title: 'Download attachment'
-description: 'Download an email attachment as an embedded MCP resource.'
+description: 'Get attachment metadata and a fetchable resource link. Set inline to embed the bytes.'
 updated: '2026-07-15'
 ---
 
@@ -8,7 +8,7 @@ updated: '2026-07-15'
 
 `download_attachment`
 
-Download an email attachment as an embedded MCP resource.
+Get attachment metadata and a fetchable resource link. Set inline to embed the bytes.
 
 ## Permissions
 
@@ -18,9 +18,10 @@ Required capabilities: `mail.read`.
 
 | Name | Required | Type | Details |
 | --- | --- | --- | --- |
-| `accountId` | No | `string` | Account to operate on. Optional when exactly one account is connected. Minimum length: 1. |
-| `messageId` | Yes | `string` | Minimum length: 1. |
+| `accountId` | Yes | `string` | Minimum length: 1. |
+| `messageId` | Yes | `string` | None |
 | `attachmentId` | Yes | `string` | Opaque attachment ID returned by message metadata Minimum length: 1. |
+| `inline` | No | `boolean` | None |
 
 <details>
 <summary>JSON input schema</summary>
@@ -31,20 +32,22 @@ Required capabilities: `mail.read`.
   "properties": {
     "accountId": {
       "type": "string",
-      "minLength": 1,
-      "description": "Account to operate on. Optional when exactly one account is connected."
+      "minLength": 1
     },
     "messageId": {
-      "type": "string",
-      "minLength": 1
+      "$ref": "#/properties/accountId"
     },
     "attachmentId": {
       "type": "string",
       "minLength": 1,
       "description": "Opaque attachment ID returned by message metadata"
+    },
+    "inline": {
+      "type": "boolean"
     }
   },
   "required": [
+    "accountId",
     "messageId",
     "attachmentId"
   ],

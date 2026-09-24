@@ -9,6 +9,19 @@ export type IdempotencyReservation =
   | { status: 'in_progress' }
   | { status: 'replay'; responseStatus: number; responseBody: string };
 
+export function lookupIdempotencyKey(
+  db: FluxmailDb,
+  principalId: string,
+  idempotencyKey: string,
+): { requestHash: string; state: string; responseStatus: number | null; responseBody: string | null } | undefined {
+  const row = db
+    .select()
+    .from(restIdempotency)
+    .where(and(eq(restIdempotency.principalId, principalId), eq(restIdempotency.idempotencyKey, idempotencyKey)))
+    .get();
+  return row && row.expiresAt >= Date.now() ? row : undefined;
+}
+
 export function reserveIdempotencyKey(
   db: FluxmailDb,
   input: {
