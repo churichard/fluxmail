@@ -1,7 +1,7 @@
 ---
 title: 'Connect Gmail / Google Workspace'
 description: 'Connect a Gmail or Google Workspace mailbox, configure Google OAuth, and reconnect expired tokens.'
-updated: '2026-09-23'
+updated: '2026-09-24'
 ---
 
 Fluxmail includes a Google Desktop OAuth client, so you can connect Gmail locally without creating Google Cloud credentials. The local flow uses PKCE, and your OAuth tokens stay with the Fluxmail server you run.
@@ -162,7 +162,7 @@ Reauthorization updates the stored token for the same mailbox. It does not add a
 
 ## Connect through a proxy
 
-If your server reaches the internet through an HTTP proxy, set `HTTPS_PROXY` before starting Fluxmail. Gmail API calls and Google sign-in requests will use it. See [Outbound proxy](/docs/configuration#outbound-proxy) for `NO_PROXY` rules and which variable wins when several are set.
+If your server reaches Google through an HTTP proxy, set `HTTPS_PROXY` before starting Fluxmail. Gmail API and Google sign-in requests will use it. See [Outbound proxy](/docs/configuration#outbound-proxy) for `NO_PROXY` rules and variable precedence.
 
 ## How Gmail labels work
 

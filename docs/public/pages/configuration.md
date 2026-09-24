@@ -1,7 +1,7 @@
 ---
 title: 'Configuration'
 description: 'Deployment configuration, encrypted instance settings, outbound proxies, local logging, secret files, and telemetry controls.'
-updated: '2026-09-23'
+updated: '2026-09-24'
 ---
 
 Fluxmail has two configuration domains. Deployment configuration controls how the process starts. Instance settings control OAuth applications and the license used by a running instance.
@@ -79,9 +79,9 @@ Docker Compose and process-manager env files still work because those tools popu
 
 ## Outbound proxy
 
-If `HTTPS_PROXY` or `HTTP_PROXY` is set in the Fluxmail process environment, Gmail API and Google sign-in requests go through that HTTP proxy. The lowercase names `https_proxy` and `http_proxy` also work. When more than one is set, Fluxmail uses the first of `HTTPS_PROXY`, `https_proxy`, `HTTP_PROXY`, and `http_proxy`.
+If Gmail or Google sign-in requests need an HTTP proxy, set `HTTPS_PROXY` in the Fluxmail process environment before starting the server. Fluxmail also accepts `https_proxy`, `HTTP_PROXY`, and `http_proxy`. When several are set, it uses the first of `HTTPS_PROXY`, `https_proxy`, `HTTP_PROXY`, and `http_proxy`. Use an `http://` or `https://` proxy URL.
 
-Fluxmail keeps proxy connections open and reuses them across requests. A search opens a few tunnels at most, not one for every message it reads.
+Fluxmail keeps proxy connections open on supported Node.js versions. A Gmail search can reuse a tunnel while reading messages.
 
 To send some requests directly, list hosts in `NO_PROXY` (or `no_proxy`), separated by commas. Each entry can be:
 
@@ -90,7 +90,7 @@ To send some requests directly, list hosts in `NO_PROXY` (or `no_proxy`), separa
 - A domain suffix, such as `.googleapis.com` or `*.googleapis.com`
 - An origin, such as `https://gmail.googleapis.com`
 
-Fluxmail does not apply these variables to Outlook or IMAP connections. Restart a running Fluxmail server after you change them.
+These variables apply to Gmail API and Google sign-in requests. They do not change Outlook or IMAP connections. Restart Fluxmail after changing them.
 
 ## Local logs
 
