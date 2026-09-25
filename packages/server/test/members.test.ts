@@ -23,6 +23,7 @@ import {
   GRACE_PERIOD_MS,
   saveLeaseToken,
 } from '../src/licensing/entitlements.js';
+import { instanceUsageProperties } from '../src/accounts/telemetry.js';
 
 function makeKeypair(): { privateKey: KeyObject; publicKeyB64: string } {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
@@ -285,5 +286,52 @@ describe('API key migrations', () => {
     raw.close();
 
     expect(listApiKeys(openDb(dbPath))).toEqual([]);
+  });
+});
+
+describe('instance usage telemetry', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('reports the Personal plan on a fresh instance', () => {
+    expect(instanceUsageProperties(openDb(':memory:'))).toEqual({
+      plan: 'personal',
+      account_count: 0,
+      member_count: 0,
+    });
+  });
+
+  it('reports the licensed plan and totals without identifiers', () => {
+    vi.stubEnv('FLUXMAIL_LICENSE_PUBLIC_KEYS', keys.publicKeyB64);
+    const db = openDb(':memory:');
+    saveLeaseToken(db, leaseToken({ plan: 'pro' }));
+    const member = addMember(db, { name: 'Alice', email: 'alice@example.com' });
+    insertAccount(db, 'private-a@example.com');
+    insertAccount(db, 'private-b@example.com');
+
+    const properties = instanceUsageProperties(db);
+
+    expect(properties).toEqual({ plan: 'pro', account_count: 2, member_count: 1 });
+    const serialized = JSON.stringify(properties);
+    for (const secret of ['example.com', 'acct_', member.id, 'd2f7c1e0']) {
+      expect(serialized).not.toContain(secret);
+    }
+  });
+
+  it('reports an unrecognized plan name as other', () => {
+    vi.stubEnv('FLUXMAIL_LICENSE_PUBLIC_KEYS', keys.publicKeyB64);
+    const db = openDb(':memory:');
+    saveLeaseToken(db, leaseToken({ plan: 'acme-corp-custom' }));
+
+    expect(instanceUsageProperties(db)).toEqual({ plan: 'other', account_count: 0, member_count: 0 });
+  });
+
+  it('returns no properties when the database cannot be read', () => {
+    const db = {
+      select: () => {
+        throw new Error('private database failure');
+      },
+    } as unknown as ReturnType<typeof openDb>;
+
+    expect(instanceUsageProperties(db)).toEqual({});
   });
 });
