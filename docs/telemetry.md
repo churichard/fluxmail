@@ -41,11 +41,11 @@ The account counts appear only after Fluxmail has connected or removed a mailbox
 
 `mcp server started` also records the installation's plan and size:
 
-| Property        | Values                                      | Meaning                                                       |
-| --------------- | ------------------------------------------- | ------------------------------------------------------------- |
-| `plan`          | `personal`, or the plan name from the lease | The plan in effect at startup, including a paid plan in grace |
-| `account_count` | number                                      | Mailboxes connected to the installation                       |
-| `member_count`  | number                                      | Members on the installation                                   |
+| Property        | Values                                           | Meaning                                                                                                     |
+| --------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `plan`          | `personal`, `pro`, `team`, `enterprise`, `other` | The plan in effect at startup, including a paid plan in grace. Any other lease plan name is sent as `other` |
+| `account_count` | number                                           | Mailboxes connected to the installation                                                                     |
+| `member_count`  | number                                           | Members on the installation                                                                                 |
 
 These are totals only. They carry no license key, license ID, mailbox address, account ID, or member ID. If Fluxmail cannot read them, the event is sent without them.
 

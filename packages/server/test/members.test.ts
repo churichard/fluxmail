@@ -317,6 +317,14 @@ describe('instance usage telemetry', () => {
     }
   });
 
+  it('reports an unrecognized plan name as other', () => {
+    vi.stubEnv('FLUXMAIL_LICENSE_PUBLIC_KEYS', keys.publicKeyB64);
+    const db = openDb(':memory:');
+    saveLeaseToken(db, leaseToken({ plan: 'acme-corp-custom' }));
+
+    expect(instanceUsageProperties(db)).toEqual({ plan: 'other', account_count: 0, member_count: 0 });
+  });
+
   it('returns no properties when the database cannot be read', () => {
     const db = {
       select: () => {

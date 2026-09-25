@@ -67,12 +67,15 @@ export function accountInventoryProperties(
   }
 }
 
+const TELEMETRY_PLANS = new Set(['personal', 'pro', 'team', 'enterprise']);
+
 /** Plan and installation totals for server start. Counts only: no address, id, or license key. */
 export function instanceUsageProperties(db: Pick<FluxmailDb, 'select'>): TelemetryProperties {
   try {
     const state = checkLicenseState(db);
     return {
-      plan: state.entitlements.plan,
+      // Lease plan names are free text; send only known plans.
+      plan: TELEMETRY_PLANS.has(state.entitlements.plan) ? state.entitlements.plan : 'other',
       account_count: state.accountCount,
       member_count: state.memberCount,
     };
