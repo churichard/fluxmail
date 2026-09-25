@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { verifyLease, licensePublicKeys, type LeasePayload } from '../src/licensing/lease.js';
 import { releaseLicense, validateLicense } from '../src/licensing/client.js';
 import {
+  checkLicenseState,
   clearLease,
   GRACE_PERIOD_MS,
   PERSONAL_TIER,
@@ -21,7 +22,7 @@ import {
 } from '../src/licensing/refresher.js';
 import { activateLicense } from '../src/licensing/activation.js';
 import { ConfigurationService, type DeploymentConfig } from '../src/config.js';
-import { openDb } from '../src/storage/db.js';
+import { accounts, openDb } from '../src/storage/db.js';
 
 function makeKeypair(): { privateKey: KeyObject; publicKeyB64: string } {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
@@ -370,6 +371,50 @@ describe('refreshLicense', () => {
     });
     expect(result.outcome).toBe('refreshed');
     expect(readLeaseRow(db)?.token).toBe(token);
+    expect(getEntitlements(db).maxAccounts).toBe(5);
+  });
+
+  it('starts the cap reduction grace period when a new lease lowers the caps', async () => {
+    vi.stubEnv('FLUXMAIL_LICENSE_PUBLIC_KEYS', keys.publicKeyB64);
+    const db = openDb(':memory:');
+    for (const email of ['a@x.com', 'b@x.com', 'c@x.com']) {
+      db.insert(accounts)
+        .values({ id: `acct_${email}`, provider: 'gmail', email, status: 'active', createdAt: Date.now() })
+        .run();
+    }
+    const token = signLease(keys.privateKey, leasePayload({ plan: 'business', maxAccounts: 2 }));
+    const { fetchImpl } = fakeFetch(() => Response.json({ lease: token }));
+
+    await refreshLicense(db, { licenseKey, serverUrl: 'https://license.invalid', dataDir: dataDir(), fetchImpl });
+
+    const state = checkLicenseState(db);
+    expect(state.overQuota).toBe(true);
+    expect(state.blocked).toBe(false);
+    expect(state.capGraceUntil).toEqual(expect.any(String));
+  });
+
+  it('keeps the previous lease if recording the cap reduction fails', async () => {
+    vi.stubEnv('FLUXMAIL_LICENSE_PUBLIC_KEYS', keys.publicKeyB64);
+    const db = openDb(':memory:');
+    const cached = signLease(keys.privateKey, leasePayload({ maxAccounts: 5 }));
+    saveLeaseToken(db, cached);
+    for (const email of ['a@x.com', 'b@x.com', 'c@x.com']) {
+      db.insert(accounts)
+        .values({ id: `acct_${email}`, provider: 'gmail', email, status: 'active', createdAt: Date.now() })
+        .run();
+    }
+    (db as unknown as { $client: { exec(sql: string): void } }).$client.exec(
+      'CREATE TRIGGER fail_cap_marker BEFORE INSERT ON instance_settings ' +
+        "WHEN NEW.key = 'license_over_cap_since' " +
+        "BEGIN SELECT RAISE(ABORT, 'marker write failed'); END;",
+    );
+    const lowered = signLease(keys.privateKey, leasePayload({ maxAccounts: 2 }));
+    const { fetchImpl } = fakeFetch(() => Response.json({ lease: lowered }));
+
+    await expect(
+      refreshLicense(db, { licenseKey, serverUrl: 'https://license.invalid', dataDir: dataDir(), fetchImpl }),
+    ).rejects.toThrow(/marker write failed/);
+    expect(readLeaseRow(db)?.token).toBe(cached);
     expect(getEntitlements(db).maxAccounts).toBe(5);
   });
 

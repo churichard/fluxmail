@@ -19,8 +19,11 @@ import {
 import { authenticateApiKey, createApiKey, listApiKeys } from '../src/storage/apiKeys.js';
 import {
   assertWithinQuota,
+  CAP_REDUCTION_GRACE_MS,
   checkLicenseState,
+  clearLease,
   GRACE_PERIOD_MS,
+  recordCapState,
   saveLeaseToken,
 } from '../src/licensing/entitlements.js';
 import { instanceUsageProperties } from '../src/accounts/telemetry.js';
@@ -99,7 +102,7 @@ describe('members', () => {
     expect(() => removeMember(db, admin.id)).toThrow(/last active administrator/);
   });
 
-  it('enforces the Personal-plan seat limit', () => {
+  it('enforces the Personal-plan member limit', () => {
     const db = openDb(':memory:');
     addMember(db, { name: 'Alice' });
     try {
@@ -111,7 +114,7 @@ describe('members', () => {
     }
   });
 
-  it('allows seats up to the licensed cap', () => {
+  it('allows members up to the licensed cap', () => {
     vi.stubEnv('FLUXMAIL_LICENSE_PUBLIC_KEYS', keys.publicKeyB64);
     const db = openDb(':memory:');
     saveLeaseToken(db, leaseToken({ maxMembers: 3 }));
@@ -286,6 +289,123 @@ describe('API key migrations', () => {
     raw.close();
 
     expect(listApiKeys(openDb(dbPath))).toEqual([]);
+  });
+});
+
+describe('cap reduction grace', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const farExpiry = () => new Date(Date.now() + 60 * DAY_MS).toISOString();
+
+  function overCapInstance(): ReturnType<typeof openDb> {
+    vi.stubEnv('FLUXMAIL_LICENSE_PUBLIC_KEYS', keys.publicKeyB64);
+    const db = openDb(':memory:');
+    saveLeaseToken(db, leaseToken({ plan: 'business', maxMembers: 2, maxAccounts: 5, expiresAt: farExpiry() }));
+    for (const email of ['a@x.com', 'b@x.com', 'c@x.com', 'd@x.com', 'e@x.com']) insertAccount(db, email);
+    // The member limit goes down: the next lease allows 3 mailboxes.
+    saveLeaseToken(db, leaseToken({ plan: 'business', maxMembers: 1, maxAccounts: 3, expiresAt: farExpiry() }));
+    return db;
+  }
+
+  it('warns instead of blocking for seven days after the caps go down', () => {
+    const db = overCapInstance();
+    const start = new Date();
+    recordCapState(db, start);
+
+    const state = assertWithinQuota(db, start);
+    expect(state.overQuota).toBe(true);
+    expect(state.blocked).toBe(false);
+    const deadline = new Date(start.getTime() + CAP_REDUCTION_GRACE_MS).toISOString();
+    expect(state.capGraceUntil).toBe(deadline);
+    expect(state.warning).toBe(
+      'This instance has 5 mailboxes and 0 members, but the business plan allows 3 mailboxes and 1 member. ' +
+        `To keep email tools working, remove 2 mailboxes or upgrade your plan by ${deadline}.`,
+    );
+  });
+
+  it('blocks new members while only the mailbox cap is exceeded', () => {
+    const db = overCapInstance();
+    recordCapState(db);
+
+    expect(() => addMember(db, { name: 'Owner' })).toThrow(/exceeds its plan limits/);
+  });
+
+  it('blocks once the seven days pass', () => {
+    const db = overCapInstance();
+    const start = new Date();
+    recordCapState(db, start);
+    const later = new Date(start.getTime() + CAP_REDUCTION_GRACE_MS);
+
+    expect(checkLicenseState(db, later).blocked).toBe(true);
+    expect(checkLicenseState(db, later).warning).toMatch(/Email tools are blocked until you remove 2 mailboxes/);
+    expect(() => assertWithinQuota(db, later)).toThrow(/Upgrade the plan or remove mailboxes\/members/);
+  });
+
+  it('keeps the original deadline across later lease refreshes', () => {
+    const db = overCapInstance();
+    const start = new Date();
+    recordCapState(db, start);
+    recordCapState(db, new Date(start.getTime() + 3 * DAY_MS));
+
+    expect(checkLicenseState(db, start).capGraceUntil).toBe(
+      new Date(start.getTime() + CAP_REDUCTION_GRACE_MS).toISOString(),
+    );
+  });
+
+  it('starts a new grace period after usage fits and the caps go down again', () => {
+    const db = overCapInstance();
+    const start = new Date();
+    recordCapState(db, start);
+    db.delete(accounts).where(eq(accounts.email, 'd@x.com')).run();
+    db.delete(accounts).where(eq(accounts.email, 'e@x.com')).run();
+    recordCapState(db, new Date(start.getTime() + DAY_MS));
+    expect(checkLicenseState(db, start).overQuota).toBe(false);
+
+    const secondDrop = new Date(start.getTime() + 20 * DAY_MS);
+    saveLeaseToken(db, leaseToken({ plan: 'business', maxMembers: 1, maxAccounts: 2, expiresAt: farExpiry() }));
+    recordCapState(db, secondDrop);
+
+    const state = checkLicenseState(db, secondDrop);
+    expect(state.blocked).toBe(false);
+    expect(state.capGraceUntil).toBe(new Date(secondDrop.getTime() + CAP_REDUCTION_GRACE_MS).toISOString());
+  });
+
+  it('clears the deadline when removing the extra member', () => {
+    vi.stubEnv('FLUXMAIL_LICENSE_PUBLIC_KEYS', keys.publicKeyB64);
+    const db = openDb(':memory:');
+    saveLeaseToken(db, leaseToken({ plan: 'business', maxMembers: 2, maxAccounts: 5, expiresAt: farExpiry() }));
+    addMember(db, { name: 'Owner' });
+    const extra = addMember(db, { name: 'Extra' });
+    for (const email of ['a@x.com', 'b@x.com', 'c@x.com']) insertAccount(db, email);
+
+    saveLeaseToken(db, leaseToken({ plan: 'business', maxMembers: 1, maxAccounts: 5, expiresAt: farExpiry() }));
+    const firstDrop = new Date();
+    recordCapState(db, firstDrop);
+    removeMember(db, extra.id);
+    expect(checkLicenseState(db).overQuota).toBe(false);
+
+    saveLeaseToken(db, leaseToken({ plan: 'business', maxMembers: 1, maxAccounts: 2, expiresAt: farExpiry() }));
+    const secondDrop = new Date(firstDrop.getTime() + DAY_MS);
+    recordCapState(db, secondDrop);
+    expect(checkLicenseState(db, secondDrop).capGraceUntil).toBe(
+      new Date(secondDrop.getTime() + CAP_REDUCTION_GRACE_MS).toISOString(),
+    );
+  });
+
+  it('blocks right away when the instance has not recorded the lower caps yet', () => {
+    const db = overCapInstance();
+
+    expect(checkLicenseState(db).blocked).toBe(true);
+  });
+
+  it('does not carry a grace period over to a later license', () => {
+    const db = overCapInstance();
+    recordCapState(db);
+    clearLease(db);
+    saveLeaseToken(db, leaseToken({ plan: 'business', maxMembers: 1, maxAccounts: 3, expiresAt: farExpiry() }));
+
+    expect(checkLicenseState(db).blocked).toBe(true);
   });
 });
 

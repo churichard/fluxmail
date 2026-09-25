@@ -54,7 +54,7 @@ docker compose exec fluxmail fluxmail accounts list
 | [`fluxmail accounts assign`](/docs/cli/accounts-assign) | Change mailbox ownership |
 | [`fluxmail accounts access`](/docs/cli/accounts-access) | Set who can access a mailbox |
 | [`fluxmail members`](/docs/cli/members) | Manage members (people using this instance) |
-| [`fluxmail members add`](/docs/cli/members-add) | Add a member (subject to the plan seat limit) |
+| [`fluxmail members add`](/docs/cli/members-add) | Add a member (subject to your plan's member limit) |
 | [`fluxmail members list`](/docs/cli/members-list) | List members with their mailbox and API key counts |
 | [`fluxmail members remove`](/docs/cli/members-remove) | Remove a member after reassigning or removing their mailboxes |
 | [`fluxmail members role`](/docs/cli/members-role) | Change a member role |

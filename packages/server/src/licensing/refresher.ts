@@ -6,7 +6,7 @@ import type { FluxmailDb } from '../storage/db.js';
 import { logFailure, type Logger } from '../logging.js';
 import { validateLicense } from './client.js';
 import { licensePublicKeys, verifyLease, type LeasePayload } from './lease.js';
-import { getEntitlements, readLeaseRow, saveLeaseToken } from './entitlements.js';
+import { getEntitlements, readLeaseRow, recordCapState, saveLeaseToken } from './entitlements.js';
 
 /** Instances revalidate roughly daily; the lease itself is valid for ~7 days. */
 export const VALIDATE_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -86,7 +86,10 @@ export async function refreshLicense(db: FluxmailDb, opts: RefreshOptions): Prom
           cachedLeaseActive: cachedLeaseActive(),
         };
       }
-      saveLeaseToken(db, result.lease);
+      db.transaction((tx) => {
+        saveLeaseToken(tx, result.lease);
+        recordCapState(tx);
+      });
       return { outcome: 'refreshed', lease };
     }
     case 'invalid_request':

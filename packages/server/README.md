@@ -31,4 +31,4 @@ Fluxmail supports stdio for local MCP clients. Its HTTP server provides Streamab
 
 ## License
 
-Fluxmail is source available under the [Elastic License 2.0](https://github.com/churichard/fluxmail/blob/main/LICENSE.md). You may use, modify, create derivative works, and redistribute it subject to that license. The Personal plan supports three mailboxes and one member without a paid key. Official Pro and Team entitlements require a valid Fluxmail license key.
+Fluxmail is source available under the [Elastic License 2.0](https://github.com/churichard/fluxmail/blob/main/LICENSE.md). You may use, modify, create derivative works, and redistribute it subject to that license. The Personal plan supports three mailboxes and one member without a paid key. Official Pro, Business, and Enterprise entitlements require a valid Fluxmail license key.

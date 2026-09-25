@@ -420,17 +420,19 @@ export class EmailService {
   }
 
   /**
-   * Gate for MCP tool calls: throws once a lapsed license leaves the instance
-   * over the entitled caps; returns a renewal warning to attach to results
-   * while the license is in its grace period or has lapsed.
+   * Gate for MCP tool calls: throws once the instance is over the entitled
+   * caps, after a lapse or once a cap reduction's grace period ends; returns a
+   * warning to attach to results while a grace period runs or after a lapse.
    */
   enforceQuota(): string | undefined {
     if (!this.isInternal() && (!this.principal || !canAdminister(this.principal, 'admin.license'))) {
       const state = checkLicenseState(this.db);
-      if (state.overQuota) {
+      if (state.blocked) {
         throw new EmailError(
           'entitlement_exceeded',
-          'This Fluxmail instance is over its plan limits. Ask an administrator to renew the license or reduce usage.',
+          'This Fluxmail instance is over its plan limits. Ask an administrator to ' +
+            (state.entitlements.licensed ? 'upgrade the plan' : 'renew the license') +
+            ' or reduce usage.',
         );
       }
       // License dates and renewal state are instance administration details.

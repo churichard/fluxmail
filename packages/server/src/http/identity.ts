@@ -156,6 +156,7 @@ const folderPatch = z
   })
   .strict();
 
+// oxlint-disable-next-line typescript/no-explicit-any -- Route handlers have different Hono context types.
 function jsonError(c: any, error: unknown): Response {
   logFailure(c.get?.('restLogger') as Logger | undefined, 'rest.operation_failed', error, {
     productSurface: 'rest',
@@ -234,8 +235,10 @@ function authResult(result: Awaited<ReturnType<typeof loginWithPassword>>) {
   };
 }
 
+// oxlint-disable-next-line typescript/no-explicit-any -- The caller supplies a route-specific Hono environment.
 export function registerIdentityRoutes(typedApp: OpenAPIHono<any>, deps: RestApiDeps): void {
   const app = typedApp as unknown as {
+    // oxlint-disable-next-line typescript/no-explicit-any -- Each route supplies a different validated request type.
     openapi(route: unknown, handler: (context: any) => Response | Promise<Response>): void;
   };
   const loginRoute = createRoute({

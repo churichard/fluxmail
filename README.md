@@ -14,7 +14,7 @@ Fluxmail is self-hosted email infrastructure for agents and apps. It connects to
 - 🧵 Fetch complete messages and threads, work across several mailboxes, and download attachments.
 - 🗂️ Mark mail as read, star or archive it, move it between folders, send it to Trash, and manage Gmail labels or Outlook categories.
 - 🔐 Limit each client to selected mailboxes and actions with permission profiles or custom policies.
-- 👥 Add members and share selected mailboxes on Team and Enterprise plans.
+- 👥 Add members and choose which mailboxes each can access on Business and Enterprise plans.
 - 🏠 Run Fluxmail locally or in Docker while keeping its database and encrypted provider credentials on your infrastructure.
 
 ## Get started
@@ -50,4 +50,4 @@ The Personal plan supports three mailboxes and one member. Paid plans raise thos
 
 Fluxmail is source available under the [Elastic License 2.0](LICENSE.md). You may use, modify, create derivative works, and redistribute Fluxmail subject to that license. Running a fork does not by itself require a paid Fluxmail subscription, and the built-in Personal plan supports three mailboxes and one member without a paid key.
 
-Official Pro and Team entitlements require a valid Fluxmail license key. ELv2 does not allow you to change or circumvent license key functionality, remove protected functionality, or provide Fluxmail itself as a hosted or managed service that exposes a substantial set of its features. Use of the Fluxmail name and logos is also subject to the [Fluxmail Terms of Service](https://fluxmail.ai/terms).
+Official Pro, Business, and Enterprise entitlements require a valid Fluxmail license key. ELv2 does not allow you to change or circumvent license key functionality, remove protected functionality, or provide Fluxmail itself as a hosted or managed service that exposes a substantial set of its features. Use of the Fluxmail name and logos is also subject to the [Fluxmail Terms of Service](https://fluxmail.ai/terms).

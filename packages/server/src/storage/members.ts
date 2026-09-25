@@ -10,7 +10,12 @@ import {
   members,
   type FluxmailDb,
 } from './db.js';
-import { assertMemberLimit, getEntitlements } from '../licensing/entitlements.js';
+import {
+  assertCanIncreaseUsage,
+  assertMemberLimit,
+  getEntitlements,
+  recordCapState,
+} from '../licensing/entitlements.js';
 
 export interface MemberInfo {
   id: string;
@@ -66,6 +71,7 @@ export function addMember(
       throw new EmailError('invalid_request', `A member with email ${email} already exists`);
     }
     const memberCount = tx.select().from(members).all().length;
+    assertCanIncreaseUsage(tx);
     assertMemberLimit(memberCount, getEntitlements(tx));
     const role = input.role ?? (memberCount === 0 ? 'admin' : 'member');
     const status = input.status ?? 'active';
@@ -201,6 +207,7 @@ export function removeMember(db: FluxmailDb, id: string): { name: string; revoke
   db.transaction((tx) => {
     tx.delete(apiKeys).where(eq(apiKeys.memberId, id)).run();
     tx.delete(members).where(eq(members.id, id)).run();
+    recordCapState(tx);
   });
   return { name: info.name, revokedApiKeys: info.apiKeyCount };
 }

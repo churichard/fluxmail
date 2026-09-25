@@ -1,7 +1,7 @@
 ---
 title: 'Overview'
 description: 'How Fluxmail connects agents and apps to Gmail, Outlook, and IMAP through MCP, REST API, and CLI.'
-updated: '2026-07-23'
+updated: '2026-09-25'
 ---
 
 Fluxmail is self-hosted email infrastructure for agents and apps. It connects to Gmail, Microsoft 365, Outlook.com, and IMAP/SMTP mailboxes, then provides one service for working with them.
@@ -14,7 +14,7 @@ Fluxmail is self-hosted email infrastructure for agents and apps. It connects to
 - 🧵 Fetch complete messages and threads, work across several mailboxes, and download attachments.
 - 🗂️ Mark mail as read, star or archive it, move it between folders, send it to Trash, and manage Gmail labels or Outlook categories.
 - 🔐 Limit each client to selected mailboxes and actions with permission profiles or custom policies.
-- 👥 Add members and share selected mailboxes on Team and Enterprise plans.
+- 👥 Add members and choose which mailboxes each can access on Business and Enterprise plans.
 - 🏠 Run Fluxmail locally or in Docker while keeping its database and encrypted provider credentials on your infrastructure.
 
 ## Choose an interface

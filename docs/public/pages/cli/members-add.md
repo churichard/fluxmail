@@ -1,6 +1,6 @@
 ---
 title: 'fluxmail members add'
-description: 'Add a member (subject to the plan seat limit)'
+description: 'Add a member (subject to your plan''s member limit)'
 updated: '2026-07-15'
 ---
 
@@ -8,7 +8,7 @@ updated: '2026-07-15'
 
 `fluxmail members add`
 
-Add a member (subject to the plan seat limit)
+Add a member (subject to your plan's member limit)
 
 ## Usage
 
