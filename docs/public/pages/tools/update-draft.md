@@ -25,7 +25,7 @@ Required capabilities: `mail.drafts`.
 | `cc` | No | array of `string` | Recipients, each "Name <a@x.com>" or "a@x.com" |
 | `bcc` | No | array of `string` | Recipients, each "Name <a@x.com>" or "a@x.com" |
 | `subject` | No | `string` | Defaults to "Re: ..." when replying |
-| `bodyText` | No | `string` | Plain-text body |
+| `bodyText` | No | `string` | Plain-text body. Line breaks appear in the sent email. Keep each prose paragraph on one continuous line and separate paragraphs with blank lines. |
 | `bodyHtml` | No | `string` | HTML body |
 | `replyToMessageId` | No | `string` | Message being replied to; threads correctly and computes recipients if "to" is omitted |
 | `replyAll` | No | `boolean` | With replyToMessageId: reply to all original recipients |
@@ -74,7 +74,7 @@ Required capabilities: `mail.drafts`.
     },
     "bodyText": {
       "type": "string",
-      "description": "Plain-text body"
+      "description": "Plain-text body. Line breaks appear in the sent email. Keep each prose paragraph on one continuous line and separate paragraphs with blank lines."
     },
     "bodyHtml": {
       "type": "string",

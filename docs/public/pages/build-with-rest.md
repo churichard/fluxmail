@@ -118,6 +118,8 @@ Pass an `Idempotency-Key` header with every send or forward request. Reuse the s
 
 You can inspect a draft with `GET /accounts/<account-id>/drafts/<draft-id>`. The `/accounts/<account-id>/send/preview` operation resolves the sender, reply recipients, subject, and attachment metadata without sending. See the [REST API reference](/docs/rest-api) for request fields.
 
+When sending plain-text email, keep each prose paragraph on one continuous line in `body.text`, with a blank line between paragraphs. Fluxmail preserves line breaks in the sent message. The same applies to a forward's `comment`.
+
 ## Continue building
 
 - [Create a draft](/docs/rest-api/create-draft) or [send and reply](/docs/rest-api/send-message).

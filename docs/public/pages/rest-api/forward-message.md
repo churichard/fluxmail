@@ -96,7 +96,8 @@ Content type: `application/json`
       }
     },
     "comment": {
-      "type": "string"
+      "type": "string",
+      "description": "Comment above the forwarded message. Keep prose paragraphs on one continuous line and separate paragraphs with blank lines."
     },
     "includeAttachments": {
       "type": "boolean",
