@@ -132,7 +132,7 @@ For MCP attachment downloads, telemetry records whether the tool returned a reso
 
 Delivery status, send preview, draft retrieval, body continuation, and bulk actions use the same event format. Fluxmail does not send delivery IDs, message IDs, recipients, or message content in these events.
 
-When the MCP server starts, telemetry records the plan and how many mailboxes and members the installation has. It does not send the license key or any address.
+When the MCP server starts, telemetry records the plan and how many mailboxes and members the installation has. The plan is sent as Personal, Pro, Team, Business, or Enterprise, and any other plan name is sent as `other`. It does not send the license key or any address.
 
 After Fluxmail connects or removes a mailbox, telemetry records its provider and the installation's mailbox totals. OAuth connection events also record whether the callback used your public URL or the local port, and whether Google used Fluxmail's built-in application or one you registered. Local connections record whether the redirect reached Fluxmail directly, you pasted the callback URL, or the command timed out. The pasted URL is never sent. Connection events report whether they replaced credentials for an existing mailbox.
 

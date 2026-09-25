@@ -67,7 +67,7 @@ export function accountInventoryProperties(
   }
 }
 
-const TELEMETRY_PLANS = new Set(['personal', 'pro', 'team', 'enterprise']);
+const TELEMETRY_PLANS = new Set(['personal', 'pro', 'team', 'business', 'enterprise']);
 
 /** Plan and installation totals for server start. Counts only: no address, id, or license key. */
 export function instanceUsageProperties(db: Pick<FluxmailDb, 'select'>): TelemetryProperties {
