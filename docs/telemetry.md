@@ -9,7 +9,7 @@ Every event contains a random installation ID, the Fluxmail version, the Node.js
 | Event                 | `product_surface`    | Other properties                                                                    |
 | --------------------- | -------------------- | ----------------------------------------------------------------------------------- |
 | `operation completed` | `cli`, `mcp`, `rest` | Operation, outcome, duration, and safe properties such as transport or feature mode |
-| `mcp server started`  | `mcp`                | Transport: `stdio` or `http`                                                        |
+| `mcp server started`  | `mcp`                | Transport (`stdio` or `http`), plan, and mailbox and member totals                  |
 
 The `operation` property contains the CLI command path, MCP tool name, or REST OpenAPI operation ID. This keeps the event schema consistent while preserving the name used by each interface. The browser callback that finishes a hosted OAuth connection reports `completeHostedConnection` on the `rest` surface, because that request, not the command that printed the link, is where the mailbox is connected.
 
@@ -36,6 +36,18 @@ Mailbox connection and removal events may add these properties to `operation com
 `oauth_app` reports the application that issued the tokens, never its client ID or secret. `oauth_callback` appears only on local OAuth connections. A pasted callback URL contains an authorization code and state, so Fluxmail records only that the user pasted it. Outlook always reports `custom`, since Fluxmail ships no built-in Microsoft application. The counts are totals for the installation. They carry no mailbox address, account ID, or member ID.
 
 The account counts appear only after Fluxmail has connected or removed a mailbox. Events that prepare an OAuth link do not include them because the user may never finish the browser flow. `reauthorize` is left out when the surface cannot tell a reconnection from a new mailbox, such as a CLI IMAP connection against a remote instance, where the server matches the mailbox by address and reports the answer in its own event.
+
+## Server start properties
+
+`mcp server started` also records the installation's plan and size:
+
+| Property        | Values                                      | Meaning                                                       |
+| --------------- | ------------------------------------------- | ------------------------------------------------------------- |
+| `plan`          | `personal`, or the plan name from the lease | The plan in effect at startup, including a paid plan in grace |
+| `account_count` | number                                      | Mailboxes connected to the installation                       |
+| `member_count`  | number                                      | Members on the installation                                   |
+
+These are totals only. They carry no license key, license ID, mailbox address, account ID, or member ID. If Fluxmail cannot read them, the event is sent without them.
 
 Use the same `product_surface` property in the other Fluxmail products. Set it to `landing_page` on the marketing site and `mail_app` in Fluxmail Mail. PostHog can then filter or compare all four products in one project.
 
@@ -82,6 +94,7 @@ Use unique installation IDs rather than total event counts when measuring adopti
 - REST feature adoption: `operation completed` filtered to `product_surface = rest`, broken down by `operation`
 - CLI feature adoption: `operation completed` filtered to `product_surface = cli`, broken down by `operation`
 - Transport adoption: `mcp server started`, broken down by `transport`
+- Mailboxes and members by plan: `mcp server started`, charted as the last `account_count` and `member_count` per installation ID, broken down by `plan`
 - Reliability: `operation completed`, broken down by `product_surface`, `outcome`, and `error_code`
 - Scheduled sending: `operation completed` filtered to `operation = send_email` or `sendMessage`, broken down by `scheduled`
 - Mailboxes per installation: `operation completed` filtered to events that carry `account_count`, charted as the last value per installation ID

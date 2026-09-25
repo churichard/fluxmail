@@ -92,7 +92,12 @@ import { recordAdminAuditEvent } from './storage/adminAudit.js';
 import { canManageOwnedAccount } from './authorization.js';
 import { createCliUpdateNotifier, type CliUpdateNotifier, type CliUpdateNotifierFactory } from './updateNotifier.js';
 import { registerMailCommands } from './cliMail.js';
-import { accountInventoryProperties, configuredOAuthAppKind, connectionProperties } from './accounts/telemetry.js';
+import {
+  accountInventoryProperties,
+  configuredOAuthAppKind,
+  connectionProperties,
+  instanceUsageProperties,
+} from './accounts/telemetry.js';
 import {
   flushLogging,
   escapeLogTextForConsole,
@@ -904,7 +909,11 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
           details: { port: ctx.config.port },
           skipConsole: true,
         });
-        ctx.telemetry.capture('mcp server started', { product_surface: 'mcp', transport: 'http' });
+        ctx.telemetry.capture('mcp server started', {
+          ...instanceUsageProperties(ctx.db),
+          product_surface: 'mcp',
+          transport: 'http',
+        });
         console.log(`Fluxmail listening on ${ctx.config.publicUrl}`);
         console.log(`  MCP endpoint:   ${ctx.config.publicUrl}/mcp`);
         console.log(`  REST API:       ${ctx.config.publicUrl}/api/v1`);
@@ -966,7 +975,11 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
       });
       ctx.scheduler.start();
       await server.connect(new StdioServerTransport());
-      ctx.telemetry.capture('mcp server started', { product_surface: 'mcp', transport: 'stdio' });
+      ctx.telemetry.capture('mcp server started', {
+        ...instanceUsageProperties(ctx.db),
+        product_surface: 'mcp',
+        transport: 'stdio',
+      });
       ctx.logger.info('server.started', 'Fluxmail stdio MCP server started', {
         productSurface: 'mcp',
         details: { transport: 'stdio' },

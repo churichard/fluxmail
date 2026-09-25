@@ -2,6 +2,8 @@ import type { Provider } from '@fluxmail/core';
 import type { FluxmailConfig } from '../config.js';
 import type { OAuthCallbackSource } from './oauthCallback.js';
 import type { TelemetryProperties } from '../telemetry.js';
+import { checkLicenseState } from '../licensing/entitlements.js';
+import type { FluxmailDb } from '../storage/db.js';
 import { DEFAULT_GOOGLE_CLIENT_ID } from './defaultGoogleOAuth.js';
 import type { AccountRegistry } from './registry.js';
 
@@ -61,6 +63,21 @@ export function accountInventoryProperties(
     };
   } catch {
     // Telemetry must never affect a connection result.
+    return {};
+  }
+}
+
+/** Plan and installation totals for server start. Counts only: no address, id, or license key. */
+export function instanceUsageProperties(db: Pick<FluxmailDb, 'select'>): TelemetryProperties {
+  try {
+    const state = checkLicenseState(db);
+    return {
+      plan: state.entitlements.plan,
+      account_count: state.accountCount,
+      member_count: state.memberCount,
+    };
+  } catch {
+    // Telemetry must never affect server startup.
     return {};
   }
 }

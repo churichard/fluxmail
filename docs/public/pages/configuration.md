@@ -1,7 +1,7 @@
 ---
 title: 'Configuration'
 description: 'Deployment configuration, encrypted instance settings, outbound proxies, local logging, secret files, and telemetry controls.'
-updated: '2026-09-24'
+updated: '2026-09-25'
 ---
 
 Fluxmail has two configuration domains. Deployment configuration controls how the process starts. Instance settings control OAuth applications and the license used by a running instance.
@@ -131,6 +131,8 @@ Fluxmail sends anonymous operation events to its PostHog project by default. Eve
 For MCP attachment downloads, telemetry records whether the tool returned a resource link or inline content. It records the same choice if the download fails, without sending the attachment name or content.
 
 Delivery status, send preview, draft retrieval, body continuation, and bulk actions use the same event format. Fluxmail does not send delivery IDs, message IDs, recipients, or message content in these events.
+
+When the MCP server starts, telemetry records the plan and how many mailboxes and members the installation has. It does not send the license key or any address.
 
 After Fluxmail connects or removes a mailbox, telemetry records its provider and the installation's mailbox totals. OAuth connection events also record whether the callback used your public URL or the local port, and whether Google used Fluxmail's built-in application or one you registered. Local connections record whether the redirect reached Fluxmail directly, you pasted the callback URL, or the command timed out. The pasted URL is never sent. Connection events report whether they replaced credentials for an existing mailbox.
 
