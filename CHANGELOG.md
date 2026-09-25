@@ -4,6 +4,30 @@ Fluxmail records user-facing changes in this file. The format follows [Common Ch
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-25
+
+### Changed
+
+- [MCP] **Breaking:** Pass `idempotencyKey` to `send_email` and `forward_email`, read the delivery operation instead of a sent message, and use `get_delivery_operation` to check its status; [update MCP send clients before upgrading](https://fluxmail.ai/docs/upgrades/0.11.0/) ([#98](https://github.com/churichard/fluxmail/pull/98))
+- [CLI] **Breaking:** Pass `--idempotency-key` to `emails send` and `emails forward`, read the delivery operation instead of a sent message, and use `emails delivery-status` to check its status; [update CLI send commands before upgrading](https://fluxmail.ai/docs/upgrades/0.11.0/) ([#98](https://github.com/churichard/fluxmail/pull/98))
+- [REST] **Breaking:** Read a delivery operation instead of a sent message from send and forward requests, retain `Idempotency-Key`, and use the delivery status endpoint to check the outcome; [update REST send clients before upgrading](https://fluxmail.ai/docs/upgrades/0.11.0/) ([#98](https://github.com/churichard/fluxmail/pull/98))
+- [MCP / CLI / REST] **Breaking:** Read `succeededIds`, `failed`, and `uncertainIds` instead of `modified` from bulk message actions, and keep each request to 100 distinct message IDs; [update bulk action clients before upgrading](https://fluxmail.ai/docs/upgrades/0.11.0/) ([#98](https://github.com/churichard/fluxmail/pull/98))
+- [MCP] **Breaking:** Follow pages from `get_thread`, use `get_email_body` to continue truncated bodies, and set `inline` to embed attachment bytes; [update MCP readers before upgrading](https://fluxmail.ai/docs/upgrades/0.11.0/) ([#98](https://github.com/churichard/fluxmail/pull/98))
+- [CLI] **Breaking:** Parse the default JSON envelope instead of command text, and handle the new exit codes for input, partial, access, and provider errors; [update CLI scripts before upgrading](https://fluxmail.ai/docs/upgrades/0.11.0/) ([#98](https://github.com/churichard/fluxmail/pull/98))
+- Advance stored data from format 3 to 5 for delivery operations; stop processes that share the data directory and back it up before upgrading because older releases cannot open the migrated store; [prepare existing installations](https://fluxmail.ai/docs/upgrades/0.11.0/) ([#98](https://github.com/churichard/fluxmail/pull/98))
+- [MCP / CLI / REST] Keep email operations available for seven days after a paid plan lowers mailbox or member limits below current usage, and prevent new additions until usage fits the plan ([#104](https://github.com/churichard/fluxmail/pull/104))
+- Record the plan and mailbox and member totals when the MCP server starts, using `other` for unrecognized plan names; [review the anonymous telemetry settings](https://fluxmail.ai/docs/configuration/) ([#102](https://github.com/churichard/fluxmail/pull/102))
+- [MCP] Guide agents to keep plain-text email paragraphs on one line when drafting or forwarding messages ([#101](https://github.com/churichard/fluxmail/pull/101))
+
+### Added
+
+- [MCP / CLI / REST] Fetch drafts and preview recipients and sender details before sending ([#98](https://github.com/churichard/fluxmail/pull/98))
+
+### Fixed
+
+- [MCP / CLI / REST] Reuse proxy connections for Gmail API requests and Google sign-in to avoid repeated tunnels during searches ([#99](https://github.com/churichard/fluxmail/pull/99))
+- [MCP / CLI / REST] Send the proxy hostname during TLS negotiation with an HTTPS Google proxy so it can select the correct certificate ([#100](https://github.com/churichard/fluxmail/pull/100))
+
 ## [0.10.0] - 2026-09-23
 
 ### Changed
@@ -160,7 +184,7 @@ Only the breaking entries for the interfaces you use apply. An MCP-only integrat
 - Prevent hosted Microsoft OAuth responses from forwarding connection credentials through the HTTP referrer ([#43](https://github.com/churichard/fluxmail/pull/43))
 - Stop a pending IMAP connection immediately when its provider closes during setup ([#49](https://github.com/churichard/fluxmail/pull/49))
 
-[Unreleased]: https://github.com/churichard/fluxmail/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/churichard/fluxmail/compare/v0.11.0...HEAD
 [0.4.0]: https://github.com/churichard/fluxmail/compare/v0.3.0...v0.4.0
 [0.4.1]: https://github.com/churichard/fluxmail/compare/v0.4.0...v0.4.1
 [0.5.0]: https://github.com/churichard/fluxmail/compare/v0.4.1...v0.5.0
@@ -171,3 +195,4 @@ Only the breaking entries for the interfaces you use apply. An MCP-only integrat
 [0.8.1]: https://github.com/churichard/fluxmail/compare/v0.8.0...v0.8.1
 [0.9.0]: https://github.com/churichard/fluxmail/compare/v0.8.1...v0.9.0
 [0.10.0]: https://github.com/churichard/fluxmail/compare/v0.9.0...v0.10.0
+[0.11.0]: https://github.com/churichard/fluxmail/compare/v0.10.0...v0.11.0
