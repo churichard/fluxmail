@@ -78,7 +78,7 @@ exact serialized bytes it sends.
 
 - `v` — must be `2`. Version 1 (which had only `maxAccounts`) was never
   shipped to customers and clients reject it.
-- `plan` — lowercase plan name for display ("pro", "team", "enterprise").
+- `plan` — lowercase plan name for display ("pro", "business", "enterprise").
   Clients print it verbatim and never branch on it; all enforcement uses the
   numeric caps.
 - `maxMembers` — positive integer; people who may use the instance.
@@ -111,5 +111,13 @@ drop the old pin.
   still exceeds them, MCP tool calls (except `get_status`) fail and scheduled
   sends are held until the license is renewed or usage is trimmed to fit. The
   CLI is never blocked, so recovery is always possible.
+- When a new lease lowers the caps below current usage while the license is
+  still valid (for example, after lowering the Business member limit), the instance
+  records when it first saw the overage and keeps email tools working for 7
+  days (`CAP_REDUCTION_GRACE_MS` in `entitlements.ts`). Administrators see a
+  warning with the deadline in the CLI and on MCP tool results. New mailboxes
+  and members are refused until usage fits. After 7 days, the blocking rules
+  above apply. Later leases do not extend the deadline, and usage that fits
+  the caps clears it.
 - A running instance is never bricked: expired or unverifiable leases only
   ever degrade to the Personal plan.

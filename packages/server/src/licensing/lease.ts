@@ -10,7 +10,7 @@ export interface LeasePayload {
   /** Payload version; this client understands only 2. */
   v: 2;
   licenseId: string;
-  /** Lowercase plan name for display ("pro", "team", …); clients never switch on it. */
+  /** Lowercase plan name for display ("pro", "business", …); clients never switch on it. */
   plan: string;
   /** People who may use this instance. */
   maxMembers: number;

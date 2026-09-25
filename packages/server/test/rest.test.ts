@@ -172,6 +172,7 @@ describe('REST API discovery and authentication', () => {
 
     const response = await app.request('/api/v1/openapi.json');
     expect(response.status).toBe(200);
+    // oxlint-disable-next-line typescript/no-explicit-any -- The assertions inspect a dynamic OpenAPI document.
     const document = (await response.json()) as Record<string, any>;
     expect(document.openapi).toBe('3.1.0');
     expect(document.components.securitySchemes.bearerAuth).toMatchObject({ type: 'http', scheme: 'bearer' });

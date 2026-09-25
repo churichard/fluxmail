@@ -8,7 +8,12 @@ import { OutlookProvider, OUTLOOK_CAPABILITIES } from '@fluxmail/provider-outloo
 import type { FluxmailConfig } from '../config.js';
 import { accountCredentials, accountMemberGrants, accounts, oauthTokens, type FluxmailDb } from '../storage/db.js';
 import { decryptString, encryptString } from '../storage/crypto.js';
-import { assertAccountLimit, getEntitlements } from '../licensing/entitlements.js';
+import {
+  assertAccountLimit,
+  assertCanIncreaseUsage,
+  getEntitlements,
+  recordCapState,
+} from '../licensing/entitlements.js';
 import { getMember } from '../storage/members.js';
 import type { StoredGoogleOAuthApp } from '../instanceConfig.js';
 import { DEFAULT_GOOGLE_CLIENT_ID } from './defaultGoogleOAuth.js';
@@ -135,6 +140,7 @@ export class AccountRegistry {
   /** Fail before OAuth when a new account would exceed the current plan. */
   assertCanAddAccount(): void {
     const existing = this.listAccounts();
+    assertCanIncreaseUsage(this.db);
     try {
       assertAccountLimit(existing.length, getEntitlements(this.db));
     } catch (err) {
@@ -170,7 +176,7 @@ export class AccountRegistry {
 
   getProvider(accountId: string): EmailProvider {
     const account = this.getAccount(accountId);
-    let credentialState = this.loadCredentialRow(accountId);
+    const credentialState = this.loadCredentialRow(accountId);
     const cached = this.providers.get(accountId);
     if (
       cached?.revision === credentialState.revision &&
@@ -427,6 +433,7 @@ export class AccountRegistry {
     const id = `acct_${randomBytes(6).toString('hex')}`;
     this.db.transaction((tx) => {
       const accountCount = tx.select().from(accounts).all().length;
+      assertCanIncreaseUsage(tx);
       assertAccountLimit(accountCount, getEntitlements(tx));
       tx.insert(accounts)
         .values({
@@ -484,6 +491,7 @@ export class AccountRegistry {
 
     const id = `acct_${randomBytes(6).toString('hex')}`;
     this.db.transaction((tx) => {
+      assertCanIncreaseUsage(tx);
       assertAccountLimit(tx.select().from(accounts).all().length, getEntitlements(tx));
       tx.insert(accounts)
         .values({
@@ -604,6 +612,7 @@ export class AccountRegistry {
 
     const id = `acct_${randomBytes(6).toString('hex')}`;
     this.db.transaction((tx) => {
+      assertCanIncreaseUsage(tx);
       assertAccountLimit(tx.select().from(accounts).all().length, getEntitlements(tx));
       tx.insert(accounts)
         .values({
@@ -652,7 +661,10 @@ export class AccountRegistry {
 
   removeAccount(accountId: string): void {
     this.getAccount(accountId);
-    this.db.delete(accounts).where(eq(accounts.id, accountId)).run();
+    this.db.transaction((tx) => {
+      tx.delete(accounts).where(eq(accounts.id, accountId)).run();
+      recordCapState(tx);
+    });
     this.evictProvider(accountId);
   }
 

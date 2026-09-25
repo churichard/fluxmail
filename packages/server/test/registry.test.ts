@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { generateKeyPairSync, randomBytes, sign, type KeyObject } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -11,6 +11,12 @@ import { AccountRegistry } from '../src/accounts/registry.js';
 import { DEFAULT_GOOGLE_CLIENT_ID, DEFAULT_GOOGLE_CLIENT_SECRET } from '../src/accounts/defaultGoogleOAuth.js';
 import { accountCredentials, accounts, members, oauthTokens, openDb } from '../src/storage/db.js';
 import { addMember } from '../src/storage/members.js';
+import {
+  CAP_REDUCTION_GRACE_MS,
+  checkLicenseState,
+  recordCapState,
+  saveLeaseToken,
+} from '../src/licensing/entitlements.js';
 import { decryptString, encryptString } from '../src/storage/crypto.js';
 import type { FluxmailConfig } from '../src/config.js';
 
@@ -49,9 +55,24 @@ const imapCredentials = {
   saveSent: true,
 };
 
+function businessLease(privateKey: KeyObject, maxAccounts: number, maxMembers: number): string {
+  const payload = {
+    v: 2,
+    licenseId: 'd2f7c1e0-0000-4000-8000-000000000000',
+    plan: 'business',
+    maxAccounts,
+    maxMembers,
+    issuedAt: new Date(Date.now() - 1000).toISOString(),
+    expiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString(),
+  };
+  const bytes = Buffer.from(JSON.stringify(payload));
+  return `${bytes.toString('base64url')}.${sign(null, bytes, privateKey).toString('base64url')}`;
+}
+
 describe('AccountRegistry', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -168,6 +189,49 @@ describe('AccountRegistry', () => {
       expect((err as EmailError).code).toBe('entitlement_exceeded');
       expect((err as EmailError).message).toMatch(/Personal plan allows 3 connected mailboxes/);
     }
+  });
+
+  it('blocks new mailboxes while only the member cap is exceeded', () => {
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+    vi.stubEnv('FLUXMAIL_LICENSE_PUBLIC_KEYS', publicKey.export({ format: 'der', type: 'spki' }).toString('base64'));
+    const db = openDb(':memory:');
+    const registry = new AccountRegistry(db, testConfig());
+    saveLeaseToken(db, businessLease(privateKey, 3, 2));
+    const owner = addMember(db, { name: 'Owner' });
+    addMember(db, { name: 'Second member' });
+    saveLeaseToken(db, businessLease(privateKey, 3, 1));
+    recordCapState(db);
+
+    expect(() => registry.assertCanAddAccount()).toThrow(/exceeds its plan limits/);
+    expect(() => registry.addGmailAccount('new@example.com', tokens, undefined, owner.id)).toThrow(
+      /exceeds its plan limits/,
+    );
+  });
+
+  it('clears the deadline when removing the extra mailbox', () => {
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+    vi.stubEnv('FLUXMAIL_LICENSE_PUBLIC_KEYS', publicKey.export({ format: 'der', type: 'spki' }).toString('base64'));
+    const db = openDb(':memory:');
+    const registry = new AccountRegistry(db, testConfig());
+    saveLeaseToken(db, businessLease(privateKey, 2, 2));
+    const owner = addMember(db, { name: 'Owner' });
+    registry.addGmailAccount('one@example.com', tokens, undefined, owner.id);
+    const extra = registry.addGmailAccount('two@example.com', tokens, undefined, owner.id);
+    saveLeaseToken(db, businessLease(privateKey, 1, 2));
+    const firstDrop = new Date();
+    recordCapState(db, firstDrop);
+    expect(() => addMember(db, { name: 'Second member' })).toThrow(/exceeds its plan limits/);
+
+    registry.removeAccount(extra.id);
+    expect(checkLicenseState(db).overQuota).toBe(false);
+    addMember(db, { name: 'Second member' });
+
+    saveLeaseToken(db, businessLease(privateKey, 1, 1));
+    const secondDrop = new Date(firstDrop.getTime() + 24 * 60 * 60 * 1000);
+    recordCapState(db, secondDrop);
+    expect(checkLicenseState(db, secondDrop).capGraceUntil).toBe(
+      new Date(secondDrop.getTime() + CAP_REDUCTION_GRACE_MS).toISOString(),
+    );
   });
 
   it('adds an IMAP account with encrypted credentials and IMAP capabilities', () => {

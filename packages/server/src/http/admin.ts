@@ -516,6 +516,7 @@ function serializeApiKey(key: ReturnType<typeof listApiKeys>[number]) {
   };
 }
 
+// oxlint-disable-next-line typescript/no-explicit-any -- OpenAPI handlers require route-specific typed responses.
 async function run<T extends Response>(deps: AdminApiDeps, fn: () => Promise<T> | T): Promise<any> {
   try {
     return await fn();
@@ -533,6 +534,7 @@ async function run<T extends Response>(deps: AdminApiDeps, fn: () => Promise<T> 
   }
 }
 
+// oxlint-disable-next-line typescript/no-explicit-any -- The caller supplies a route-specific Hono environment.
 export function registerAdminRoutes(app: OpenAPIHono<any>, deps: AdminApiDeps): void {
   const connectionsRoute = createRoute({
     ...adminOperationRoutes.createConnection,

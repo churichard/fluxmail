@@ -1,12 +1,12 @@
 ---
 title: 'Teams & plans'
-description: 'Add members, share mailboxes across a team, and unlock paid-plan limits on a self-hosted Fluxmail instance.'
-updated: '2026-07-25'
+description: 'Add members, set mailbox access, and raise the limits on a self-hosted Fluxmail instance.'
+updated: '2026-09-25'
 ---
 
-## Members and shared mailboxes
+## Members and mailbox access
 
-Every Fluxmail instance has at least one **member**. A personal instance uses one member to identify its owner. Team and Enterprise instances can add more people and decide which mailboxes each person can reach.
+Every Fluxmail instance has at least one **member**. A personal instance uses one member to identify its owner. Business and Enterprise instances can add more people and decide which mailboxes each person can reach.
 
 ```bash
 # A fresh instance starts with one logged-in administrator
@@ -56,11 +56,11 @@ Member and mailbox scope control which mailboxes a connection can reach. Its [pe
 
 ## Plans and licensing
 
-Self-hosting is free on the **Personal** plan: 3 connected mailboxes and 1 member. Pro raises the mailbox limit for one person. Team and Enterprise add members and more mailboxes. On Team and Enterprise, each person connects their own mailboxes, and a mailbox can also be shared. See [pricing](/pricing) for current limits.
+Self-hosting is free on the **Personal** plan: 3 connected mailboxes and 1 member. Pro raises the mailbox limit for one person. Each member included in your Business plan raises the mailbox limit by 20. The limit applies to the instance, so one person can connect every allotted mailbox. You choose which members can access each mailbox. Contact us about Enterprise if you need more than 50 members. See [pricing](/pricing) for current limits.
 
-You can buy Pro or Team from the pricing page. Stripe returns you to Fluxmail after payment and shows your license key. Copy it then, and keep it private.
+You can buy Pro or Business from the pricing page. Stripe returns you to Fluxmail after payment and shows your license key. Copy it then, and keep it private.
 
-Use **Manage subscription** on the pricing page or license screen to update your card, view invoices, change plans, or cancel. Stripe asks for the email used at checkout and sends a one-time passcode before opening billing details. Stripe billing emails also include the same portal link.
+Use **Manage subscription** on the pricing page or license screen to update your card, view invoices, change plans or your member limit, or cancel. Stripe asks for the email used at checkout and sends a one-time passcode before opening billing details. Stripe billing emails also include the same portal link.
 
 Unlock a paid plan with your license key:
 
@@ -75,10 +75,12 @@ An administrative REST client can read the same status from `GET /api/v1/admin/l
 
 One license activates one instance, and enforcement keeps working offline. If you schedule a cancellation, the paid plan works until the end of the billing period. After the subscription ends or a payment fails, the instance drops back to Personal limits. Deactivating, downgrading, or lapsing never deletes mailboxes or data.
 
+Lowering the member limit takes effect at the end of the billing period. If the instance then has more mailboxes or members than the new limits allow, Fluxmail keeps working for 7 days and warns administrators in the CLI, `fluxmail license status`, and MCP tool results. You can't add mailboxes or members during that time. Remove the extras or increase your member limit before the date in the warning. After that, email tools stop working until usage fits the plan. The CLI keeps working so you can remove mailboxes or members.
+
 ## Software license
 
 Fluxmail is source available under the [Elastic License 2.0](https://github.com/churichard/fluxmail/blob/main/LICENSE.md). You may use, modify, create derivative works, and redistribute it subject to that license. A fork does not need a paid Fluxmail subscription merely because it is a fork. Without a valid paid key, Fluxmail uses the Personal plan with 3 mailboxes and 1 member.
 
-Official Pro and Team entitlements require a valid Fluxmail license key. ELv2 does not allow you to change or circumvent license key functionality or remove functionality protected by a key. It also does not allow you to provide Fluxmail to third parties as a hosted or managed service that exposes a substantial set of its features.
+Official Pro, Business, and Enterprise entitlements require a valid Fluxmail license key. ELv2 does not allow you to change or circumvent license key functionality or remove functionality protected by a key. It also does not allow you to provide Fluxmail to third parties as a hosted or managed service that exposes a substantial set of its features.
 
 The software license does not grant rights to Fluxmail names or logos beyond applicable law. Their use is subject to the [Fluxmail Terms of Service](https://fluxmail.ai/terms).

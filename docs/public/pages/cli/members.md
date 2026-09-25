@@ -24,7 +24,7 @@ This command has no command-specific options.
 
 | Command | Description |
 | --- | --- |
-| [`fluxmail members add`](/docs/cli/members-add) | Add a member (subject to the plan seat limit) |
+| [`fluxmail members add`](/docs/cli/members-add) | Add a member (subject to your plan's member limit) |
 | [`fluxmail members list`](/docs/cli/members-list) | List members with their mailbox and API key counts |
 | [`fluxmail members remove`](/docs/cli/members-remove) | Remove a member after reassigning or removing their mailboxes |
 | [`fluxmail members role`](/docs/cli/members-role) | Change a member role |

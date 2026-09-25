@@ -1562,7 +1562,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
     .requiredOption('--name <name>', 'Member name')
     .requiredOption('--email <email>', 'Member login email')
     .option('--role <role>', 'Member role: admin or member')
-    .description('Add a member (subject to the plan seat limit)')
+    .description("Add a member (subject to your plan's member limit)")
     .action(async (opts: { name: string; email: string; role?: string }) => {
       try {
         if (opts.role && opts.role !== 'admin' && opts.role !== 'member') {
