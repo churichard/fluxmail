@@ -24,7 +24,7 @@ Required capabilities: `mail.read` + `mail.send`.
 | `from` | No | `string` | Connected address or an available send-as address Format: `email`. |
 | `to` | Yes | array of `string` | Recipients, each "Name <a@x.com>" or "a@x.com" |
 | `cc` | No | array of `string` | Recipients, each "Name <a@x.com>" or "a@x.com" |
-| `comment` | No | `string` | None |
+| `comment` | No | `string` | Comment above the forwarded message. Keep prose paragraphs on one continuous line and separate paragraphs with blank lines. |
 | `includeAttachments` | No | `boolean` | Default true |
 
 <details>
@@ -70,7 +70,8 @@ Required capabilities: `mail.read` + `mail.send`.
       "description": "Recipients, each \"Name <a@x.com>\" or \"a@x.com\""
     },
     "comment": {
-      "type": "string"
+      "type": "string",
+      "description": "Comment above the forwarded message. Keep prose paragraphs on one continuous line and separate paragraphs with blank lines."
     },
     "includeAttachments": {
       "type": "boolean",

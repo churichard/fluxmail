@@ -87,6 +87,18 @@ const MessageBodySchema = z
   .object({ text: z.string().optional(), html: z.string().optional() })
   .strict()
   .openapi('MessageBody');
+const MessageInputBodySchema = z
+  .object({
+    text: z
+      .string()
+      .optional()
+      .describe(
+        'Plain-text body. Line breaks appear in the sent email. Keep each prose paragraph on one continuous line and separate paragraphs with blank lines.',
+      ),
+    html: z.string().optional(),
+  })
+  .strict()
+  .openapi('MessageInputBody');
 const AttachmentInputSchema = z
   .object({
     filename: z.string().min(1),
@@ -416,7 +428,7 @@ const draftShape = {
   cc: z.array(EmailAddressSchema).optional(),
   bcc: z.array(EmailAddressSchema).optional(),
   subject: z.string().optional(),
-  body: MessageBodySchema,
+  body: MessageInputBodySchema,
   replyToMessageId: messageId.optional(),
   replyAll: z.boolean().optional().describe('Requires replyToMessageId when true.'),
   attachments: z.array(AttachmentInputSchema).optional(),
@@ -440,7 +452,12 @@ const ForwardRequestSchema = z
     from: z.string().email().optional(),
     to: z.array(EmailAddressSchema).min(1),
     cc: z.array(EmailAddressSchema).optional(),
-    comment: z.string().optional(),
+    comment: z
+      .string()
+      .optional()
+      .describe(
+        'Comment above the forwarded message. Keep prose paragraphs on one continuous line and separate paragraphs with blank lines.',
+      ),
     includeAttachments: z
       .boolean()
       .optional()

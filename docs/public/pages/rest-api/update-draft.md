@@ -115,7 +115,8 @@ Content type: `application/json`
       "type": "object",
       "properties": {
         "text": {
-          "type": "string"
+          "type": "string",
+          "description": "Plain-text body. Line breaks appear in the sent email. Keep each prose paragraph on one continuous line and separate paragraphs with blank lines."
         },
         "html": {
           "type": "string"

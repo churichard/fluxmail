@@ -21,6 +21,8 @@ Both transports provide the same MCP tools. The examples use the default `full` 
 
 Every `send_email` and `forward_email` call now needs an `idempotencyKey`. Keep the key and reuse it if a call times out. The result includes an `operationId`; call `get_delivery_operation` to check whether delivery succeeded, failed, or is uncertain. Inspect an uncertain message before attempting a new send. Use `preview_send` to check recipients and attachments without sending.
 
+For plain-text email, ask your agent to keep each prose paragraph on one continuous line in `bodyText`, with a blank line between paragraphs. Fluxmail preserves line breaks, so wrapping a paragraph at a fixed width will show as short lines in the recipient's mail app. Lists and signatures can still use intentional line breaks.
+
 An uncertain or failed send is marked as an MCP tool error, but its structured result still contains the operation ID and status. Bulk changes with failed or uncertain messages behave the same way, so inspect their per-message result before retrying.
 
 Input errors from Fluxmail explain which field needs attention. Search syntax errors also include `data.diagnostics`. Provider error text is replaced with a safe message.

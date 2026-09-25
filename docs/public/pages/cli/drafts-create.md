@@ -25,8 +25,8 @@ fluxmail drafts create [options]
 | `--cc <address>` | No | Add a Cc recipient; repeat as needed | None |
 | `--bcc <address>` | No | Add a Bcc recipient; repeat as needed | None |
 | `--subject <subject>` | No | Set the subject | None |
-| `--body <text>` | No | Set the plain-text body | None |
-| `--body-file <path>` | No | Read the plain-text body from a file | None |
+| `--body <text>` | No | Set the plain-text body; use blank lines between unwrapped prose paragraphs | None |
+| `--body-file <path>` | No | Read the plain-text body from a file; keep prose paragraphs unwrapped | None |
 | `--html <html>` | No | Set the HTML body | None |
 | `--html-file <path>` | No | Read the HTML body from a file | None |
 | `--attach <path>` | No | Attach a local file; repeat as needed | None |

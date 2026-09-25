@@ -84,7 +84,12 @@ const draftShape = {
   cc: addressList.optional(),
   bcc: addressList.optional(),
   subject: z.string().optional().describe('Defaults to "Re: ..." when replying'),
-  bodyText: z.string().optional().describe('Plain-text body'),
+  bodyText: z
+    .string()
+    .optional()
+    .describe(
+      'Plain-text body. Line breaks appear in the sent email. Keep each prose paragraph on one continuous line and separate paragraphs with blank lines.',
+    ),
   bodyHtml: z.string().optional().describe('HTML body'),
   replyToMessageId: idParam
     .optional()
@@ -949,7 +954,12 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
           from: z.string().email().optional().describe('Connected address or an available send-as address'),
           to: addressList.min(1),
           cc: addressList.optional(),
-          comment: z.string().optional(),
+          comment: z
+            .string()
+            .optional()
+            .describe(
+              'Comment above the forwarded message. Keep prose paragraphs on one continuous line and separate paragraphs with blank lines.',
+            ),
           includeAttachments: z.boolean().optional().describe('Default true'),
         },
         annotations: { destructiveHint: true },

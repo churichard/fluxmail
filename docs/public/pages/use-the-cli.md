@@ -80,6 +80,8 @@ fluxmail emails send \
 
 Use `--html` or `--html-file` for an HTML body. Repeat `--to`, `--cc`, `--bcc`, and `--attach` as needed. If standard input is redirected and no body option is present, Fluxmail uses standard input as the plain-text body.
 
+For plain-text email, keep each prose paragraph on one continuous line in `--body`, a body file, or standard input. Use a blank line between paragraphs. Fluxmail preserves line breaks, including those in lists and signatures.
+
 Reply, send an existing draft, schedule delivery, or forward a message:
 
 ```bash
