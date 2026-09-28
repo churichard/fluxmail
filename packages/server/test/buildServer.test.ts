@@ -508,11 +508,20 @@ describe('typed MCP responses', () => {
     );
   });
 
-  it('declares an output schema for every tool and bounds body content', async () => {
+  it('advertises output schemas accepted by clients using the MCP default dialect', async () => {
+    const client = await connectMcp({ enforceQuota: () => undefined });
+    const tools = (await client.listTools()).tools;
+    expect(tools.length).toBeGreaterThan(0);
+    for (const tool of tools) {
+      expect(tool.outputSchema, tool.name).toMatchObject({ type: 'object', properties: { data: expect.any(Object) } });
+      expect(tool.outputSchema?.$schema, tool.name).toBeUndefined();
+      expect(tool.outputSchema?.required, tool.name).toContain('data');
+    }
+  });
+
+  it('bounds body content in typed MCP responses', async () => {
     const getMessage = vi.fn().mockResolvedValue({ ...draftMessage, body: { text: 'x'.repeat(60_000) } });
     const client = await connectMcp({ enforceQuota: () => undefined, getMessage } as Partial<EmailService>);
-    const tools = (await client.listTools()).tools;
-    expect(tools.every((tool) => tool.outputSchema !== undefined)).toBe(true);
     const first = await client.callTool({
       name: 'get_email',
       arguments: { messageId: 'private-message', bodyFormat: 'text' },

@@ -1,8 +1,9 @@
 import { VERSION } from '../version.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { zodToJsonSchema } from 'zod-to-json-schema';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { ListToolsRequestSchema, type CallToolResult, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import {
   EmailError,
   isEmailError,
@@ -35,6 +36,18 @@ import { outputSchemas } from './outputSchemas.js';
 const MAX_BODY_CHARS = 50_000;
 const TELEMETRY_ERROR = Symbol('telemetryError');
 type TelemetryCallToolResult = CallToolResult & { [TELEMETRY_ERROR]?: true };
+const EMPTY_INPUT_SCHEMA: Tool['inputSchema'] = {
+  type: 'object',
+  properties: {},
+  $schema: 'http://json-schema.org/draft-07/schema#',
+};
+
+function toolJsonSchema(shape: z.ZodRawShape, pipeStrategy: 'input' | 'output'): Tool['inputSchema'] {
+  const schema = zodToJsonSchema(z.object(shape), { strictUnions: true, pipeStrategy });
+  // MCP clients use JSON Schema 2020-12 when no dialect is declared.
+  if (pipeStrategy === 'output') delete schema.$schema;
+  return schema as Tool['inputSchema'];
+}
 
 const accountIdParam = z
   .string()
@@ -449,12 +462,28 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
         'than echoing raw payloads, ids, or field names.',
     },
   );
-  const registerTool = ((name: string, config: Record<string, unknown>, callback: unknown) =>
-    server.registerTool(
+  const listedTools: Tool[] = [];
+  const registerTool = ((name: string, config: Record<string, unknown>, callback: unknown) => {
+    const outputSchema = outputSchemas[name as keyof typeof outputSchemas];
+    const registered = server.registerTool(
       name,
-      { ...config, outputSchema: outputSchemas[name as keyof typeof outputSchemas] },
+      { ...config, outputSchema },
       callback as Parameters<McpServer['registerTool']>[2],
-    )) as McpServer['registerTool'];
+    );
+    const inputShape = config.inputSchema as z.ZodRawShape | undefined;
+    listedTools.push({
+      name,
+      title: config.title as string | undefined,
+      description: config.description as string | undefined,
+      inputSchema:
+        inputShape && Object.keys(inputShape).length ? toolJsonSchema(inputShape, 'input') : EMPTY_INPUT_SCHEMA,
+      outputSchema: toolJsonSchema(outputSchema, 'output'),
+      annotations: config.annotations as Tool['annotations'],
+      execution: { taskSupport: 'forbidden' },
+      _meta: config._meta as Tool['_meta'],
+    });
+    return registered;
+  }) as McpServer['registerTool'];
 
   if (can('mail.read'))
     registerTool(
@@ -1149,6 +1178,11 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
         return { contents: [{ uri: uri.href, mimeType: meta.mimeType, blob: content.toString('base64') }] };
       },
     );
+
+  if (listedTools.length) {
+    // The SDK's list handler declares draft-07 for output schemas, which strict clients reject.
+    server.server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: listedTools }));
+  }
 
   return server;
 }

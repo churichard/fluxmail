@@ -19,7 +19,7 @@ This restriction does not prevent legitimate work on the licensing system, such 
 - README links to public documentation must use the published `https://fluxmail.ai/docs/` URLs, not Markdown files in this repository.
 - Public Fluxmail MCP guides live in `docs/public/`. Keep provider setup, architecture, and licensing explanations hand written.
 - Add and order public pages in `docs/public/pages/meta.json`. The compatibility manifest is generated from that file and must not be edited by hand.
-- Changes to MCP tools, CLI commands, configuration, permissions, providers, or licensing must update the corresponding public guide.
+- Update the corresponding public guide for user-facing changes to MCP tools, CLI commands, configuration, permissions, providers, or licensing when users need new or revised guidance. Bug fixes and internal architecture changes do not require a public documentation update when the existing guidance remains accurate.
 - The generated reference pages under `tools/`, `cli/`, and `rest-api/`, along with generated sections in `configuration.md` and `permissions.md`, come from the implementation. Run `pnpm docs:generate`, then `pnpm docs:check`.
 - Apply the humanizer guidance to all user-facing copy. Do not use em dashes or en dashes in public documentation.
 
