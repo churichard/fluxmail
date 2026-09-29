@@ -31,7 +31,9 @@ Run:
 pnpm release doctor --json
 ```
 
-Before the first workflow run, or after publishing configuration changes, also run:
+The publish workflow uses npm trusted publishing through GitHub OIDC. Do not run `npm login`, request an npm authenticator code, or run `--npm-trust` during routine release preparation, including a first release. The protected publish workflow checks the existing trust settings when it publishes. A successful prior release from the same repository, workflow file, and `release` environment also confirms those settings worked.
+
+Run the separate setup audit when changing npm trusted-publisher settings, when the workflow reports a trusted-publisher problem, or when the user explicitly requests an npm trust audit. After changing settings, rerun the audit before publishing:
 
 ```bash
 pnpm release doctor --json --npm-trust
@@ -39,7 +41,7 @@ pnpm release doctor --json --npm-trust
 
 Read `docs/releasing.md` only when preflight reports missing external setup or when troubleshooting a failure. Fix safe repository-local problems directly. Before changing npm or GitHub configuration, show the proposed external changes and ask for one setup approval. Do not add a required environment reviewer unless the user asks for a second approval gate.
 
-If npm reports that login is required, start `npm login` and let the user complete browser authentication. If npm reports a separate authentication URL, open it when browser control is available. Otherwise, give the user that one URL and resume as soon as authentication completes. Configure missing trusted publishers during npm's five-minute bulk window, then rerun the strict preflight.
+If that setup audit reports that login is required, start `npm login` and let the user complete browser authentication. If npm reports a separate authentication URL, open it when browser control is available. Otherwise, give the user that one URL and resume as soon as authentication completes. Configure missing trusted publishers during npm's five-minute bulk window, then rerun the setup audit.
 
 ## Audit and choose the version
 

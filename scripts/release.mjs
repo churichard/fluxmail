@@ -85,7 +85,7 @@ async function doctor(args) {
     checks.push({
       id: 'npm-trusted-publishers',
       status: 'skipped',
-      message: 'Run with --npm-trust before the first release or after changing publishing setup.',
+      message: 'Use --npm-trust only when configuring or troubleshooting npm trusted publishers.',
     });
   }
 

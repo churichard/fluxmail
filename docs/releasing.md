@@ -10,10 +10,9 @@ Run the automated checks first:
 
 ```bash
 pnpm release doctor --json
-pnpm release doctor --json --npm-trust
 ```
 
-The strict npm check requires an npm login. If it returns an authentication URL, open it and complete the proof-of-presence check. Select npm's option to skip additional two-factor prompts for five minutes, then rerun the command. That window is long enough to inspect or configure all five packages.
+Routine releases use npm trusted publishing through GitHub OIDC. The publish job needs no npm login, npm token, or authenticator code. The normal preflight above does not access private npm account settings.
 
 ### GitHub release environment
 
@@ -60,6 +59,8 @@ do
 done
 ```
 
+The release flow does not audit these private npm settings before publishing. The protected workflow checks the trusted-publisher match through OIDC. If that workflow reports a trust mismatch, or you are changing the publisher settings, run `pnpm release doctor --json --npm-trust` as a separate setup audit. It may require an interactive npm login.
+
 ### GHCR Actions access
 
 Connect the `fluxmail` container package to `churichard/fluxmail`. A linked package inherits GitHub Actions access from that repository. The Dockerfile's `org.opencontainers.image.source` label keeps future images linked to the repository.
@@ -100,6 +101,8 @@ Stop instead of retrying when Docker exists before every npm package, an existin
 ## Local fallback
 
 Use local publishing only when GitHub Actions is unavailable. It requires separate approval because it replaces the normal OIDC and workflow controls.
+
+Local publishing cannot use GitHub Actions OIDC, so npm may require an authenticator code in this fallback.
 
 Authenticate to npm and GitHub first. The GitHub CLI token needs `write:packages`:
 
