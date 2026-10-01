@@ -74,6 +74,7 @@ import {
   loadInstanceConfig,
   removeInstance,
   resolveInstance,
+  resolveStdioInstance,
   saveLocalInstance,
   saveRemoteInstance,
   saveSessionToken,
@@ -153,25 +154,29 @@ function accountIdsFromRefs(ctx: ReturnType<typeof createContext>, refs: readonl
 }
 
 export function permissionPolicyFromOptions(opts: PermissionOptions, requireSelection = false): PermissionPolicy {
-  const supplemental = opts.admin ?? [];
-  if (opts.profile && opts.allow.length) {
-    throw new Error('--profile cannot be combined with --allow.');
-  }
-  if (opts.allow.length && supplemental.length) {
-    throw new Error(
-      '--admin can only be combined with a named --profile. Put admin capabilities in --allow for a custom policy.',
-    );
-  }
-  if (opts.profile) {
-    if (!isNamedPermissionProfile(opts.profile)) {
-      throw new Error(`Unknown profile "${opts.profile}". Expected one of: ${NAMED_PERMISSION_PROFILES.join(', ')}.`);
+  try {
+    const supplemental = opts.admin ?? [];
+    if (opts.profile && opts.allow.length) {
+      throw new Error('--profile cannot be combined with --allow.');
     }
-    return permissionPolicyForProfile(opts.profile, supplemental);
+    if (opts.allow.length && supplemental.length) {
+      throw new Error(
+        '--admin can only be combined with a named --profile. Put admin capabilities in --allow for a custom policy.',
+      );
+    }
+    if (opts.profile) {
+      if (!isNamedPermissionProfile(opts.profile)) {
+        throw new Error(`Unknown profile "${opts.profile}". Expected one of: ${NAMED_PERMISSION_PROFILES.join(', ')}.`);
+      }
+      return permissionPolicyForProfile(opts.profile, supplemental);
+    }
+    if (opts.allow.length) return customPermissionPolicy(opts.allow);
+    if (supplemental.length) return permissionPolicyForProfile('full', supplemental);
+    if (requireSelection) throw new Error('Choose --profile or at least one --allow capability.');
+    return FULL_PERMISSION_POLICY;
+  } catch (error) {
+    throw new EmailError('invalid_request', error instanceof Error ? error.message : String(error));
   }
-  if (opts.allow.length) return customPermissionPolicy(opts.allow);
-  if (supplemental.length) return permissionPolicyForProfile('full', supplemental);
-  if (requireSelection) throw new Error('Choose --profile or at least one --allow capability.');
-  return FULL_PERMISSION_POLICY;
 }
 
 export function permissionPolicyForUpdate(
@@ -945,52 +950,79 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
     .option('--profile <profile>', `Tool profile: ${NAMED_PERMISSION_PROFILES.join(', ')}`)
     .option('--allow <capability>', 'Allow one MCP capability; repeat as needed', collectOption, [])
     .action(async (opts: ScopedMcpOptions) => {
-      installTelemetrySignalHandlers();
-      installStdioShutdownHandler(process.stdin);
-      const ctx = createContext();
-      const permissions = permissionPolicyFromOptions(opts);
-      const selected = resolveInstance(selectedInstance());
-      if (selected.profile.kind !== 'local') {
-        throw new EmailError(
-          'invalid_request',
-          'Stdio MCP only supports the local instance. Use the remote HTTP MCP endpoint with an API key.',
-        );
+      const startupPhase = (
+        phase: 'permissions' | 'instance' | 'context' | 'authentication' | 'account_scope' | 'transport' | 'ready',
+      ): void => recordCliOperationProperties(program, { startup_phase: phase });
+      let ctx: ReturnType<typeof createContext> | undefined;
+      let server: ReturnType<typeof buildMcpServer> | undefined;
+      try {
+        startupPhase('permissions');
+        const permissions = permissionPolicyFromOptions(opts);
+        startupPhase('instance');
+        const selected = resolveStdioInstance(selectedInstance());
+        startupPhase('authentication');
+        if (!selected.token)
+          throw new EmailError(
+            'permission_denied',
+            'Log in to the local instance before starting stdio MCP. Run "fluxmail --instance local login".',
+          );
+        startupPhase('context');
+        ctx = createContext();
+        startupPhase('authentication');
+        const principal = authenticateBearer(ctx.db, selected.token);
+        if (!principal || principal.kind !== 'session')
+          throw new EmailError(
+            'permission_denied',
+            'The local CLI session has expired. Run "fluxmail --instance local login".',
+          );
+        startupPhase('account_scope');
+        const accountIds = accountIdsFromRefs(ctx, opts.account);
+        const scopedService = ctx.service.withPrincipal({ ...principal, accountIds });
+        startupPhase('transport');
+        server = buildMcpServer(scopedService, {
+          permissions,
+          maxAttachmentBytes: ctx.config.maxAttachmentBytes,
+          telemetry: ctx.telemetry,
+          transport: 'stdio',
+          logger: ctx.logger,
+        });
+        installTelemetrySignalHandlers();
+        installStdioShutdownHandler(process.stdin);
+        await server.connect(new StdioServerTransport());
+        ctx.scheduler.start();
+        ctx.telemetry.capture('mcp server started', {
+          ...instanceUsageProperties(ctx.db),
+          product_surface: 'mcp',
+          transport: 'stdio',
+        });
+        ctx.logger.info('server.started', 'Fluxmail stdio MCP server started', {
+          productSurface: 'mcp',
+          details: { transport: 'stdio' },
+          skipConsole: true,
+        });
+        // stdout belongs to the MCP protocol; log to stderr only.
+        ctx.licenseController.start();
+        console.error('Fluxmail MCP server running on stdio');
+        warnLicense(ctx.db);
+        const pending = scopedService.listScheduled().filter((send) => send.status === 'pending').length;
+        if (pending > 0) console.error(`Scheduled sends pending: ${pending}`);
+        startupPhase('ready');
+      } catch (error) {
+        finishCliOperation(program, 'error', apiErrorCode(error), error);
+        if (ctx) {
+          const context = ctx;
+          await Promise.allSettled([
+            Promise.resolve().then(() => context.scheduler.stop()),
+            Promise.resolve().then(() => context.licenseController.stop()),
+            Promise.resolve().then(() => server?.close()),
+          ]);
+          await context.registry.close().catch(() => {});
+          try {
+            (context.db as unknown as { $client: { close(): void } }).$client.close();
+          } catch {}
+        }
+        throw error;
       }
-      if (!selected.token)
-        throw new EmailError('permission_denied', 'Log in to the local instance before starting stdio MCP.');
-      const principal = authenticateBearer(ctx.db, selected.token);
-      if (!principal || principal.kind !== 'session')
-        throw new EmailError(
-          'permission_denied',
-          'The local CLI session has expired. Run "fluxmail login --instance local".',
-        );
-      const accountIds = accountIdsFromRefs(ctx, opts.account);
-      const scopedService = ctx.service.withPrincipal({ ...principal, accountIds });
-      const server = buildMcpServer(scopedService, {
-        permissions,
-        maxAttachmentBytes: ctx.config.maxAttachmentBytes,
-        telemetry: ctx.telemetry,
-        transport: 'stdio',
-        logger: ctx.logger,
-      });
-      ctx.scheduler.start();
-      await server.connect(new StdioServerTransport());
-      ctx.telemetry.capture('mcp server started', {
-        ...instanceUsageProperties(ctx.db),
-        product_surface: 'mcp',
-        transport: 'stdio',
-      });
-      ctx.logger.info('server.started', 'Fluxmail stdio MCP server started', {
-        productSurface: 'mcp',
-        details: { transport: 'stdio' },
-        skipConsole: true,
-      });
-      // stdout belongs to the MCP protocol; log to stderr only.
-      ctx.licenseController.start();
-      console.error('Fluxmail MCP server running on stdio');
-      warnLicense(ctx.db);
-      const pending = scopedService.listScheduled().filter((send) => send.status === 'pending').length;
-      if (pending > 0) console.error(`Scheduled sends pending: ${pending}`);
     });
 
   const accounts = program.command('accounts').description('Manage connected email accounts');

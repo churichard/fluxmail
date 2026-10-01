@@ -10,10 +10,12 @@ import {
   instanceConfigPath,
   loadInstanceConfig,
   resolveInstance,
+  resolveStdioInstance,
   saveLocalInstance,
   saveRemoteInstance,
   saveSessionToken,
   setRequestDeadlineMs,
+  useInstance,
   validateRemoteServerUrl,
 } from '../src/cliInstances.js';
 import { createContext } from '../src/context.js';
@@ -68,6 +70,42 @@ describe('CLI instance profiles', () => {
     expect(() => validateRemoteServerUrl('https://user:password@mail.example.com')).toThrow(
       /cannot contain credentials/,
     );
+  });
+
+  it('keeps stdio on the local session when the CLI switches to a remote instance', () => {
+    vi.stubEnv('FLUXMAIL_DATA_DIR', mkdtempSync(path.join(tmpdir(), 'fluxmail-stdio-instance-')));
+    saveLocalInstance();
+    saveSessionToken('local', 'fms_private_local_session');
+    saveRemoteInstance('work', 'https://private.example.com');
+    saveSessionToken('work', 'fms_private_remote_session');
+    useInstance('work');
+
+    expect(resolveInstance().name).toBe('work');
+    expect(resolveStdioInstance()).toMatchObject({ name: 'local', token: 'fms_private_local_session' });
+    expect(resolveInstance().name).toBe('work');
+    expect(() => resolveStdioInstance('work')).toThrow(/requires a local instance/);
+  });
+
+  it('preserves an active named local profile and explicit local selections for stdio', () => {
+    vi.stubEnv('FLUXMAIL_DATA_DIR', mkdtempSync(path.join(tmpdir(), 'fluxmail-stdio-instance-')));
+    saveLocalInstance();
+    saveSessionToken('local', 'fms_private_local_session');
+    saveLocalInstance('personal');
+    saveSessionToken('personal', 'fms_private_personal_session');
+
+    expect(resolveStdioInstance()).toMatchObject({ name: 'personal', token: 'fms_private_personal_session' });
+    expect(resolveStdioInstance('local')).toMatchObject({ name: 'local', token: 'fms_private_local_session' });
+    expect(() => resolveStdioInstance('missing')).toThrow(/No CLI instance/);
+  });
+
+  it('does not use remote credentials or create a local profile for stdio', () => {
+    vi.stubEnv('FLUXMAIL_DATA_DIR', mkdtempSync(path.join(tmpdir(), 'fluxmail-stdio-instance-')));
+    expect(() => resolveStdioInstance()).toThrow(/No CLI instance is configured/);
+    saveRemoteInstance('work', 'https://private.example.com');
+    saveSessionToken('work', 'fms_private_remote_session');
+
+    expect(() => resolveStdioInstance()).toThrow(/requires a local instance/);
+    expect(loadInstanceConfig().instances.local).toBeUndefined();
   });
 
   it('refuses to forward a session through a remote redirect', async () => {

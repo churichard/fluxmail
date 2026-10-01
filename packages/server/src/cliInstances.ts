@@ -234,6 +234,20 @@ export function resolveInstance(name?: string): { name: string; profile: Instanc
   return { name: selected, profile, token: loadCredentials().sessions[selected] };
 }
 
+export function resolveStdioInstance(name?: string): ReturnType<typeof resolveInstance> {
+  const config = loadInstanceConfig();
+  const activeIsLocal = config.active !== undefined && config.instances[config.active]?.kind === 'local';
+  const fallback = activeIsLocal ? config.active : config.instances.local?.kind === 'local' ? 'local' : config.active;
+  const selected = resolveInstance(name ?? fallback);
+  if (selected.profile.kind !== 'local') {
+    throw new EmailError(
+      'invalid_request',
+      'Stdio MCP requires a local instance. Run "fluxmail --instance local login", or use the remote HTTP MCP endpoint with an API key.',
+    );
+  }
+  return selected;
+}
+
 export function saveSessionToken(instanceName: string, token: string): void {
   const credentials = loadCredentials();
   credentials.sessions[instanceName] = token;

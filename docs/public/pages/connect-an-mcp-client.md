@@ -31,7 +31,11 @@ Mail tools return typed `structuredContent` and readable text. `get_email` and `
 
 ## Option 1: Connect over stdio
 
-Every stdio client launches `fluxmail stdio`. Fluxmail uses the member logged in to the selected local instance. You do not need to run `fluxmail serve`.
+Every stdio client launches `fluxmail stdio`. Fluxmail uses the member logged in to the active local instance. If your active CLI instance is remote, stdio uses the `local` profile instead. You do not need to run `fluxmail serve`.
+
+Before connecting, run `fluxmail setup` for a new installation, or `fluxmail --instance local login` for an existing one. The MCP client must run as the same operating-system user and use the same Fluxmail data directory as that command.
+
+To use another local profile, add `--instance <name>` before `stdio` in the client command. An explicit remote profile is rejected; use Streamable HTTP for remote instances. Changing the active CLI instance to a remote profile does not change the local session used by an existing stdio configuration.
 
 <details>
 <summary>Claude Code</summary>
