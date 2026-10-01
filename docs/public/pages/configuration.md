@@ -130,6 +130,8 @@ Fluxmail sends anonymous operation events to its PostHog project by default. Eve
 
 For MCP attachment downloads, telemetry records whether the tool returned a resource link or inline content. It records the same choice if the download fails, without sending the attachment name or content.
 
+For `fluxmail stdio`, telemetry records which startup phase failed, or `ready` when the server starts. The phases cover permission options, local instance selection, configuration and database initialization, session authentication, mailbox selection, and MCP transport startup. No option values or error messages are sent.
+
 Delivery status, send preview, draft retrieval, body continuation, and bulk actions use the same event format. Fluxmail does not send delivery IDs, message IDs, recipients, or message content in these events.
 
 When the MCP server starts, telemetry records the plan and how many mailboxes and members the installation has. The plan is sent as Personal, Pro, Team, Business, or Enterprise, and any other plan name is sent as `other`. It does not send the license key or any address.
