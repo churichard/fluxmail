@@ -57,7 +57,7 @@ const MESSAGE_LIST_FIELDS = [
 ].join(',');
 
 const MESSAGE_FULL_FIELDS = `${MESSAGE_LIST_FIELDS},body`;
-const ATTACHMENT_SELECT = 'id,name,contentType,size,isInline,contentId';
+const ATTACHMENT_SELECT = 'id,name,contentType,size,isInline,microsoft.graph.fileAttachment/contentId';
 const ATTACHMENT_METADATA_SELECT = 'id,name,contentType,size,isInline';
 
 const WELL_KNOWN_FOLDERS: Array<{ id: string; role: FolderRole; name: string }> = [
@@ -114,6 +114,7 @@ interface RequestOptions {
   nonIdempotent?: boolean;
   includeAuth?: boolean;
   signal?: AbortSignal;
+  attachmentMaxBytes?: number;
 }
 
 interface LocalMessageFilter {
@@ -153,6 +154,26 @@ function assertAttachmentSize(sizeBytes: number, maxBytes: number | undefined): 
       sizeBytes,
       maxBytes,
     });
+  }
+}
+
+async function readAttachmentContent(response: Response, maxBytes: number): Promise<Buffer> {
+  if (!response.body) throw new EmailError('provider_unavailable', 'Microsoft Graph returned no attachment data');
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let sizeBytes = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      sizeBytes += value.byteLength;
+      assertAttachmentSize(sizeBytes, maxBytes);
+      chunks.push(value);
+    }
+    return Buffer.concat(chunks, sizeBytes);
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
   }
 }
 
@@ -310,7 +331,7 @@ export class OutlookProvider implements EmailProvider {
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
       try {
         const headers = new Headers(init.headers);
-        headers.set('accept', 'application/json');
+        headers.set('accept', options.attachmentMaxBytes === undefined ? 'application/json' : '*/*');
         headers.set(
           'prefer',
           [headers.get('prefer'), 'IdType="ImmutableId"'].filter((value): value is string => Boolean(value)).join(', '),
@@ -322,7 +343,13 @@ export class OutlookProvider implements EmailProvider {
         options.signal?.throwIfAborted();
         const response = await this.fetchImpl(url, { ...init, headers, signal: options.signal });
         if (response.ok) {
-          if (response.status === 202 || response.status === 204) return undefined as T;
+          if (options.attachmentMaxBytes !== undefined) {
+            return (await readAttachmentContent(response, options.attachmentMaxBytes)) as T;
+          }
+          if (response.status === 202 || response.status === 204) {
+            await response.body?.cancel().catch(() => undefined);
+            return undefined as T;
+          }
           const text = await response.text();
           return (text ? JSON.parse(text) : undefined) as T;
         }
@@ -756,8 +783,12 @@ export class OutlookProvider implements EmailProvider {
         },
         body: content.subarray(start, end + 1),
       });
-      if (!response.ok) {
-        throw new EmailError('provider_unavailable', `Microsoft Graph attachment upload failed (${response.status})`);
+      try {
+        if (!response.ok) {
+          throw new EmailError('provider_unavailable', `Microsoft Graph attachment upload failed (${response.status})`);
+        }
+      } finally {
+        await response.body?.cancel().catch(() => undefined);
       }
     }
   }
@@ -987,15 +1018,19 @@ export class OutlookProvider implements EmailProvider {
     );
     const meta = parseGraphAttachment(metadata);
     if (!meta) throw new EmailError('not_found', `Attachment ${attachmentId} not found on message ${messageId}`);
-    assertAttachmentSize(meta.sizeBytes, options.maxBytes);
     if (metadata['@odata.type'] && metadata['@odata.type'] !== '#microsoft.graph.fileAttachment') {
       throw new EmailError('unsupported_capability', 'Only Outlook file attachments can be downloaded');
     }
-    const attachment = options.maxBytes === undefined ? metadata : await this.request<GraphAttachment>(path);
-    if (attachment.contentBytes == null)
-      throw new EmailError('provider_unavailable', 'Microsoft Graph returned no attachment data');
-    const content = Buffer.from(attachment.contentBytes, 'base64');
+    let content: Buffer;
+    if (options.maxBytes === undefined) {
+      if (metadata.contentBytes == null)
+        throw new EmailError('provider_unavailable', 'Microsoft Graph returned no attachment data');
+      content = Buffer.from(metadata.contentBytes, 'base64');
+    } else {
+      content = await this.request<Buffer>(`${path}/$value`, {}, { attachmentMaxBytes: options.maxBytes });
+    }
     assertAttachmentSize(content.length, options.maxBytes);
+    meta.sizeBytes = content.length;
     return { meta, content };
   }
 }
