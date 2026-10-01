@@ -52,6 +52,16 @@ function provider(fetchImpl: typeof fetch) {
   });
 }
 
+function ignoredResponse(status: number, cancellationFails = false) {
+  const cancel = vi.fn(() => {
+    if (cancellationFails) throw new Error('Response cancellation failed');
+  });
+  const body = new ReadableStream({ cancel });
+  const response = new Response(status === 204 ? null : body, { status });
+  if (status === 204) Object.defineProperty(response, 'body', { value: body });
+  return { response, cancel };
+}
+
 describe('OutlookProvider', () => {
   it('lists Outlook categories and exposes their preset colors', async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
@@ -624,72 +634,273 @@ describe('OutlookProvider', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('creates and sends a draft with a file attachment', async () => {
-    let attachmentAdded = false;
-    const calls: Array<{ url: URL; method: string; body?: unknown }> = [];
-    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = new URL(String(input));
-      const method = init?.method ?? 'GET';
-      calls.push({
-        url,
-        method,
-        ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}),
+  it.each([false, true])(
+    'creates and sends a draft with a file attachment (cancel rejects: %s)',
+    async (cancellationFails) => {
+      let attachmentAdded = false;
+      const { response: sendResponse, cancel } = ignoredResponse(202, cancellationFails);
+      const calls: Array<{ url: URL; method: string; body?: unknown }> = [];
+      const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(String(input));
+        const method = init?.method ?? 'GET';
+        calls.push({
+          url,
+          method,
+          ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) } : {}),
+        });
+        const folder = folderResponse(url);
+        if (folder) return folder;
+        if (url.pathname === '/v1.0/me/messages' && method === 'POST') return json({ id: 'draft-1' }, 201);
+        if (url.pathname === '/v1.0/me/messages/draft-1/attachments' && method === 'POST') {
+          attachmentAdded = true;
+          return json({ id: 'attachment-1' }, 201);
+        }
+        if (url.pathname === '/v1.0/me/messages/draft-1' && method === 'GET') {
+          return json({
+            id: 'draft-1',
+            conversationId: 'thread-1',
+            parentFolderId: 'folder-drafts',
+            toRecipients: [{ emailAddress: { address: 'alex@example.com' } }],
+            subject: 'Status',
+            createdDateTime: '2026-07-14T12:00:00Z',
+            body: { contentType: 'text', content: 'Hello' },
+            isDraft: true,
+            isRead: true,
+            attachments: attachmentAdded
+              ? [{ id: 'attachment-1', name: 'note.txt', contentType: 'text/plain', size: 5, isInline: false }]
+              : [],
+          });
+        }
+        if (url.pathname === '/v1.0/me/messages/draft-1/send' && method === 'POST') return sendResponse;
+        return json({ error: { code: 'ErrorItemNotFound', message: `${method} ${url.pathname}` } }, 404);
+      }) as unknown as typeof fetch;
+      const outlook = new OutlookProvider({
+        accountId: 'acct-1',
+        tokenProvider: { getAccessToken: vi.fn().mockResolvedValue('access-token') },
+        fetch: fetchMock,
+        resolveSender: (email) => (email === 'sales@example.com' ? { email, name: 'Sales' } : undefined),
       });
+
+      const result = await outlook.send({
+        from: 'sales@example.com',
+        to: [{ email: 'alex@example.com' }],
+        subject: 'Status',
+        body: { text: 'Hello' },
+        attachments: [
+          { filename: 'note.txt', mimeType: 'text/plain', content: Buffer.from('hello').toString('base64') },
+        ],
+      });
+
+      expect(result).toEqual({ id: 'draft-1', threadId: 'thread-1' });
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(calls.filter((call) => call.url.pathname.endsWith('/send'))).toHaveLength(1);
+      expect(
+        calls.find((call) => call.url.pathname === '/v1.0/me/messages' && call.method === 'POST')?.body,
+      ).toMatchObject({
+        subject: 'Status',
+        body: { contentType: 'Text', content: 'Hello' },
+        toRecipients: [{ emailAddress: { address: 'alex@example.com' } }],
+        from: { emailAddress: { address: 'sales@example.com', name: 'Sales' } },
+      });
+      expect(calls.find((call) => call.url.pathname.endsWith('/attachments'))?.body).toMatchObject({
+        '@odata.type': '#microsoft.graph.fileAttachment',
+        name: 'note.txt',
+      });
+    },
+  );
+
+  it('selects inline content IDs on the Graph file attachment type', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
       const folder = folderResponse(url);
       if (folder) return folder;
-      if (url.pathname === '/v1.0/me/messages' && method === 'POST') return json({ id: 'draft-1' }, 201);
-      if (url.pathname === '/v1.0/me/messages/draft-1/attachments' && method === 'POST') {
-        attachmentAdded = true;
-        return json({ id: 'attachment-1' }, 201);
-      }
-      if (url.pathname === '/v1.0/me/messages/draft-1' && method === 'GET') {
-        return json({
-          id: 'draft-1',
-          conversationId: 'thread-1',
-          parentFolderId: 'folder-drafts',
-          toRecipients: [{ emailAddress: { address: 'alex@example.com' } }],
-          subject: 'Status',
-          createdDateTime: '2026-07-14T12:00:00Z',
-          body: { contentType: 'text', content: 'Hello' },
-          isDraft: true,
-          isRead: true,
-          attachments: attachmentAdded
-            ? [{ id: 'attachment-1', name: 'note.txt', contentType: 'text/plain', size: 5, isInline: false }]
-            : [],
-        });
-      }
-      if (url.pathname === '/v1.0/me/messages/draft-1/send' && method === 'POST')
-        return new Response(null, { status: 202 });
-      return json({ error: { code: 'ErrorItemNotFound', message: `${method} ${url.pathname}` } }, 404);
+      expect(url.pathname).toBe('/v1.0/me/messages/message-1');
+      expect(url.searchParams.get('$expand')).toBe(
+        'attachments($select=id,name,contentType,size,isInline,microsoft.graph.fileAttachment/contentId)',
+      );
+      return json({
+        id: 'message-1',
+        parentFolderId: 'folder-inbox',
+        attachments: [
+          {
+            '@odata.type': '#microsoft.graph.fileAttachment',
+            id: 'attachment-1',
+            name: 'logo.png',
+            contentType: 'image/png',
+            size: 5,
+            isInline: true,
+            contentId: '<logo@example.com>',
+          },
+        ],
+      });
     }) as unknown as typeof fetch;
-    const outlook = new OutlookProvider({
-      accountId: 'acct-1',
-      tokenProvider: { getAccessToken: vi.fn().mockResolvedValue('access-token') },
-      fetch: fetchMock,
-      resolveSender: (email) => (email === 'sales@example.com' ? { email, name: 'Sales' } : undefined),
+
+    await expect(provider(fetchMock).getMessage('message-1')).resolves.toMatchObject({
+      attachments: [{ id: 'attachment-1', contentId: 'logo@example.com', disposition: 'inline' }],
+    });
+  });
+
+  it.each([
+    { status: 202, cancellationFails: false },
+    { status: 204, cancellationFails: false },
+    { status: 202, cancellationFails: true },
+    { status: 204, cancellationFails: true },
+  ])(
+    'cancels ignored $status response bodies (cancel rejects: $cancellationFails)',
+    async ({ status, cancellationFails }) => {
+      const { response, cancel } = ignoredResponse(status, cancellationFails);
+      const fetchMock = vi.fn(async (input: string | URL | Request) => {
+        const url = new URL(String(input));
+        const folder = folderResponse(url);
+        if (folder) return folder;
+        if (url.pathname.endsWith('/permanentDelete')) return response;
+        return json({ id: 'message-1', parentFolderId: 'folder-inbox' });
+      }) as unknown as typeof fetch;
+
+      await provider(fetchMock).modify(['message-1'], 'delete');
+
+      expect(cancel).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])(
+    'releases every chunk response for a 10 MB upload (cancel rejects: %s)',
+    async (cancellationFails) => {
+      const content = Buffer.alloc(10_000_000, 0xff);
+      const uploads: Uint8Array[] = [];
+      const ranges: string[] = [];
+      const responses: ReturnType<typeof ignoredResponse>[] = [];
+      const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(String(input));
+        const folder = folderResponse(url);
+        if (folder) return folder;
+        if (url.pathname === '/v1.0/me/messages' && init?.method === 'POST') return json({ id: 'draft-1' }, 201);
+        if (url.pathname.endsWith('/createUploadSession')) {
+          expect(JSON.parse(String(init?.body))).toMatchObject({ AttachmentItem: { size: content.length } });
+          return json({ uploadUrl: 'https://upload.example.com/attachment' });
+        }
+        if (url.hostname === 'upload.example.com') {
+          expect(init?.method).toBe('PUT');
+          expect(new Headers(init?.headers).has('authorization')).toBe(false);
+          for (const previous of responses) expect(previous.cancel).toHaveBeenCalledOnce();
+          const chunk = init?.body as Uint8Array;
+          expect(new Headers(init?.headers).get('content-length')).toBe(String(chunk.byteLength));
+          uploads.push(chunk);
+          ranges.push(new Headers(init?.headers).get('content-range')!);
+          const response = ignoredResponse(uploads.length === 3 ? 201 : 200, cancellationFails);
+          responses.push(response);
+          return response.response;
+        }
+        expect(url.pathname).toBe('/v1.0/me/messages/draft-1');
+        return json({ id: 'draft-1', isDraft: true, parentFolderId: 'folder-drafts' });
+      }) as unknown as typeof fetch;
+
+      await provider(fetchMock).createDraft({
+        body: { text: 'Hello' },
+        attachments: [
+          { filename: 'large.bin', mimeType: 'application/octet-stream', content: content.toString('base64') },
+        ],
+      });
+
+      expect(ranges).toEqual([
+        'bytes 0-3932159/10000000',
+        'bytes 3932160-7864319/10000000',
+        'bytes 7864320-9999999/10000000',
+      ]);
+      expect(Buffer.concat(uploads).equals(content)).toBe(true);
+      for (const response of responses) expect(response.cancel).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])('preserves upload errors without retrying (cancel rejects: %s)', async (cancellationFails) => {
+    const { response, cancel } = ignoredResponse(500, cancellationFails);
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/v1.0/me/messages') return json({ id: 'draft-1' }, 201);
+      if (url.pathname.endsWith('/createUploadSession')) {
+        return json({ uploadUrl: 'https://upload.example.com/attachment' });
+      }
+      expect(url.hostname).toBe('upload.example.com');
+      return response;
+    }) as unknown as typeof fetch;
+
+    await expect(
+      provider(fetchMock).createDraft({
+        body: { text: 'Hello' },
+        attachments: [
+          {
+            filename: 'large.bin',
+            mimeType: 'application/octet-stream',
+            content: Buffer.alloc(3 * 1024 * 1024).toString('base64'),
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      code: 'provider_unavailable',
+      message: 'Microsoft Graph attachment upload failed (500)',
     });
 
-    const result = await outlook.send({
-      from: 'sales@example.com',
-      to: [{ email: 'alex@example.com' }],
-      subject: 'Status',
-      body: { text: 'Hello' },
-      attachments: [{ filename: 'note.txt', mimeType: 'text/plain', content: Buffer.from('hello').toString('base64') }],
-    });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
 
-    expect(result).toEqual({ id: 'draft-1', threadId: 'thread-1' });
-    expect(
-      calls.find((call) => call.url.pathname === '/v1.0/me/messages' && call.method === 'POST')?.body,
-    ).toMatchObject({
-      subject: 'Status',
-      body: { contentType: 'Text', content: 'Hello' },
-      toRecipients: [{ emailAddress: { address: 'alex@example.com' } }],
-      from: { emailAddress: { address: 'sales@example.com', name: 'Sales' } },
-    });
-    expect(calls.find((call) => call.url.pathname.endsWith('/attachments'))?.body).toMatchObject({
-      '@odata.type': '#microsoft.graph.fileAttachment',
-      name: 'note.txt',
-    });
+  it.each([undefined, 10_000_000])('uses decoded bytes for a 10 MB attachment with maxBytes %s', async (maxBytes) => {
+    const content = Buffer.alloc(10_000_000, 0xff);
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      return json({
+        '@odata.type': '#microsoft.graph.fileAttachment',
+        id: 'attachment-1',
+        name: 'large.bin',
+        size: 13_333_336,
+        ...(url.searchParams.has('$select') ? {} : { contentBytes: content.toString('base64') }),
+      });
+    }) as unknown as typeof fetch;
+
+    const attachment = await provider(fetchMock).getAttachment('message-1', 'attachment-1', { maxBytes });
+
+    expect(attachment.content.equals(content)).toBe(true);
+    expect(attachment.meta.sizeBytes).toBe(content.length);
+    expect(fetchMock).toHaveBeenCalledTimes(maxBytes === undefined ? 1 : 2);
+  });
+
+  it('rejects oversized decoded content before allocating a decoded Buffer even when Graph understates its size', async () => {
+    const encoded = Buffer.from('hello').toString('base64');
+    const fetchMock = vi.fn(async () =>
+      json({
+        '@odata.type': '#microsoft.graph.fileAttachment',
+        id: 'attachment-1',
+        name: 'note.txt',
+        size: 1,
+        contentBytes: encoded,
+      }),
+    ) as unknown as typeof fetch;
+    const decode = vi.spyOn(Buffer, 'from');
+
+    try {
+      await expect(
+        provider(fetchMock).getAttachment('message-1', 'attachment-1', { maxBytes: 4 }),
+      ).rejects.toMatchObject({
+        code: 'invalid_request',
+        data: { sizeBytes: 5, maxBytes: 4 },
+      });
+      expect(decode.mock.calls.some(([, encoding]) => encoding === 'base64')).toBe(false);
+    } finally {
+      decode.mockRestore();
+    }
+  });
+
+  it('rejects non-file attachments without fetching their content', async () => {
+    const fetchMock = vi.fn(async () =>
+      json({ '@odata.type': '#microsoft.graph.itemAttachment', id: 'attachment-1', name: 'forwarded.eml', size: 100 }),
+    ) as unknown as typeof fetch;
+
+    await expect(provider(fetchMock).getAttachment('message-1', 'attachment-1', { maxBytes: 5 })).rejects.toMatchObject(
+      {
+        code: 'unsupported_capability',
+      },
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it('derives the subject when replacing a reply draft', async () => {
@@ -826,11 +1037,12 @@ describe('OutlookProvider', () => {
       .mocked(fetchMock)
       .mock.calls.map(([input]) => new URL(String(input)))
       .filter((url) => url.pathname.endsWith('/attachments/attachment-1'));
-    expect(attachmentRequests).toHaveLength(4);
+    expect(attachmentRequests).toHaveLength(5);
     expect(attachmentRequests[0]?.searchParams.get('$select')).toBe('id,name,contentType,size,isInline');
     expect(attachmentRequests[1]?.search).toBe('');
     expect(attachmentRequests[2]?.searchParams.get('$select')).toBe('id,name,contentType,size,isInline');
     expect(attachmentRequests[3]?.search).toBe('');
+    expect(attachmentRequests[4]?.search).toBe('');
   });
 
   it('adds and removes categories without replacing unrelated categories', async () => {

@@ -10,11 +10,11 @@ import {
 } from '@fluxmail/core';
 
 export function decodeBase64Url(data: string): Buffer {
-  return Buffer.from(data.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+  return Buffer.from(data, 'base64url');
 }
 
 export function encodeBase64Url(data: Buffer): string {
-  return data.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return data.toString('base64url');
 }
 
 function headerValue(payload: gmail_v1.Schema$MessagePart | undefined, name: string): string | undefined {

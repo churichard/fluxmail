@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { gmail_v1 } from 'googleapis';
-import { findAttachment, parseGmailMessage, walkParts } from '../src/parse.js';
+import { decodeBase64Url, encodeBase64Url, findAttachment, parseGmailMessage, walkParts } from '../src/parse.js';
 
 function b64url(s: string): string {
   return Buffer.from(s, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_');
@@ -50,6 +50,31 @@ const multipartMessage: gmail_v1.Schema$Message = {
     ],
   },
 };
+
+describe('base64url conversion', () => {
+  it.each([
+    { bytes: [], encoded: '' },
+    { bytes: [0xfb], encoded: '-w' },
+    { bytes: [0xfb, 0xff], encoded: '-_8' },
+    { bytes: [0xfb, 0xff, 0xff], encoded: '-___' },
+  ])('encodes and decodes $encoded without padding', ({ bytes, encoded }) => {
+    const content = Buffer.from(bytes);
+    expect(encodeBase64Url(content)).toBe(encoded);
+    expect(decodeBase64Url(encoded).equals(content)).toBe(true);
+  });
+
+  it.each(['-w==', '+w==', '-_8=', '+/8=', '-___', '+///'])('accepts padded and standard base64: %s', (encoded) => {
+    expect(decodeBase64Url(encoded)).toEqual(Buffer.from(encoded, 'base64'));
+  });
+
+  it('round-trips a 10 MB attachment containing URL-unsafe base64 characters', () => {
+    const content = Buffer.alloc(10_000_000, 0xff);
+    const encoded = encodeBase64Url(content);
+
+    expect(encoded).toBe(`${'_'.repeat(13_333_332)}_w`);
+    expect(decodeBase64Url(encoded).equals(content)).toBe(true);
+  });
+});
 
 describe('walkParts', () => {
   it('collects text, html, and attachments from a nested tree', () => {
