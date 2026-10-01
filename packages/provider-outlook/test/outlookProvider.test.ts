@@ -846,8 +846,13 @@ describe('OutlookProvider', () => {
 
   it.each([undefined, 10_000_000])('uses decoded bytes for a 10 MB attachment with maxBytes %s', async (maxBytes) => {
     const content = Buffer.alloc(10_000_000, 0xff);
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(String(input));
+      if (url.pathname.endsWith('/$value')) {
+        expect(new Headers(init?.headers).get('accept')).toBe('*/*');
+        expect(new Headers(init?.headers).get('authorization')).toBe('Bearer access-token');
+        return new Response(content, { headers: { 'content-type': 'application/octet-stream' } });
+      }
       return json({
         '@odata.type': '#microsoft.graph.fileAttachment',
         id: 'attachment-1',
@@ -864,30 +869,153 @@ describe('OutlookProvider', () => {
     expect(fetchMock).toHaveBeenCalledTimes(maxBytes === undefined ? 1 : 2);
   });
 
-  it('rejects oversized decoded content before allocating a decoded Buffer even when Graph understates its size', async () => {
-    const encoded = Buffer.from('hello').toString('base64');
-    const fetchMock = vi.fn(async () =>
-      json({
+  it.each([false, true])('stops oversized downloads at the limit (cancel rejects: %s)', async (cancellationFails) => {
+    const chunks = [Buffer.from('hell'), Buffer.from('o'), Buffer.alloc(1_000_000)];
+    let reads = 0;
+    const cancel = vi.fn(() => {
+      if (cancellationFails) throw new Error('Response cancellation failed');
+    });
+    const body = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          const chunk = chunks[reads++];
+          if (chunk) controller.enqueue(chunk);
+          else controller.close();
+        },
+        cancel,
+      },
+      { highWaterMark: 0 },
+    );
+    const response = new Response(body, { headers: { 'content-length': '1' } });
+    const text = vi.spyOn(response, 'text');
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/$value')) return response;
+      expect(url.searchParams.get('$select')).toBe('id,name,contentType,size,isInline');
+      return json({ '@odata.type': '#microsoft.graph.fileAttachment', id: 'attachment-1', name: 'note.txt', size: 1 });
+    }) as unknown as typeof fetch;
+
+    await expect(provider(fetchMock).getAttachment('message-1', 'attachment-1', { maxBytes: 4 })).rejects.toMatchObject(
+      {
+        code: 'invalid_request',
+        data: { sizeBytes: 5, maxBytes: 4 },
+      },
+    );
+
+    expect(reads).toBe(2);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(body.locked).toBe(false);
+    expect(text).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('joins streamed chunks at the exact limit even when metadata overstates the size', async () => {
+    const chunks = [Buffer.from('he'), Buffer.from('llo')];
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const chunk = chunks.shift();
+        if (chunk) controller.enqueue(chunk);
+        else controller.close();
+      },
+    });
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/$value')) return new Response(body);
+      return json({
         '@odata.type': '#microsoft.graph.fileAttachment',
         id: 'attachment-1',
         name: 'note.txt',
-        size: 1,
-        contentBytes: encoded,
-      }),
-    ) as unknown as typeof fetch;
-    const decode = vi.spyOn(Buffer, 'from');
-
-    try {
-      await expect(
-        provider(fetchMock).getAttachment('message-1', 'attachment-1', { maxBytes: 4 }),
-      ).rejects.toMatchObject({
-        code: 'invalid_request',
-        data: { sizeBytes: 5, maxBytes: 4 },
+        size: 100,
       });
-      expect(decode.mock.calls.some(([, encoding]) => encoding === 'base64')).toBe(false);
-    } finally {
-      decode.mockRestore();
+    }) as unknown as typeof fetch;
+
+    await expect(
+      provider(fetchMock).getAttachment('message-1', 'attachment-1', { maxBytes: 5 }),
+    ).resolves.toMatchObject({
+      meta: { sizeBytes: 5 },
+      content: Buffer.from('hello'),
+    });
+    expect(body.locked).toBe(false);
+  });
+
+  it.each([0, 1])('enforces a zero-byte limit on %s raw attachment bytes', async (sizeBytes) => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/$value')) return new Response(Buffer.alloc(sizeBytes));
+      return json({
+        '@odata.type': '#microsoft.graph.fileAttachment',
+        id: 'attachment-1',
+        name: 'empty.bin',
+        size: 100,
+      });
+    }) as unknown as typeof fetch;
+    const download = provider(fetchMock).getAttachment('message-1', 'attachment-1', { maxBytes: 0 });
+
+    if (sizeBytes === 0) {
+      await expect(download).resolves.toMatchObject({ meta: { sizeBytes: 0 }, content: Buffer.alloc(0) });
+    } else {
+      await expect(download).rejects.toMatchObject({ code: 'invalid_request', data: { sizeBytes: 1, maxBytes: 0 } });
     }
+  });
+
+  it('refreshes expired authorization for raw attachment downloads', async () => {
+    let downloads = 0;
+    const getAccessToken = vi.fn(async (forceRefresh?: boolean) => (forceRefresh ? 'refreshed-token' : 'access-token'));
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/$value')) {
+        downloads++;
+        if (downloads === 1) return json({ error: { code: 'InvalidAuthenticationToken', message: 'expired' } }, 401);
+        expect(new Headers(init?.headers).get('authorization')).toBe('Bearer refreshed-token');
+        return new Response(Buffer.from('hello'));
+      }
+      return json({ '@odata.type': '#microsoft.graph.fileAttachment', id: 'attachment-1', name: 'note.txt', size: 5 });
+    }) as unknown as typeof fetch;
+    const outlook = new OutlookProvider({ accountId: 'acct-1', tokenProvider: { getAccessToken }, fetch: fetchMock });
+
+    await expect(outlook.getAttachment('message-1', 'attachment-1', { maxBytes: 5 })).resolves.toMatchObject({
+      content: Buffer.from('hello'),
+    });
+    expect(getAccessToken).toHaveBeenLastCalledWith(true);
+    expect(downloads).toBe(2);
+  });
+
+  it('releases the reader when a raw attachment stream fails without retrying', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.error(new Error('Attachment stream failed'));
+      },
+    });
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/$value')) return new Response(body);
+      return json({ '@odata.type': '#microsoft.graph.fileAttachment', id: 'attachment-1', name: 'note.txt', size: 5 });
+    }) as unknown as typeof fetch;
+
+    await expect(provider(fetchMock).getAttachment('message-1', 'attachment-1', { maxBytes: 5 })).rejects.toMatchObject(
+      {
+        code: 'provider_unavailable',
+        message: expect.stringContaining('Attachment stream failed'),
+      },
+    );
+    expect(body.locked).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports missing raw attachment content without an unbounded fallback request', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/$value')) return new Response(null);
+      return json({ '@odata.type': '#microsoft.graph.fileAttachment', id: 'attachment-1', name: 'note.txt', size: 5 });
+    }) as unknown as typeof fetch;
+
+    await expect(provider(fetchMock).getAttachment('message-1', 'attachment-1', { maxBytes: 5 })).rejects.toMatchObject(
+      {
+        code: 'provider_unavailable',
+        message: 'Microsoft Graph returned no attachment data',
+      },
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('rejects non-file attachments without fetching their content', async () => {
@@ -970,6 +1098,7 @@ describe('OutlookProvider', () => {
       if (url.pathname === '/v1.0/me/messages/message-1' && url.searchParams.get('$select') === 'parentFolderId') {
         return json({ id: 'message-1', parentFolderId: 'folder-inbox' });
       }
+      if (url.pathname.endsWith('/attachments/attachment-1/$value')) return new Response(Buffer.from('hello'));
       if (url.pathname.endsWith('/attachments/attachment-1')) {
         if (url.searchParams.has('$select')) {
           return json({
@@ -1036,12 +1165,14 @@ describe('OutlookProvider', () => {
     const attachmentRequests = vi
       .mocked(fetchMock)
       .mock.calls.map(([input]) => new URL(String(input)))
-      .filter((url) => url.pathname.endsWith('/attachments/attachment-1'));
+      .filter((url) => url.pathname.startsWith('/v1.0/me/messages/message-1/attachments/attachment-1'));
     expect(attachmentRequests).toHaveLength(5);
     expect(attachmentRequests[0]?.searchParams.get('$select')).toBe('id,name,contentType,size,isInline');
     expect(attachmentRequests[1]?.search).toBe('');
+    expect(attachmentRequests[1]?.pathname).toBe('/v1.0/me/messages/message-1/attachments/attachment-1/$value');
     expect(attachmentRequests[2]?.searchParams.get('$select')).toBe('id,name,contentType,size,isInline');
     expect(attachmentRequests[3]?.search).toBe('');
+    expect(attachmentRequests[3]?.pathname).toBe('/v1.0/me/messages/message-1/attachments/attachment-1/$value');
     expect(attachmentRequests[4]?.search).toBe('');
   });
 
