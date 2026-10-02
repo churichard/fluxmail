@@ -4,6 +4,20 @@ Fluxmail records user-facing changes in this file. The format follows [Common Ch
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-10-02
+
+### Changed
+
+- [CLI] Record successful stdio startup or the phase that failed in anonymous telemetry without collecting option values or error messages ([#110](https://github.com/churichard/fluxmail/pull/110))
+
+### Fixed
+
+- [MCP / CLI] Keep stdio connected to the local profile when the active CLI instance is remote ([#110](https://github.com/churichard/fluxmail/pull/110))
+- [CLI] Validate stdio permissions and local login before opening the store, report invalid permission options as `invalid_request`, and close resources when startup fails ([#110](https://github.com/churichard/fluxmail/pull/110))
+- [MCP / CLI / REST] Enforce Outlook attachment size limits on downloaded bytes so overstated Graph metadata does not reject valid files ([#111](https://github.com/churichard/fluxmail/pull/111))
+- [MCP / CLI / REST] Read Outlook inline attachment metadata with the correct Microsoft Graph field selection ([#111](https://github.com/churichard/fluxmail/pull/111))
+- [MCP / CLI / REST] Reduce temporary copies for Gmail attachments and release unused Outlook response bodies after sends and attachment uploads ([#111](https://github.com/churichard/fluxmail/pull/111))
+
 ## [0.11.1] - 2026-09-28
 
 ### Fixed
@@ -190,7 +204,7 @@ Only the breaking entries for the interfaces you use apply. An MCP-only integrat
 - Prevent hosted Microsoft OAuth responses from forwarding connection credentials through the HTTP referrer ([#43](https://github.com/churichard/fluxmail/pull/43))
 - Stop a pending IMAP connection immediately when its provider closes during setup ([#49](https://github.com/churichard/fluxmail/pull/49))
 
-[Unreleased]: https://github.com/churichard/fluxmail/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/churichard/fluxmail/compare/v0.11.2...HEAD
 [0.4.0]: https://github.com/churichard/fluxmail/compare/v0.3.0...v0.4.0
 [0.4.1]: https://github.com/churichard/fluxmail/compare/v0.4.0...v0.4.1
 [0.5.0]: https://github.com/churichard/fluxmail/compare/v0.4.1...v0.5.0
@@ -203,3 +217,4 @@ Only the breaking entries for the interfaces you use apply. An MCP-only integrat
 [0.10.0]: https://github.com/churichard/fluxmail/compare/v0.9.0...v0.10.0
 [0.11.0]: https://github.com/churichard/fluxmail/compare/v0.10.0...v0.11.0
 [0.11.1]: https://github.com/churichard/fluxmail/compare/v0.11.0...v0.11.1
+[0.11.2]: https://github.com/churichard/fluxmail/compare/v0.11.1...v0.11.2
