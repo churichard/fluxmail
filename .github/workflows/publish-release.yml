@@ -194,3 +194,27 @@ jobs:
             --resume \
             --skip-checks \
             --ci
+
+  claude-plugin:
+    name: Refresh Claude Code plugin source
+    needs: publish
+    if: inputs.npm_tag == 'latest'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    concurrency:
+      group: claude-code-plugin-source
+      cancel-in-progress: false
+    steps:
+      - name: Check out published release
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.22.0
+      - name: Refresh plugin source for current stable release
+        run: node scripts/claude-code-plugin.mjs publish --skip-stale

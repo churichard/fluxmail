@@ -120,3 +120,13 @@ pnpm release publish \
   --npm-tag <latest-or-next> \
   --resume
 ```
+
+## Claude Code plugin
+
+The plugin bundle lives in `integrations/claude-code`. Its manifest version matches the Fluxmail packages. `pnpm release prepare` updates that version, and release validation and CI reject mismatches. The MCP command uses `fluxmail@latest`, so a server restart picks up the latest stable npm release.
+
+After a successful stable release, Publish release copies the bundle to the standalone `claude-code-plugin` branch used by the Claude directory submission. Prereleases do not update that branch. Historical release retries skip the refresh when npm latest points to another version.
+
+For plugin configuration or API compatibility changes between releases, merge the bundle changes into main and run the Refresh Claude Code plugin workflow. Main must still match npm latest. If main contains an unreleased version, publish the stable release first. Both workflows serialize plugin updates, create ordinary commits, and push without force. Identical bundles produce no commit.
+
+Run `pnpm plugin:check` locally to validate the bundle. `pnpm plugin:sync` updates the manifest version from the packages. `pnpm plugin:publish` refreshes the submitted branch from the current checkout and requires the same stable version check. Anthropic controls directory approval; updating the source branch does not approve or resubmit the listing automatically.

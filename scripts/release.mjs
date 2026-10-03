@@ -6,6 +6,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { loadReleasePackages, loadReleaseVersion, releaseConfig, repositoryRoot } from './release-config.mjs';
+import { checkClaudePlugin, syncClaudePlugin } from './claude-code-plugin.mjs';
 import { classifyNpmChannel, inspectDockerReleaseTags, inspectNpmReleaseState, run } from './publish.mjs';
 
 const changelogPath = path.join(repositoryRoot, 'CHANGELOG.md');
@@ -306,6 +307,7 @@ async function prepare(args) {
   const updatedChangelog = await buildChangelog({ version, date, previousTag });
 
   await run('pnpm', ['version:bump', version]);
+  await syncClaudePlugin();
   await writeFile(path.join(repositoryRoot, 'server.json'), updatedServer);
   await writeFile(changelogPath, updatedChangelog);
 
@@ -746,6 +748,7 @@ async function validateVersionMetadata(version, packages) {
 
   await run('node', ['scripts/check-package-licenses.mjs', ...packages.map(({ directory }) => directory)]);
   await run('node', ['scripts/check-registry-metadata.mjs']);
+  await checkClaudePlugin();
   if (await commandExists('mcp-publisher')) await run('mcp-publisher', ['validate', 'server.json']);
 }
 
