@@ -1,7 +1,7 @@
 ---
 title: 'Connect an MCP client'
 description: 'Connect Claude, ChatGPT, Codex, Cursor, Hermes, Gemini, or another MCP client to Fluxmail.'
-updated: '2026-09-23'
+updated: '2026-10-03'
 ---
 
 Complete the [Quickstart](/docs/quickstart) before configuring an MCP client.
@@ -31,11 +31,11 @@ Mail tools return typed `structuredContent` and readable text. `get_email` and `
 
 ## Option 1: Connect over stdio
 
-Every stdio client launches `fluxmail stdio`. Fluxmail uses the member logged in to the active local instance. If your active CLI instance is remote, stdio uses the `local` profile instead. You do not need to run `fluxmail serve`.
+Every stdio client launches `fluxmail stdio`. Without `--instance`, Fluxmail selects the active local profile first, then a local profile named `local`, then the sole local profile under any other name. It uses the member session saved for that profile. You do not need to run `fluxmail serve`.
 
 Before connecting, run `fluxmail setup` for a new installation, or `fluxmail --instance local login` for an existing one. The MCP client must run as the same operating-system user and use the same Fluxmail data directory as that command.
 
-To use another local profile, add `--instance <name>` before `stdio` in the client command. An explicit remote profile is rejected; use Streamable HTTP for remote instances. Changing the active CLI instance to a remote profile does not change the local session used by an existing stdio configuration.
+To pin the client to a particular local profile, add `--instance <name>` before `stdio` in the client command. You must choose a profile this way if several local profiles exist and none is active or named `local`. An explicit remote profile is rejected; use Streamable HTTP for remote instances. The stdio selection does not change the active profile for other CLI commands.
 
 <details>
 <summary>Claude Code</summary>
