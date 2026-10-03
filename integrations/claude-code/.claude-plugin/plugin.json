@@ -9,10 +9,7 @@
   "homepage": "https://fluxmail.ai",
   "repository": "https://github.com/churichard/fluxmail",
   "license": "Elastic-2.0",
-  "keywords": [
-    "fluxmail",
-    "fluxmail mcp"
-  ],
+  "keywords": ["fluxmail", "fluxmail mcp"],
   "displayName": "Fluxmail",
   "icon": "https://fluxmail.ai/icon-512x512.png",
   "documentationUrl": "https://fluxmail.ai/docs/quickstart",
