@@ -236,9 +236,23 @@ export function resolveInstance(name?: string): { name: string; profile: Instanc
 
 export function resolveStdioInstance(name?: string): ReturnType<typeof resolveInstance> {
   const config = loadInstanceConfig();
-  const activeIsLocal = config.active !== undefined && config.instances[config.active]?.kind === 'local';
-  const fallback = activeIsLocal ? config.active : config.instances.local?.kind === 'local' ? 'local' : config.active;
-  const selected = resolveInstance(name ?? fallback);
+  let selectedName = name;
+  if (selectedName === undefined) {
+    const activeIsLocal = config.active !== undefined && config.instances[config.active]?.kind === 'local';
+    if (activeIsLocal) selectedName = config.active;
+    else if (config.instances.local?.kind === 'local') selectedName = 'local';
+    else {
+      const localNames = Object.keys(config.instances).filter((key) => config.instances[key]?.kind === 'local');
+      if (localNames.length > 1) {
+        throw new EmailError(
+          'invalid_request',
+          'Multiple local CLI profiles are configured. Run "fluxmail --instance <name> stdio" to choose one.',
+        );
+      }
+      selectedName = localNames[0] ?? config.active;
+    }
+  }
+  const selected = resolveInstance(selectedName);
   if (selected.profile.kind !== 'local') {
     throw new EmailError(
       'invalid_request',

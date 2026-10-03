@@ -127,6 +127,8 @@ REST accepts either an API key or the `fms_...` session used by the CLI. A futur
 fluxmail stdio --profile read-only
 ```
 
+Without `--instance`, stdio uses the active local profile, then a local profile named `local`, then the sole local profile under any other name. If several local profiles exist and none is active or named `local`, choose one with `fluxmail --instance <name> stdio`. An explicit `--instance` must select a local profile. Stdio does not change the active profile for other CLI commands.
+
 Stdio is local only. Use the HTTP MCP endpoint and a scoped API key for remote MCP clients.
 
 ## Stored CLI files
