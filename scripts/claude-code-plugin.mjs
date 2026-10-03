@@ -15,9 +15,16 @@ const sourceBranch = 'claude-code-plugin';
 export async function syncClaudePlugin(root = repositoryRoot) {
   const { version } = await loadReleaseVersion(root);
   const manifestPath = path.join(root, bundleDirectory, '.claude-plugin/plugin.json');
-  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-  manifest.version = version;
-  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  const manifestSource = await readFile(manifestPath, 'utf8');
+  JSON.parse(manifestSource);
+  await writeFile(manifestPath, manifestSource.replace(/("version"\s*:\s*)"[^"]*"/, `$1${JSON.stringify(version)}`));
+  const configPath = path.join(root, bundleDirectory, '.mcp.json');
+  const configSource = await readFile(configPath, 'utf8');
+  const config = JSON.parse(configSource);
+  await writeFile(
+    configPath,
+    configSource.replace(JSON.stringify(config.mcpServers.fluxmail.args[1]), JSON.stringify(`fluxmail@${version}`)),
+  );
 }
 
 export async function checkClaudePlugin(root = repositoryRoot) {
@@ -34,10 +41,12 @@ export async function checkClaudePlugin(root = repositoryRoot) {
   const server = config.mcpServers?.fluxmail;
   if (
     server?.command !== 'npx' ||
-    JSON.stringify(server.args) !== JSON.stringify(['-y', 'fluxmail@latest', 'stdio', '--profile', 'read-only']) ||
+    JSON.stringify(server.args) !== JSON.stringify(['-y', `fluxmail@${version}`, 'stdio', '--profile', 'read-only']) ||
     server.env?.FLUXMAIL_TELEMETRY !== '0'
   ) {
-    throw new Error('Claude Code plugin must run fluxmail@latest with read-only permissions and telemetry disabled.');
+    throw new Error(
+      `Claude Code plugin must run fluxmail@${version} with read-only permissions and telemetry disabled.`,
+    );
   }
   return version;
 }

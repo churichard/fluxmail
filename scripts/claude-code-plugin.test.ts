@@ -36,21 +36,33 @@ afterEach(async () => {
 });
 
 describe('Claude Code plugin release automation', () => {
-  it('updates release metadata while keeping the runtime on latest', async () => {
+  it('updates both the manifest and launcher when the Fluxmail version changes', async () => {
     const { root } = await fixture('0.12.0');
     await expect(checkClaudePlugin(root)).rejects.toThrow('must use Fluxmail version 0.12.0');
+    const manifestPath = path.join(root, 'integrations/claude-code/.claude-plugin/plugin.json');
+    const manifestSource = await readFile(manifestPath, 'utf8');
     await syncClaudePlugin(root);
     await expect(checkClaudePlugin(root)).resolves.toBe('0.12.0');
+    expect(await readFile(manifestPath, 'utf8')).toBe(manifestSource.replace('0.11.2', '0.12.0'));
+    const config = JSON.parse(await readFile(path.join(root, 'integrations/claude-code/.mcp.json'), 'utf8'));
+    expect(config.mcpServers.fluxmail.args).toEqual(['-y', 'fluxmail@0.12.0', 'stdio', '--profile', 'read-only']);
+    expect(config.mcpServers.fluxmail.env.FLUXMAIL_TELEMETRY).toBe('0');
   });
 
-  it('rejects missing local icons and pinned MCP commands', async () => {
+  it.each(['fluxmail@latest', 'fluxmail@^0.11.2', 'fluxmail@0.11.1'])(
+    'rejects an unreviewed or stale launcher package: %s',
+    async (packageName) => {
+      const { root } = await fixture();
+      const configPath = path.join(root, 'integrations/claude-code/.mcp.json');
+      const config = await readFile(configPath, 'utf8');
+      await writeFile(configPath, config.replace('fluxmail@0.11.2', packageName));
+      await expect(checkClaudePlugin(root)).rejects.toThrow('must run fluxmail@0.11.2');
+    },
+  );
+
+  it('rejects missing local icons', async () => {
     const { root } = await fixture();
     const bundle = path.join(root, 'integrations/claude-code');
-    const configPath = path.join(bundle, '.mcp.json');
-    const config = await readFile(configPath, 'utf8');
-    await writeFile(configPath, config.replace('fluxmail@latest', 'fluxmail@0.11.2'));
-    await expect(checkClaudePlugin(root)).rejects.toThrow('must run fluxmail@latest');
-    await writeFile(configPath, config);
     await rm(path.join(bundle, 'icon.png'));
     await expect(checkClaudePlugin(root)).rejects.toThrow();
   });
@@ -97,6 +109,9 @@ describe('Claude Code plugin release automation', () => {
     expect(await git(root, 'rev-parse', `${result.sha}^`)).toBe(previousSha);
     expect(await git(root, 'ls-tree', '--name-only', result.sha)).not.toContain('obsolete.txt');
     expect(JSON.parse(await git(root, 'show', `${result.sha}:.claude-plugin/plugin.json`)).version).toBe('0.11.2');
+    expect(JSON.parse(await git(root, 'show', `${result.sha}:.mcp.json`)).mcpServers.fluxmail.args[1]).toBe(
+      'fluxmail@0.11.2',
+    );
     expect(await git(root, 'rev-parse', 'HEAD')).toBe(sourceSha);
     expect(await git(root, 'status', '--porcelain')).toBe('');
     expect(await publishClaudePlugin(options)).toEqual({ status: 'unchanged', version: '0.11.2', sha: result.sha });
