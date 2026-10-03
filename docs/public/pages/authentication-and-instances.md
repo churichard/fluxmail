@@ -1,7 +1,7 @@
 ---
 title: 'Authentication and instances'
 description: 'Log in to local and remote Fluxmail instances, enroll members, manage sessions, and create API keys.'
-updated: '2026-07-17'
+updated: '2026-10-03'
 ---
 
 Fluxmail uses member sessions for people and API keys for MCP clients, scripts, and other automation. A member session follows the member's current role and mailbox access. An API key is narrower: Fluxmail also checks its capabilities and optional mailbox allowlist on every request.
@@ -20,7 +20,13 @@ Passwords must contain 8 to 256 Unicode characters. Fluxmail rejects common pass
 
 ## Log in to an existing local instance
 
-If the instance is already set up but the CLI has no `local` profile (for example after the profile was removed or the CLI files were lost), login recreates it:
+List your profiles with `fluxmail instances list`, then log in with the name of the local profile you want to use:
+
+```bash
+fluxmail --instance <name> login
+```
+
+If your local profile was removed or the CLI files were lost, login can recreate the default profile named `local`:
 
 ```bash
 fluxmail --instance local login
@@ -126,6 +132,8 @@ REST accepts either an API key or the `fms_...` session used by the CLI. A futur
 ```bash
 fluxmail stdio --profile read-only
 ```
+
+Without `--instance`, stdio uses the active local profile, then a local profile named `local`, then the sole local profile under any other name. If several local profiles exist and none is active or named `local`, choose one with `fluxmail --instance <name> stdio`. An explicit `--instance` must select a local profile. Stdio does not change the active profile for other CLI commands.
 
 Stdio is local only. Use the HTTP MCP endpoint and a scoped API key for remote MCP clients.
 

@@ -27,49 +27,54 @@ describe('CLI stdio process integration', { timeout: 15_000 }, () => {
     return { ...process.env, NO_UPDATE_NOTIFIER: '1' };
   }
 
-  it('completes an MCP handshake and a tool call with a remote CLI instance active', async () => {
-    const env = environment();
-    const context = createContext();
-    try {
-      const setup = await setupInitialAdmin(context.db, {
-        name: 'Stdio Owner',
-        email: 'stdio-owner@example.com',
-        password: 'River42!',
-      });
-      saveLocalInstance();
-      saveSessionToken('local', setup.session.token);
-      saveRemoteInstance('work', 'https://private.example.com');
-      saveSessionToken('work', 'fms_private_remote_session');
-      useInstance('work');
-    } finally {
-      await context.registry.close();
-      (context.db as unknown as { $client: { close(): void } }).$client.close();
-    }
+  it.each(['local', 'personal'])(
+    'completes an MCP handshake with local profile %s and a remote active',
+    async (name) => {
+      const env = environment();
+      const context = createContext();
+      try {
+        const setup = await setupInitialAdmin(context.db, {
+          name: 'Stdio Owner',
+          email: 'stdio-owner@example.com',
+          password: 'River42!',
+        });
+        saveLocalInstance(name);
+        saveSessionToken(name, setup.session.token);
+        saveRemoteInstance('work', 'https://private.example.com');
+        saveSessionToken('work', 'fms_private_remote_session');
+        useInstance('work');
+      } finally {
+        await context.registry.close();
+        (context.db as unknown as { $client: { close(): void } }).$client.close();
+      }
 
-    const transport = new StdioClientTransport({
-      command: process.execPath,
-      args: ['--import', 'tsx', cliPath, 'stdio', '--profile', 'read-only'],
-      env: Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
-      stderr: 'pipe',
-    });
-    let stderr = '';
-    transport.stderr?.setEncoding('utf8').on('data', (chunk: string) => (stderr += chunk));
-    const client = new Client({ name: 'stdio-startup-test', version: '1.0.0' });
-    try {
-      await client.connect(transport);
-      const tools = await client.listTools();
-      expect(tools.tools.some((tool) => tool.name === 'list_accounts')).toBe(true);
-      expect(tools.tools.some((tool) => tool.name === 'send_email')).toBe(false);
-      const result = await client.callTool({ name: 'list_accounts', arguments: {} });
-      expect(result.isError).not.toBe(true);
-      expect(result.structuredContent).toMatchObject({ data: [] });
-      expect(stderr).toContain('Fluxmail MCP server running on stdio');
-      expect(stderr).not.toContain('fms_private_remote_session');
-    } finally {
-      await client.close();
-      await transport.close();
-    }
-  });
+      const transport = new StdioClientTransport({
+        command: process.execPath,
+        args: ['--import', 'tsx', cliPath, 'stdio', '--profile', 'read-only'],
+        env: Object.fromEntries(
+          Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+        ),
+        stderr: 'pipe',
+      });
+      let stderr = '';
+      transport.stderr?.setEncoding('utf8').on('data', (chunk: string) => (stderr += chunk));
+      const client = new Client({ name: 'stdio-startup-test', version: '1.0.0' });
+      try {
+        await client.connect(transport);
+        const tools = await client.listTools();
+        expect(tools.tools.some((tool) => tool.name === 'list_accounts')).toBe(true);
+        expect(tools.tools.some((tool) => tool.name === 'send_email')).toBe(false);
+        const result = await client.callTool({ name: 'list_accounts', arguments: {} });
+        expect(result.isError).not.toBe(true);
+        expect(result.structuredContent).toMatchObject({ data: [] });
+        expect(stderr).toContain('Fluxmail MCP server running on stdio');
+        expect(stderr).not.toContain('fms_private_remote_session');
+      } finally {
+        await client.close();
+        await transport.close();
+      }
+    },
+  );
 
   it('prints one structured invalid-request error without protocol output or a new store', async () => {
     const env = environment();

@@ -61,15 +61,15 @@ describe('CLI stdio startup', () => {
     vi.unstubAllEnvs();
   });
 
-  async function localSession(): Promise<string> {
+  async function localSession(instanceName = 'local'): Promise<string> {
     const context = contextModule.createContext();
     const setup = await setupInitialAdmin(context.db, {
       name: 'Private Owner',
       email: 'private-owner@example.com',
       password: 'River42!',
     });
-    saveLocalInstance();
-    saveSessionToken('local', setup.session.token);
+    saveLocalInstance(instanceName);
+    saveSessionToken(instanceName, setup.session.token);
     return setup.session.token;
   }
 
@@ -184,6 +184,22 @@ describe('CLI stdio startup', () => {
     expect(console.log).not.toHaveBeenCalled();
   });
 
+  it('starts with a sole named local profile when the active profile is remote', async () => {
+    const token = await localSession('private-personal');
+    saveRemoteInstance('private-work', 'https://private.example.com');
+    saveSessionToken('private-work', 'fms_private-remote-token');
+    useInstance('private-work');
+    const { capture, run } = invocation(['stdio']);
+
+    await run();
+
+    expectEvent(capture, 'success', 'ready');
+    expect(JSON.stringify(capture.mock.calls)).not.toContain(token);
+    expect(JSON.stringify(capture.mock.calls)).not.toContain('private');
+    expect(McpServer.prototype.connect).toHaveBeenCalledOnce();
+    expect(console.log).not.toHaveBeenCalled();
+  });
+
   it('rejects an explicitly selected remote instance before opening a local store', async () => {
     saveRemoteInstance('private-work', 'https://private.example.com');
     saveSessionToken('private-work', 'fms_private-remote-token');
@@ -191,6 +207,43 @@ describe('CLI stdio startup', () => {
     await expect(run()).rejects.toMatchObject({ code: 'invalid_request' });
     expectEvent(capture, 'error', 'instance', 'invalid_request');
     expect(contextModule.createContext).not.toHaveBeenCalled();
+  });
+
+  it.each(['missing', 'expired'])('directs a %s named local session to the matching login', async (session) => {
+    if (session === 'expired') {
+      await localSession('private-personal');
+      saveSessionToken('private-personal', 'fms_private-invalid');
+    } else saveLocalInstance('private-personal');
+    saveRemoteInstance('private-work', 'https://private.example.com');
+    useInstance('private-work');
+    const { capture, run } = invocation(['stdio']);
+
+    await expect(run()).rejects.toMatchObject({
+      code: 'permission_denied',
+      message: expect.stringContaining('fluxmail --instance private-personal login'),
+    });
+
+    expectEvent(capture, 'error', 'authentication', 'permission_denied');
+    expect(JSON.stringify(capture.mock.calls)).not.toContain('private-personal');
+    expect(McpServer.prototype.connect).not.toHaveBeenCalled();
+    if (session === 'missing') expect(contextModule.createContext).not.toHaveBeenCalled();
+  });
+
+  it('reports ambiguous local profiles before reading credentials or opening the store', async () => {
+    saveLocalInstance('private-personal');
+    saveLocalInstance('private-other');
+    saveRemoteInstance('private-work', 'https://private.example.com');
+    useInstance('private-work');
+    const { capture, run } = invocation(['stdio']);
+
+    await expect(run()).rejects.toMatchObject({
+      code: 'invalid_request',
+      message: expect.stringContaining('fluxmail --instance <name> stdio'),
+    });
+
+    expectEvent(capture, 'error', 'instance', 'invalid_request');
+    expect(contextModule.createContext).not.toHaveBeenCalled();
+    expect(McpServer.prototype.connect).not.toHaveBeenCalled();
   });
 
   it('records transport failures and closes the context without starting background work', async () => {

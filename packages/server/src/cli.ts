@@ -964,7 +964,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         if (!selected.token)
           throw new EmailError(
             'permission_denied',
-            'Log in to the local instance before starting stdio MCP. Run "fluxmail --instance local login".',
+            `Log in to the local instance before starting stdio MCP. Run "fluxmail --instance ${selected.name} login".`,
           );
         startupPhase('context');
         ctx = createContext();
@@ -973,7 +973,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         if (!principal || principal.kind !== 'session')
           throw new EmailError(
             'permission_denied',
-            'The local CLI session has expired. Run "fluxmail --instance local login".',
+            `The local CLI session has expired. Run "fluxmail --instance ${selected.name} login".`,
           );
         startupPhase('account_scope');
         const accountIds = accountIdsFromRefs(ctx, opts.account);

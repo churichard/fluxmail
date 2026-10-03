@@ -1,4 +1,4 @@
-import { mkdtempSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -106,6 +106,35 @@ describe('CLI instance profiles', () => {
 
     expect(() => resolveStdioInstance()).toThrow(/requires a local instance/);
     expect(loadInstanceConfig().instances.local).toBeUndefined();
+  });
+
+  it.each(['work', undefined, 'missing'])('finds a sole named local profile when active is %s', (active) => {
+    vi.stubEnv('FLUXMAIL_DATA_DIR', mkdtempSync(path.join(tmpdir(), 'fluxmail-stdio-instance-')));
+    saveLocalInstance('personal');
+    saveSessionToken('personal', 'fms_private_personal_session');
+    saveRemoteInstance('work', 'https://private.example.com');
+    saveSessionToken('work', 'fms_private_remote_session');
+    const config = loadInstanceConfig();
+    config.active = active;
+    writeFileSync(instanceConfigPath(), JSON.stringify(config));
+    const before = readFileSync(instanceConfigPath(), 'utf8');
+
+    expect(resolveStdioInstance()).toMatchObject({ name: 'personal', token: 'fms_private_personal_session' });
+    expect(readFileSync(instanceConfigPath(), 'utf8')).toBe(before);
+    expect(() => resolveStdioInstance('work')).toThrow(/requires a local instance/);
+    expect(() => resolveStdioInstance('missing')).toThrow(/No CLI instance/);
+  });
+
+  it('requires an explicit choice between named local profiles when a remote is active', () => {
+    vi.stubEnv('FLUXMAIL_DATA_DIR', mkdtempSync(path.join(tmpdir(), 'fluxmail-stdio-instance-')));
+    saveLocalInstance('personal');
+    saveLocalInstance('other');
+    saveRemoteInstance('work', 'https://private.example.com');
+    useInstance('work');
+
+    expect(() => resolveStdioInstance()).toThrow(/Multiple local CLI profiles.*--instance/);
+    expect(resolveStdioInstance('personal').name).toBe('personal');
+    expect(resolveInstance().name).toBe('work');
   });
 
   it('refuses to forward a session through a remote redirect', async () => {
