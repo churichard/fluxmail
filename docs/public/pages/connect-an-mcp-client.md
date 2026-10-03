@@ -33,7 +33,7 @@ Mail tools return typed `structuredContent` and readable text. `get_email` and `
 
 Every stdio client launches `fluxmail stdio`. Without `--instance`, Fluxmail selects the active local profile first, then a local profile named `local`, then the sole local profile under any other name. It uses the member session saved for that profile. You do not need to run `fluxmail serve`.
 
-Before connecting, run `fluxmail setup` for a new installation, or `fluxmail --instance local login` for an existing one. The MCP client must run as the same operating-system user and use the same Fluxmail data directory as that command.
+Before connecting, run `fluxmail setup` for a new installation. For an existing installation, list profiles with `fluxmail instances list` and log in to the local profile the client will use with `fluxmail --instance <name> login`. Use `local` for the default profile created by setup or when recreating a missing local profile. The MCP client must run as the same operating-system user and use the same Fluxmail data directory as the setup or login command.
 
 To pin the client to a particular local profile, add `--instance <name>` before `stdio` in the client command. You must choose a profile this way if several local profiles exist and none is active or named `local`. An explicit remote profile is rejected; use Streamable HTTP for remote instances. The stdio selection does not change the active profile for other CLI commands.
 
