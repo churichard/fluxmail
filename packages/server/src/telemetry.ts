@@ -62,7 +62,7 @@ interface PostHogClient {
   capture(options: {
     distinctId: string;
     event: string;
-    properties: Record<string, boolean | number | string>;
+    properties: Record<string, unknown>;
     disableGeoip?: boolean;
   }): void;
   shutdown(timeoutMs?: number): Promise<void>;
@@ -319,19 +319,56 @@ export function createTelemetry(options: {
       const telemetry = initialize();
       if (!telemetry) return;
       try {
+        const commonProperties = {
+          deployment_type: 'self_hosted',
+          $process_person_profile: false,
+          fluxmail_version: VERSION,
+          node_version: process.versions.node,
+          platform: process.platform,
+          arch: process.arch,
+        };
         telemetry.client.capture({
           distinctId: telemetry.distinctId,
           event,
           disableGeoip: true,
           properties: {
             ...Object.fromEntries(Object.entries(properties).filter((entry) => entry[1] !== undefined)),
-            $process_person_profile: false,
-            fluxmail_version: VERSION,
-            node_version: process.versions.node,
-            platform: process.platform,
-            arch: process.arch,
-          } as Record<string, boolean | number | string>,
+            ...commonProperties,
+          },
         });
+        if (
+          event === OPERATION_TELEMETRY_EVENT &&
+          properties.outcome === 'error' &&
+          ['internal', 'internal_error', 'provider_unavailable', 'deadline_exceeded', 'send_outcome_unknown'].includes(
+            String(properties.error_code),
+          )
+        ) {
+          const surface = ['cli', 'mcp', 'rest'].includes(String(properties.product_surface))
+            ? String(properties.product_surface)
+            : 'unknown';
+          const operation =
+            typeof properties.operation === 'string' && /^[a-zA-Z0-9_ -]{1,100}$/.test(properties.operation)
+              ? properties.operation
+              : 'unknown';
+          const code = String(properties.error_code);
+          telemetry.client.capture({
+            distinctId: telemetry.distinctId,
+            event: '$exception',
+            disableGeoip: true,
+            properties: {
+              ...commonProperties,
+              product_surface: surface,
+              operation,
+              error_code: code,
+              $exception_list: [
+                { type: 'FluxmailOperationError', value: code, mechanism: { handled: true, synthetic: true } },
+              ],
+              $exception_fingerprint: `fluxmail:self_hosted:${surface}:${operation}:${code}`,
+              $exception_level: 'error',
+              $issue_name: `Fluxmail: ${operation} (${code})`,
+            },
+          });
+        }
       } catch {
         // Telemetry must never affect Fluxmail behavior.
       }

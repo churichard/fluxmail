@@ -128,6 +128,10 @@ HTTP MCP requests require an API key. REST requests accept an active member sess
 
 Fluxmail sends anonymous operation events to its PostHog project by default. Events record the CLI command, MCP tool, or REST operation, plus the outcome, duration, selected feature modes, a random installation ID, and basic runtime information.
 
+Each event is labeled `deployment_type=self_hosted` so package usage can be counted separately from Fluxmail Cloud and website traffic.
+
+Internal, provider, timeout, and uncertain-send failures also send a grouped error report with the operation name and a safe error code. Reports exclude the original error message, stack trace, and provider response. Turning telemetry off also disables these reports.
+
 For MCP attachment downloads, telemetry records whether the tool returned a resource link or inline content. It records the same choice if the download fails, without sending the attachment name or content.
 
 For `fluxmail stdio`, telemetry records which startup phase failed, or `ready` when the server starts. The phases cover permission options, local instance selection, configuration and database initialization, session authentication, mailbox selection, and MCP transport startup. No option values or error messages are sent.

@@ -6,10 +6,15 @@ Fluxmail uses PostHog to count active installations and understand which CLI, MC
 
 Every event contains a random installation ID, the Fluxmail version, the Node.js version, operating system, and architecture. The ID lives at `<data dir>/telemetry.id`. It is separate from the licensing instance ID and is not derived from an email address, license key, hostname, IP address, or machine identifier.
 
-| Event                 | `product_surface`    | Other properties                                                                    |
-| --------------------- | -------------------- | ----------------------------------------------------------------------------------- |
-| `operation completed` | `cli`, `mcp`, `rest` | Operation, outcome, duration, and safe properties such as transport or feature mode |
-| `mcp server started`  | `mcp`                | Transport (`stdio` or `http`), plan, and mailbox and member totals                  |
+Every package event carries `deployment_type=self_hosted`. Fluxmail Cloud uses `deployment_type=cloud`, and the public website uses `deployment_type=website`. The package sets its label after caller properties so a supplied property cannot change the classification. Older events have no deployment label.
+
+Operation errors with `internal`, `internal_error`, `provider_unavailable`, `deadline_exceeded`, or `send_outcome_unknown` also produce a synthetic `$exception` for PostHog Error Tracking. These reports contain the interface, operation, and allowlisted error code, with a stable fingerprint for grouping. They exclude original messages, stacks, causes, and feature properties. Expected input, permission, not-found, and rate-limit errors stay in operation events. Error reporting follows the same telemetry opt-out settings.
+
+| Event                 | `product_surface`    | Other properties                                                                            |
+| --------------------- | -------------------- | ------------------------------------------------------------------------------------------- |
+| `operation completed` | `cli`, `mcp`, `rest` | Operation, outcome, duration, and safe properties such as transport or feature mode         |
+| `mcp server started`  | `mcp`                | Transport (`stdio` or `http`), plan, and mailbox and member totals                          |
+| `$exception`          | `cli`, `mcp`, `rest` | Operation and safe failure code for internal, provider, timeout, or uncertain-send failures |
 
 The `operation` property contains the CLI command path, MCP tool name, or REST OpenAPI operation ID. This keeps the event schema consistent while preserving the name used by each interface. The browser callback that finishes a hosted OAuth connection reports `completeHostedConnection` on the `rest` surface, because that request, not the command that printed the link, is where the mailbox is connected.
 
@@ -51,7 +56,7 @@ The account counts appear only after Fluxmail has connected or removed a mailbox
 
 These are totals only. They carry no license key, license ID, mailbox address, account ID, or member ID. If Fluxmail cannot read them, the event is sent without them.
 
-Use the same `product_surface` property in the other Fluxmail products. Set it to `landing_page` on the marketing site and `mail_app` in Fluxmail Mail. PostHog can then filter or compare all four products in one project.
+Use `deployment_type` to compare Cloud and self-hosted traffic in PostHog. Use `product_surface` to compare CLI, MCP, and REST operations within a deployment type. The website uses `product_surface=landing_page`.
 
 PostHog person profiles and GeoIP lookup are disabled. The PostHog SDK adds its library name, library version, and server marker.
 
