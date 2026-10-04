@@ -17,6 +17,108 @@ import {
 } from '../src/telemetry.js';
 
 describe('telemetry', () => {
+  it.each([
+    { productSurface: 'mcp', operation: 'send_email', errorCode: 'internal' },
+    { productSurface: 'mcp', operation: 'send_email', errorCode: 'provider_unavailable' },
+    { productSurface: 'cli', operation: 'emails send', errorCode: 'request_timeout' },
+    { productSurface: 'cli', operation: 'emails send', errorCode: 'uncertain' },
+    { productSurface: 'mcp', operation: 'send_email', errorCode: 'account_failure' },
+    { productSurface: 'rest', operation: 'sendMessage', errorCode: 'account_failure' },
+  ] as const)(
+    'reports $productSurface $errorCode as a sanitized self-hosted exception',
+    async ({ productSurface, operation: operationName, errorCode }) => {
+      const dataDir = mkdtempSync(path.join(tmpdir(), 'fluxmail-telemetry-'));
+      const capture = vi.fn();
+      const telemetry = createTelemetry({ dataDir, env: {}, client: { capture, shutdown: async () => undefined } });
+      const operation = {
+        productSurface,
+        operation: operationName,
+        outcome: 'error' as const,
+        errorCode,
+        durationMs: 5,
+        properties: { deployment_type: 'cloud' },
+        error: new Error('private@example.com password=secret'),
+        input: { body: 'Private message body', recipient: 'private@example.com' },
+      };
+      captureOperation(telemetry, operation);
+      await telemetry.shutdown();
+      expect(capture).toHaveBeenCalledTimes(2);
+      const exception = capture.mock.calls[1][0];
+      expect(exception).toMatchObject({
+        event: '$exception',
+        properties: {
+          deployment_type: 'self_hosted',
+          product_surface: productSurface,
+          operation: operationName,
+          error_code: errorCode,
+          $exception_list: [
+            { type: 'FluxmailOperationError', value: errorCode, mechanism: { handled: true, synthetic: true } },
+          ],
+          $exception_fingerprint: `fluxmail:self_hosted:${productSurface}:${operationName}:${errorCode}`,
+        },
+      });
+      expect(JSON.stringify(capture.mock.calls)).not.toMatch(/private@example|password=|secret|Private message/);
+    },
+  );
+  it.each(['permission_denied', 'invalid_request', 'not_found', 'rate_limited'])(
+    'keeps expected %s failures out of error tracking',
+    async (errorCode) => {
+      const dataDir = mkdtempSync(path.join(tmpdir(), 'fluxmail-telemetry-'));
+      const capture = vi.fn();
+      const telemetry = createTelemetry({ dataDir, env: {}, client: { capture, shutdown: async () => undefined } });
+      captureOperation(telemetry, {
+        productSurface: 'rest',
+        operation: 'listMessages',
+        outcome: 'error',
+        errorCode,
+        durationMs: 5,
+      });
+      await telemetry.shutdown();
+      expect(capture).toHaveBeenCalledOnce();
+      expect(capture.mock.calls[0][0].event).toBe('operation completed');
+    },
+  );
+  it.each(['success', 'error'] as const)(
+    'labels %s operations as self-hosted without adding private data',
+    async (outcome) => {
+      const dataDir = mkdtempSync(path.join(tmpdir(), 'fluxmail-telemetry-'));
+      const capture = vi.fn();
+      const telemetry = createTelemetry({ dataDir, env: {}, client: { capture, shutdown: async () => undefined } });
+      captureOperation(telemetry, {
+        productSurface: 'rest',
+        operation: 'listMessages',
+        outcome,
+        durationMs: 5,
+        properties: { deployment_type: 'cloud' },
+      });
+      await telemetry.shutdown();
+      expect(capture).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'operation completed',
+          properties: expect.objectContaining({
+            deployment_type: 'self_hosted',
+            product_surface: 'rest',
+            outcome,
+          }),
+        }),
+      );
+      const properties = capture.mock.calls[0][0].properties;
+      expect(Object.keys(properties).sort()).toEqual(
+        [
+          '$process_person_profile',
+          'arch',
+          'deployment_type',
+          'duration_ms',
+          'fluxmail_version',
+          'node_version',
+          'operation',
+          'outcome',
+          'platform',
+          'product_surface',
+        ].sort(),
+      );
+    },
+  );
   it('uses one operation event and protects its common properties from overrides', () => {
     const capture = vi.fn();
     captureOperation(
@@ -92,6 +194,7 @@ describe('telemetry', () => {
       tool: 'search_emails',
       $process_person_profile: true,
       platform: 'overridden',
+      deployment_type: 'cloud',
     });
     await telemetry.shutdown();
 
@@ -103,6 +206,7 @@ describe('telemetry', () => {
       disableGeoip: true,
       properties: expect.objectContaining({
         $process_person_profile: false,
+        deployment_type: 'self_hosted',
         fluxmail_version: expect.any(String),
         node_version: process.versions.node,
         platform: process.platform,

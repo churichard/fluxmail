@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
@@ -6,7 +9,7 @@ import { EmailError } from '@fluxmail/core';
 import type { EmailService } from '../src/service/emailService.js';
 import { buildMcpServer, toSendRequest, type McpServerOptions } from '../src/mcp/buildServer.js';
 import { customPermissionPolicy, permissionPolicyForProfile } from '../src/permissions.js';
-import type { Telemetry } from '../src/telemetry.js';
+import { createTelemetry, type Telemetry } from '../src/telemetry.js';
 import type { Logger } from '../src/logging.js';
 
 const draftMessage = {
@@ -815,7 +818,12 @@ describe('scheduled send tools', () => {
   });
 
   it('marks an uncertain send as an error with an operation ID', async () => {
-    const { telemetry, capture } = telemetrySpy();
+    const capture = vi.fn();
+    const telemetry = createTelemetry({
+      dataDir: mkdtempSync(join(tmpdir(), 'fluxmail-mcp-telemetry-')),
+      env: {},
+      client: { capture, shutdown: async () => undefined },
+    });
     const deliver = vi.fn().mockResolvedValue({
       operationId: 'dop_uncertain',
       accountId: 'acct_1',
@@ -831,9 +839,28 @@ describe('scheduled send tools', () => {
     expect(result.isError).toBe(true);
     expect(result.structuredContent).toMatchObject({ data: { operationId: 'dop_uncertain', status: 'uncertain' } });
     expect(capture).toHaveBeenCalledWith(
-      'operation completed',
-      expect.objectContaining({ operation: 'send_email', outcome: 'error', error_code: 'account_failure' }),
+      expect.objectContaining({
+        event: 'operation completed',
+        properties: expect.objectContaining({
+          operation: 'send_email',
+          outcome: 'error',
+          error_code: 'account_failure',
+        }),
+      }),
     );
+    expect(capture).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: '$exception',
+        properties: expect.objectContaining({
+          deployment_type: 'self_hosted',
+          product_surface: 'mcp',
+          error_code: 'account_failure',
+        }),
+      }),
+    );
+    expect(JSON.stringify(capture.mock.calls)).not.toMatch(/recipient@example|uncertain-key|dop_uncertain/);
+    await client.close();
+    await telemetry.shutdown();
   });
 
   it('routes send_email with sendAt to scheduleDelivery', async () => {
