@@ -174,6 +174,18 @@ async function main(): Promise<void> {
     }
   }
 
+  const clientGuide = readFileSync(path.join(PUBLIC_DOCS_ROOT, 'pages', 'connect-an-mcp-client.md'), 'utf8');
+  const clineSections = [...clientGuide.matchAll(/<details>\s*<summary>Cline<\/summary>\s*([\s\S]*?)\s*<\/details>/g)];
+  const clineSection = clineSections[0]?.[1];
+  if (clineSections.length !== 1 || !clineSection?.trim()) {
+    throw new Error('connect-an-mcp-client.md must contain exactly one nonempty Cline section.');
+  }
+  const installationGuide = `# Install Fluxmail in Cline\n\n${clineSection.trim().replace(/^### /gm, '## ')}\n`;
+  if (readFileIfPresent('llms-install.md') !== installationGuide) {
+    if (check) stale.push('llms-install.md');
+    else writeFileSync('llms-install.md', installationGuide);
+  }
+
   const manifestFile = path.join(PUBLIC_DOCS_ROOT, 'manifest.json');
   const currentManifest = readFileSync(manifestFile, 'utf8');
   const meta = readPublicDocsMeta();
