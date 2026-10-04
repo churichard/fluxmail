@@ -174,6 +174,16 @@ async function main(): Promise<void> {
     }
   }
 
+  const clineGuideFile = path.join(PUBLIC_DOCS_ROOT, 'pages', 'install-in-cline.md');
+  const clineGuide = readFileSync(clineGuideFile, 'utf8');
+  const clineGuideMetadata = parseFrontmatter(clineGuide, 'install-in-cline.md');
+  const clineGuideBody = clineGuide.slice(clineGuide.indexOf('\n---\n') + '\n---\n'.length).trimStart();
+  const installationGuide = `# ${clineGuideMetadata.title}\n\n${clineGuideBody}`;
+  if (readFileIfPresent('llms-install.md') !== installationGuide) {
+    if (check) stale.push('llms-install.md');
+    else writeFileSync('llms-install.md', installationGuide);
+  }
+
   const manifestFile = path.join(PUBLIC_DOCS_ROOT, 'manifest.json');
   const currentManifest = readFileSync(manifestFile, 'utf8');
   const meta = readPublicDocsMeta();

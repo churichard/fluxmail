@@ -12,6 +12,7 @@
     "connect-outlook-to-mcp",
     "connect-an-imap-mailbox",
     "connect-an-mcp-client",
+    "install-in-cline",
     "email-search",
     "send-as-addresses",
     "build-with-rest",
