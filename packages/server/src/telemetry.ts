@@ -339,7 +339,7 @@ export function createTelemetry(options: {
         if (
           event === OPERATION_TELEMETRY_EVENT &&
           properties.outcome === 'error' &&
-          ['internal', 'internal_error', 'provider_unavailable', 'deadline_exceeded', 'send_outcome_unknown'].includes(
+          ['internal', 'provider_unavailable', 'request_timeout', 'uncertain', 'account_failure'].includes(
             String(properties.error_code),
           )
         ) {

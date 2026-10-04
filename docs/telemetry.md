@@ -8,13 +8,13 @@ Every event contains a random installation ID, the Fluxmail version, the Node.js
 
 Every package event carries `deployment_type=self_hosted`. Fluxmail Cloud uses `deployment_type=cloud`, and the public website uses `deployment_type=website`. The package sets its label after caller properties so a supplied property cannot change the classification. Older events have no deployment label.
 
-Operation errors with `internal`, `internal_error`, `provider_unavailable`, `deadline_exceeded`, or `send_outcome_unknown` also produce a synthetic `$exception` for PostHog Error Tracking. These reports contain the interface, operation, and allowlisted error code, with a stable fingerprint for grouping. They exclude original messages, stacks, causes, and feature properties. Expected input, permission, not-found, and rate-limit errors stay in operation events. Error reporting follows the same telemetry opt-out settings.
+Operation errors with `internal`, `provider_unavailable`, `request_timeout`, `uncertain`, or `account_failure` also produce a synthetic `$exception` for PostHog Error Tracking. The CLI uses `request_timeout` for remote request timeouts and `uncertain` for unknown send outcomes. MCP and REST use `account_failure` for failed or uncertain delivery results and partial account or item failures. These reports contain the interface, operation, and allowlisted error code, with a stable fingerprint for grouping. They exclude original messages, stacks, causes, and feature properties. Individual input, permission, not-found, and rate-limit errors stay in operation events. Error reporting follows the same telemetry opt-out settings.
 
-| Event                 | `product_surface`    | Other properties                                                                            |
-| --------------------- | -------------------- | ------------------------------------------------------------------------------------------- |
-| `operation completed` | `cli`, `mcp`, `rest` | Operation, outcome, duration, and safe properties such as transport or feature mode         |
-| `mcp server started`  | `mcp`                | Transport (`stdio` or `http`), plan, and mailbox and member totals                          |
-| `$exception`          | `cli`, `mcp`, `rest` | Operation and safe failure code for internal, provider, timeout, or uncertain-send failures |
+| Event                 | `product_surface`    | Other properties                                                                                     |
+| --------------------- | -------------------- | ---------------------------------------------------------------------------------------------------- |
+| `operation completed` | `cli`, `mcp`, `rest` | Operation, outcome, duration, and safe properties such as transport or feature mode                  |
+| `mcp server started`  | `mcp`                | Transport (`stdio` or `http`), plan, and mailbox and member totals                                   |
+| `$exception`          | `cli`, `mcp`, `rest` | Operation and safe failure code for internal, provider, timeout, uncertain-send, or partial failures |
 
 The `operation` property contains the CLI command path, MCP tool name, or REST OpenAPI operation ID. This keeps the event schema consistent while preserving the name used by each interface. The browser callback that finishes a hosted OAuth connection reports `completeHostedConnection` on the `rest` surface, because that request, not the command that printed the link, is where the mailbox is connected.
 

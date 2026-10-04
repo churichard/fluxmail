@@ -130,7 +130,7 @@ Fluxmail sends anonymous operation events to its PostHog project by default. Eve
 
 Each event is labeled `deployment_type=self_hosted` so package usage can be counted separately from Fluxmail Cloud and website traffic.
 
-Internal, provider, timeout, and uncertain-send failures also send a grouped error report with the operation name and a safe error code. Reports exclude the original error message, stack trace, and provider response. Turning telemetry off also disables these reports.
+Internal, provider, timeout, and uncertain-send failures also send a grouped error report with the operation name and a safe error code. MCP and REST reports include partial account or item failures. Reports exclude the original error message, stack trace, and provider response. Turning telemetry off also disables these reports.
 
 For MCP attachment downloads, telemetry records whether the tool returned a resource link or inline content. It records the same choice if the download fails, without sending the attachment name or content.
 

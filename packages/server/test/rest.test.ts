@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { EmailError, type Message } from '@fluxmail/core';
 import type { FluxmailConfig } from '../src/config.js';
 import { createRestApi } from '../src/http/rest.js';
@@ -8,6 +11,7 @@ import { createApiKey } from '../src/storage/apiKeys.js';
 import { openDb, restIdempotency } from '../src/storage/db.js';
 import { addMember } from '../src/storage/members.js';
 import { listAdminAuditEvents } from '../src/storage/adminAudit.js';
+import { createTelemetry, type Telemetry } from '../src/telemetry.js';
 
 const account = {
   id: 'acct_1',
@@ -33,7 +37,7 @@ const message: Message = {
   flags: { read: false, starred: false, draft: false },
 };
 
-function fixture() {
+function fixture(telemetry?: Telemetry) {
   const db = openDb(':memory:');
   const member = addMember(db, { id: 'member_1', name: 'Owner', role: 'admin' });
   const { key, info: keyInfo } = createApiKey(db, 'test', member.id);
@@ -142,7 +146,7 @@ function fixture() {
     })),
   };
   service.withPrincipal.mockReturnValue(service);
-  const app = createRestApi({ config, db, service: service as never });
+  const app = createRestApi({ config, db, service: service as never, telemetry });
   const auth = { authorization: `Bearer ${key}` };
   return { app, auth, config, db, key, keyInfo, member, service, scheduled };
 }
@@ -967,7 +971,13 @@ describe('REST send idempotency', () => {
   });
 
   it('returns an uncertain result without retrying through REST', async () => {
-    const { app, auth, service } = fixture();
+    const capture = vi.fn();
+    const telemetry = createTelemetry({
+      dataDir: mkdtempSync(join(tmpdir(), 'fluxmail-rest-telemetry-')),
+      env: {},
+      client: { capture, shutdown: async () => undefined },
+    });
+    const { app, auth, service } = fixture(telemetry);
     service.deliver.mockResolvedValueOnce({
       operationId: 'dop_uncertain',
       accountId: 'acct_1',
@@ -983,6 +993,19 @@ describe('REST send idempotency', () => {
     await expect(response.json()).resolves.toMatchObject({
       data: { status: 'uncertain', operationId: 'dop_uncertain' },
     });
+    expect(capture).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: '$exception',
+        properties: expect.objectContaining({
+          deployment_type: 'self_hosted',
+          product_surface: 'rest',
+          operation: 'sendMessage',
+          error_code: 'account_failure',
+        }),
+      }),
+    );
+    expect(JSON.stringify(capture.mock.calls)).not.toMatch(/ann@example|uncertain-send|dop_uncertain/);
+    await telemetry.shutdown();
   });
 
   it('reports changed idempotency requests as a safe conflict', async () => {

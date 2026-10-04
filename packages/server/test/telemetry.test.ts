@@ -17,15 +17,22 @@ import {
 } from '../src/telemetry.js';
 
 describe('telemetry', () => {
-  it.each(['internal', 'provider_unavailable', 'deadline_exceeded', 'send_outcome_unknown'])(
-    'reports %s as a sanitized self-hosted exception',
-    async (errorCode) => {
+  it.each([
+    { productSurface: 'mcp', operation: 'send_email', errorCode: 'internal' },
+    { productSurface: 'mcp', operation: 'send_email', errorCode: 'provider_unavailable' },
+    { productSurface: 'cli', operation: 'emails send', errorCode: 'request_timeout' },
+    { productSurface: 'cli', operation: 'emails send', errorCode: 'uncertain' },
+    { productSurface: 'mcp', operation: 'send_email', errorCode: 'account_failure' },
+    { productSurface: 'rest', operation: 'sendMessage', errorCode: 'account_failure' },
+  ] as const)(
+    'reports $productSurface $errorCode as a sanitized self-hosted exception',
+    async ({ productSurface, operation: operationName, errorCode }) => {
       const dataDir = mkdtempSync(path.join(tmpdir(), 'fluxmail-telemetry-'));
       const capture = vi.fn();
       const telemetry = createTelemetry({ dataDir, env: {}, client: { capture, shutdown: async () => undefined } });
       const operation = {
-        productSurface: 'mcp' as const,
-        operation: 'send_email',
+        productSurface,
+        operation: operationName,
         outcome: 'error' as const,
         errorCode,
         durationMs: 5,
@@ -41,13 +48,13 @@ describe('telemetry', () => {
         event: '$exception',
         properties: {
           deployment_type: 'self_hosted',
-          product_surface: 'mcp',
-          operation: 'send_email',
+          product_surface: productSurface,
+          operation: operationName,
           error_code: errorCode,
           $exception_list: [
             { type: 'FluxmailOperationError', value: errorCode, mechanism: { handled: true, synthetic: true } },
           ],
-          $exception_fingerprint: `fluxmail:self_hosted:mcp:send_email:${errorCode}`,
+          $exception_fingerprint: `fluxmail:self_hosted:${productSurface}:${operationName}:${errorCode}`,
         },
       });
       expect(JSON.stringify(capture.mock.calls)).not.toMatch(/private@example|password=|secret|Private message/);
