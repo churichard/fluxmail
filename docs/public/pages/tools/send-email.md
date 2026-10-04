@@ -19,19 +19,19 @@ Required capabilities: `mail.send`.
 | Name | Required | Type | Details |
 | --- | --- | --- | --- |
 | `idempotencyKey` | Yes | `string` | Reuse this key when retrying the same delivery |
-| `draftId` | No | `string` | Send this existing draft Minimum length: 1. |
-| `accountId` | No | `string` | Account to operate on. Optional when exactly one account is connected. Minimum length: 1. |
-| `from` | No | `string` | Connected address or an available send-as address Format: `email`. |
-| `to` | No | array of `string` | Recipients, each "Name <a@x.com>" or "a@x.com" |
-| `cc` | No | array of `string` | Recipients, each "Name <a@x.com>" or "a@x.com" |
-| `bcc` | No | array of `string` | Recipients, each "Name <a@x.com>" or "a@x.com" |
-| `subject` | No | `string` | Defaults to "Re: ..." when replying |
-| `bodyText` | No | `string` | Plain-text body. Line breaks appear in the sent email. Keep each prose paragraph on one continuous line and separate paragraphs with blank lines. |
-| `bodyHtml` | No | `string` | HTML body |
-| `replyToMessageId` | No | `string` | Message being replied to; threads correctly and computes recipients if "to" is omitted |
-| `replyAll` | No | `boolean` | With replyToMessageId: reply to all original recipients |
-| `attachments` | No | array of `object` | None |
-| `sendAt` | No | `string` | Schedule delivery instead of sending now: ISO 8601 with timezone offset or Z (e.g. 2026-07-11T09:00:00-07:00). Fluxmail saves the message as a real draft in the mailbox and sends it at this time; the server must be running then (anything missed while it was down goes out at the next startup). Returns a scheduleId for list/cancel. Format: `date-time`. |
+| `draftId` | No | `string` or `null` | Send this existing draft Minimum length: 1. |
+| `accountId` | No | `string` or `null` | Account to operate on. Optional when exactly one account is connected. Minimum length: 1. |
+| `from` | No | `string` or `null` | Connected address or an available send-as address Format: `email`. |
+| `to` | No | array of `string` or `null` | Recipients, each "Name <a@x.com>" or "a@x.com" |
+| `cc` | No | array of `string` or `null` | Recipients, each "Name <a@x.com>" or "a@x.com" |
+| `bcc` | No | array of `string` or `null` | Recipients, each "Name <a@x.com>" or "a@x.com" |
+| `subject` | No | `string` or `null` | Defaults to "Re: ..." when replying |
+| `bodyText` | No | `string` or `null` | Plain-text body. Line breaks appear in the sent email. Keep each prose paragraph on one continuous line and separate paragraphs with blank lines. |
+| `bodyHtml` | No | `string` or `null` | HTML body |
+| `replyToMessageId` | No | `string` or `null` | Message being replied to; threads correctly and computes recipients if "to" is omitted |
+| `replyAll` | No | `boolean` or `null` | With replyToMessageId: reply to all original recipients |
+| `attachments` | No | array of `object` or `null` | None |
+| `sendAt` | No | `string` or `null` | Schedule delivery instead of sending now: ISO 8601 with timezone offset or Z (e.g. 2026-07-11T09:00:00-07:00). Fluxmail saves the message as a real draft in the mailbox and sends it at this time; the server must be running then (anything missed while it was down goes out at the next startup). Returns a scheduleId for list/cancel. Format: `date-time`. |
 
 <details>
 <summary>JSON input schema</summary>
@@ -46,85 +46,161 @@ Required capabilities: `mail.send`.
       "description": "Reuse this key when retrying the same delivery"
     },
     "draftId": {
-      "type": "string",
-      "minLength": 1,
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Send this existing draft"
     },
     "accountId": {
-      "type": "string",
-      "minLength": 1,
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Account to operate on. Optional when exactly one account is connected."
     },
     "from": {
-      "type": "string",
-      "format": "email",
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "email"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Connected address or an available send-as address"
     },
     "to": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "minLength": 1
-      },
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Recipients, each \"Name <a@x.com>\" or \"a@x.com\""
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Recipients, each \"Name <a@x.com>\" or \"a@x.com\""
     },
     "cc": {
-      "$ref": "#/properties/to",
+      "anyOf": [
+        {
+          "$ref": "#/properties/to/anyOf/0"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Recipients, each \"Name <a@x.com>\" or \"a@x.com\""
     },
     "bcc": {
-      "$ref": "#/properties/to",
+      "anyOf": [
+        {
+          "$ref": "#/properties/to/anyOf/0"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Recipients, each \"Name <a@x.com>\" or \"a@x.com\""
     },
     "subject": {
-      "type": "string",
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Defaults to \"Re: ...\" when replying"
     },
     "bodyText": {
-      "type": "string",
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Plain-text body. Line breaks appear in the sent email. Keep each prose paragraph on one continuous line and separate paragraphs with blank lines."
     },
     "bodyHtml": {
-      "type": "string",
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "HTML body"
     },
     "replyToMessageId": {
-      "$ref": "#/properties/draftId",
+      "anyOf": [
+        {
+          "$ref": "#/properties/draftId/anyOf/0"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Message being replied to; threads correctly and computes recipients if \"to\" is omitted"
     },
     "replyAll": {
-      "type": "boolean",
+      "type": [
+        "boolean",
+        "null"
+      ],
       "description": "With replyToMessageId: reply to all original recipients"
     },
     "attachments": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "filename": {
-            "type": "string",
-            "minLength": 1
-          },
-          "mimeType": {
-            "type": "string",
-            "minLength": 1
-          },
-          "content": {
-            "type": "string",
-            "description": "base64"
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "filename": {
+                "type": "string",
+                "minLength": 1
+              },
+              "mimeType": {
+                "type": "string",
+                "minLength": 1
+              },
+              "content": {
+                "type": "string",
+                "description": "base64"
+              }
+            },
+            "required": [
+              "filename",
+              "mimeType",
+              "content"
+            ],
+            "additionalProperties": false
           }
         },
-        "required": [
-          "filename",
-          "mimeType",
-          "content"
-        ],
-        "additionalProperties": false
-      }
+        {
+          "type": "null"
+        }
+      ]
     },
     "sendAt": {
-      "type": "string",
-      "format": "date-time",
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Schedule delivery instead of sending now: ISO 8601 with timezone offset or Z (e.g. 2026-07-11T09:00:00-07:00). Fluxmail saves the message as a real draft in the mailbox and sends it at this time; the server must be running then (anything missed while it was down goes out at the next startup). Returns a scheduleId for list/cancel."
     }
   },

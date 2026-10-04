@@ -19,13 +19,13 @@ Required capabilities: `mail.read` + `mail.send`.
 | Name | Required | Type | Details |
 | --- | --- | --- | --- |
 | `idempotencyKey` | Yes | `string` | Reuse this key when retrying the same forward |
-| `accountId` | No | `string` | Account to operate on. Optional when exactly one account is connected. Minimum length: 1. |
+| `accountId` | No | `string` or `null` | Account to operate on. Optional when exactly one account is connected. Minimum length: 1. |
 | `messageId` | Yes | `string` | Minimum length: 1. |
-| `from` | No | `string` | Connected address or an available send-as address Format: `email`. |
+| `from` | No | `string` or `null` | Connected address or an available send-as address Format: `email`. |
 | `to` | Yes | array of `string` | Recipients, each "Name <a@x.com>" or "a@x.com" |
-| `cc` | No | array of `string` | Recipients, each "Name <a@x.com>" or "a@x.com" |
-| `comment` | No | `string` | Comment above the forwarded message. Keep prose paragraphs on one continuous line and separate paragraphs with blank lines. |
-| `includeAttachments` | No | `boolean` | Default true |
+| `cc` | No | array of `string` or `null` | Recipients, each "Name <a@x.com>" or "a@x.com" |
+| `comment` | No | `string` or `null` | Comment above the forwarded message. Keep prose paragraphs on one continuous line and separate paragraphs with blank lines. |
+| `includeAttachments` | No | `boolean` or `null` | Default true |
 
 <details>
 <summary>JSON input schema</summary>
@@ -40,8 +40,15 @@ Required capabilities: `mail.read` + `mail.send`.
       "description": "Reuse this key when retrying the same forward"
     },
     "accountId": {
-      "type": "string",
-      "minLength": 1,
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Account to operate on. Optional when exactly one account is connected."
     },
     "messageId": {
@@ -49,8 +56,15 @@ Required capabilities: `mail.read` + `mail.send`.
       "minLength": 1
     },
     "from": {
-      "type": "string",
-      "format": "email",
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "email"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Connected address or an available send-as address"
     },
     "to": {
@@ -63,18 +77,32 @@ Required capabilities: `mail.read` + `mail.send`.
       "description": "Recipients, each \"Name <a@x.com>\" or \"a@x.com\""
     },
     "cc": {
-      "type": "array",
-      "items": {
-        "$ref": "#/properties/to/items"
-      },
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/properties/to/items"
+          },
+          "description": "Recipients, each \"Name <a@x.com>\" or \"a@x.com\""
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Recipients, each \"Name <a@x.com>\" or \"a@x.com\""
     },
     "comment": {
-      "type": "string",
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Comment above the forwarded message. Keep prose paragraphs on one continuous line and separate paragraphs with blank lines."
     },
     "includeAttachments": {
-      "type": "boolean",
+      "type": [
+        "boolean",
+        "null"
+      ],
       "description": "Default true"
     }
   },

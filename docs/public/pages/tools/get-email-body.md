@@ -18,11 +18,11 @@ Required capabilities: `mail.read`.
 
 | Name | Required | Type | Details |
 | --- | --- | --- | --- |
-| `accountId` | No | `string` | Account to operate on. Optional when exactly one account is connected. Minimum length: 1. |
+| `accountId` | No | `string` or `null` | Account to operate on. Optional when exactly one account is connected. Minimum length: 1. |
 | `messageId` | Yes | `string` | Minimum length: 1. |
 | `format` | Yes | `text` or `html` | None |
-| `offset` | No | `integer` | Minimum: 0. |
-| `maxChars` | No | `integer` | Minimum: 1. Maximum: 50000. |
+| `offset` | No | `integer` or `null` | Minimum: 0. |
+| `maxChars` | No | `integer` or `null` | Minimum: 1. Maximum: 50000. |
 
 <details>
 <summary>JSON input schema</summary>
@@ -32,8 +32,15 @@ Required capabilities: `mail.read`.
   "type": "object",
   "properties": {
     "accountId": {
-      "type": "string",
-      "minLength": 1,
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Account to operate on. Optional when exactly one account is connected."
     },
     "messageId": {
@@ -48,13 +55,27 @@ Required capabilities: `mail.read`.
       ]
     },
     "offset": {
-      "type": "integer",
-      "minimum": 0
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "maxChars": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 50000
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50000
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [

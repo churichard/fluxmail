@@ -49,6 +49,27 @@ function toolJsonSchema(shape: z.ZodRawShape, pipeStrategy: 'input' | 'output'):
   return schema as Tool['inputSchema'];
 }
 
+type NullableOptionalInputs<Shape extends z.ZodRawShape> = {
+  [Key in keyof Shape]: Shape[Key] extends z.ZodOptional<infer Inner>
+    ? z.ZodEffects<z.ZodOptional<z.ZodNullable<Inner>>, z.output<Shape[Key]>, z.input<Shape[Key]> | null>
+    : Shape[Key];
+};
+
+function nullableOptionalInputs<Shape extends z.ZodRawShape>(shape: Shape): NullableOptionalInputs<Shape> {
+  return Object.fromEntries(
+    Object.entries(shape).map(([name, schema]) => {
+      if (!(schema instanceof z.ZodOptional)) return [name, schema];
+      // Keep optional outside nullable so JSON Schema does not include an undefined branch.
+      const normalized = schema
+        .unwrap()
+        .nullable()
+        .optional()
+        .transform((value: unknown) => (value === null ? undefined : value));
+      return [name, schema.description ? normalized.describe(schema.description) : normalized];
+    }),
+  ) as NullableOptionalInputs<Shape>;
+}
+
 const accountIdParam = z
   .string()
   .min(1)
@@ -465,18 +486,19 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
   const listedTools: Tool[] = [];
   const registerTool = ((name: string, config: Record<string, unknown>, callback: unknown) => {
     const outputSchema = outputSchemas[name as keyof typeof outputSchemas];
+    const inputShape = config.inputSchema as z.ZodRawShape | undefined;
+    const inputSchema = inputShape ? nullableOptionalInputs(inputShape) : undefined;
     const registered = server.registerTool(
       name,
-      { ...config, outputSchema },
+      { ...config, ...(inputSchema ? { inputSchema } : {}), outputSchema },
       callback as Parameters<McpServer['registerTool']>[2],
     );
-    const inputShape = config.inputSchema as z.ZodRawShape | undefined;
     listedTools.push({
       name,
       title: config.title as string | undefined,
       description: config.description as string | undefined,
       inputSchema:
-        inputShape && Object.keys(inputShape).length ? toolJsonSchema(inputShape, 'input') : EMPTY_INPUT_SCHEMA,
+        inputSchema && Object.keys(inputSchema).length ? toolJsonSchema(inputSchema, 'input') : EMPTY_INPUT_SCHEMA,
       outputSchema: toolJsonSchema(outputSchema, 'output'),
       annotations: config.annotations as Tool['annotations'],
       execution: { taskSupport: 'forbidden' },
@@ -621,7 +643,13 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
         description: 'Search up to 20 accounts with one portable query and return one result group per account.',
         inputSchema: {
           accounts: z
-            .array(z.object({ accountId: z.string().min(1), pageToken: z.string().min(1).optional() }).strict())
+            .array(
+              z
+                .object(
+                  nullableOptionalInputs({ accountId: z.string().min(1), pageToken: z.string().min(1).optional() }),
+                )
+                .strict(),
+            )
             .min(1)
             .max(20),
           query: z.string().min(1).describe('Typed portable search syntax'),

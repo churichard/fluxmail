@@ -18,22 +18,22 @@ Required capabilities: `mail.read`.
 
 | Name | Required | Type | Details |
 | --- | --- | --- | --- |
-| `accountId` | No | `string` | Account to operate on. Optional when exactly one account is connected. Minimum length: 1. |
+| `accountId` | No | `string` or `null` | Account to operate on. Optional when exactly one account is connected. Minimum length: 1. |
 | `query` | Yes | `string` | Typed portable search syntax Minimum length: 1. |
-| `folder` | No | `string` | Folder role (inbox, sent, drafts, trash, spam, starred, archive, all) or a label/folder name. Use all or omit this field to search all mail except Spam and Trash. An IMAP server's \All mailbox may use different rules. Minimum length: 1. |
-| `from` | No | `string` | None |
-| `to` | No | `string` | None |
-| `subject` | No | `string` | None |
-| `read` | No | `boolean` | None |
-| `starred` | No | `boolean` | None |
-| `hasAttachment` | No | `boolean` | None |
-| `after` | No | `string` | YYYY-MM-DD received date, inclusive in UTC Minimum length: 1. |
-| `before` | No | `string` | YYYY-MM-DD received date, exclusive in UTC Minimum length: 1. |
-| `rawProviderQuery` | No | `string` | Provider-native Gmail syntax or Outlook KQL for one compatible account |
-| `pageSize` | No | `integer` | Defaults to 25 Minimum: 1. Maximum: 100. |
-| `pageToken` | No | `string` | nextPageToken from a previous call Minimum length: 1. |
-| `includeSnippet` | No | `boolean` | Request or suppress message previews |
-| `includeSearchContext` | No | `boolean` | Include a match-centered body excerpt; requires a portable text query |
+| `folder` | No | `string` or `null` | Folder role (inbox, sent, drafts, trash, spam, starred, archive, all) or a label/folder name. Use all or omit this field to search all mail except Spam and Trash. An IMAP server's \All mailbox may use different rules. Minimum length: 1. |
+| `from` | No | `string` or `null` | None |
+| `to` | No | `string` or `null` | None |
+| `subject` | No | `string` or `null` | None |
+| `read` | No | `boolean` or `null` | None |
+| `starred` | No | `boolean` or `null` | None |
+| `hasAttachment` | No | `boolean` or `null` | None |
+| `after` | No | `string` or `null` | YYYY-MM-DD received date, inclusive in UTC Minimum length: 1. |
+| `before` | No | `string` or `null` | YYYY-MM-DD received date, exclusive in UTC Minimum length: 1. |
+| `rawProviderQuery` | No | `string` or `null` | Provider-native Gmail syntax or Outlook KQL for one compatible account |
+| `pageSize` | No | `integer` or `null` | Defaults to 25 Minimum: 1. Maximum: 100. |
+| `pageToken` | No | `string` or `null` | nextPageToken from a previous call Minimum length: 1. |
+| `includeSnippet` | No | `boolean` or `null` | Request or suppress message previews |
+| `includeSearchContext` | No | `boolean` or `null` | Include a match-centered body excerpt; requires a portable text query |
 
 <details>
 <summary>JSON input schema</summary>
@@ -43,8 +43,15 @@ Required capabilities: `mail.read`.
   "type": "object",
   "properties": {
     "accountId": {
-      "type": "string",
-      "minLength": 1,
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Account to operate on. Optional when exactly one account is connected."
     },
     "query": {
@@ -53,59 +60,121 @@ Required capabilities: `mail.read`.
       "description": "Typed portable search syntax"
     },
     "folder": {
-      "type": "string",
-      "minLength": 1,
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Folder role (inbox, sent, drafts, trash, spam, starred, archive, all) or a label/folder name. Use all or omit this field to search all mail except Spam and Trash. An IMAP server's \\All mailbox may use different rules."
     },
     "from": {
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "to": {
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "subject": {
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "read": {
-      "type": "boolean"
+      "type": [
+        "boolean",
+        "null"
+      ]
     },
     "starred": {
-      "type": "boolean"
+      "type": [
+        "boolean",
+        "null"
+      ]
     },
     "hasAttachment": {
-      "type": "boolean"
+      "type": [
+        "boolean",
+        "null"
+      ]
     },
     "after": {
-      "type": "string",
-      "minLength": 1,
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "YYYY-MM-DD received date, inclusive in UTC"
     },
     "before": {
-      "type": "string",
-      "minLength": 1,
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "YYYY-MM-DD received date, exclusive in UTC"
     },
     "rawProviderQuery": {
-      "type": "string",
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Provider-native Gmail syntax or Outlook KQL for one compatible account"
     },
     "pageSize": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 100,
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Defaults to 25"
     },
     "pageToken": {
-      "type": "string",
-      "minLength": 1,
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "nextPageToken from a previous call"
     },
     "includeSnippet": {
-      "type": "boolean",
+      "type": [
+        "boolean",
+        "null"
+      ],
       "description": "Request or suppress message previews"
     },
     "includeSearchContext": {
-      "type": "boolean",
+      "type": [
+        "boolean",
+        "null"
+      ],
       "description": "Include a match-centered body excerpt; requires a portable text query"
     }
   },

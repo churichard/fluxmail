@@ -18,9 +18,9 @@ Required capabilities: `mail.read`.
 
 | Name | Required | Type | Details |
 | --- | --- | --- | --- |
-| `accountId` | No | `string` | Account to operate on. Optional when exactly one account is connected. Minimum length: 1. |
+| `accountId` | No | `string` or `null` | Account to operate on. Optional when exactly one account is connected. Minimum length: 1. |
 | `messageId` | Yes | `string` | Minimum length: 1. |
-| `bodyFormat` | No | `text` or `html` or `both` or `none` | None |
+| `bodyFormat` | No | `text` or `html` or `both` or `none` or `null` | None |
 
 <details>
 <summary>JSON input schema</summary>
@@ -30,8 +30,15 @@ Required capabilities: `mail.read`.
   "type": "object",
   "properties": {
     "accountId": {
-      "type": "string",
-      "minLength": 1,
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Account to operate on. Optional when exactly one account is connected."
     },
     "messageId": {
@@ -39,12 +46,19 @@ Required capabilities: `mail.read`.
       "minLength": 1
     },
     "bodyFormat": {
-      "type": "string",
-      "enum": [
-        "text",
-        "html",
-        "both",
-        "none"
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "text",
+            "html",
+            "both",
+            "none"
+          ]
+        },
+        {
+          "type": "null"
+        }
       ]
     }
   },

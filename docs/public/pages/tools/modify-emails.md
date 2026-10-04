@@ -18,11 +18,11 @@ Required capabilities: `mail.organize` or `mail.trash` or `mail.delete`.
 
 | Name | Required | Type | Details |
 | --- | --- | --- | --- |
-| `accountId` | No | `string` | Account to operate on. Optional when exactly one account is connected. Minimum length: 1. |
+| `accountId` | No | `string` or `null` | Account to operate on. Optional when exactly one account is connected. Minimum length: 1. |
 | `messageIds` | Yes | array of `string` | None |
 | `action` | Yes | `markRead` or `markUnread` or `star` or `unstar` or `archive` or `trash` or `untrash` or `delete` or `move` or `addLabels` or `removeLabels` | None |
-| `folder` | No | `string` | Target folder for action=move Minimum length: 1. |
-| `labels` | No | array of `string` | Labels for addLabels/removeLabels |
+| `folder` | No | `string` or `null` | Target folder for action=move Minimum length: 1. |
+| `labels` | No | array of `string` or `null` | Labels for addLabels/removeLabels |
 
 <details>
 <summary>JSON input schema</summary>
@@ -32,8 +32,15 @@ Required capabilities: `mail.organize` or `mail.trash` or `mail.delete`.
   "type": "object",
   "properties": {
     "accountId": {
-      "type": "string",
-      "minLength": 1,
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Account to operate on. Optional when exactly one account is connected."
     },
     "messageIds": {
@@ -61,17 +68,31 @@ Required capabilities: `mail.organize` or `mail.trash` or `mail.delete`.
       ]
     },
     "folder": {
-      "type": "string",
-      "minLength": 1,
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Target folder for action=move"
     },
     "labels": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "minLength": 1
-      },
-      "maxItems": 100,
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxItems": 100
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Labels for addLabels/removeLabels"
     }
   },
