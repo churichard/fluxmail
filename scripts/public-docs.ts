@@ -142,6 +142,21 @@ export function replaceGeneratedSection(source: string, marker: string, content:
   return source.replace(pattern, `${start}\n${content.trim()}\n${end}`);
 }
 
+export function generateClineInstallationGuide(clientGuide: string): string {
+  const sections = [...clientGuide.matchAll(/<details>\s*<summary>Cline<\/summary>\s*([\s\S]*?)\s*<\/details>/g)];
+  const section = sections[0]?.[1];
+  if (sections.length !== 1 || !section?.trim()) {
+    throw new Error('connect-an-mcp-client.md must contain exactly one nonempty Cline section.');
+  }
+  return `# Install Fluxmail in Cline\n\n${section.trim().replace(/^### /gm, '## ')}\n`;
+}
+
+export function validateClineInstallationGuide(clientGuide: string, installationGuide: string | undefined): void {
+  if (installationGuide !== generateClineInstallationGuide(clientGuide)) {
+    throw new Error('Generated documentation is stale: llms-install.md. Run pnpm docs:generate.');
+  }
+}
+
 export function readPublicDocsManifest(root = PUBLIC_DOCS_ROOT): PublicDocsManifest {
   return parseManifest(JSON.parse(readFileSync(path.join(root, 'manifest.json'), 'utf8')) as unknown);
 }

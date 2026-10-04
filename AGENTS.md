@@ -21,6 +21,8 @@ This restriction does not prevent legitimate work on the licensing system, such 
 - Add and order public pages in `docs/public/pages/meta.json`. The compatibility manifest is generated from that file and must not be edited by hand.
 - Update the corresponding public guide for user-facing changes to MCP tools, CLI commands, configuration, permissions, providers, or licensing when users need new or revised guidance. Bug fixes and internal architecture changes do not require a public documentation update when the existing guidance remains accurate.
 - The generated reference pages under `tools/`, `cli/`, and `rest-api/`, along with generated sections in `configuration.md` and `permissions.md`, come from the implementation. Run `pnpm docs:generate`, then `pnpm docs:check`.
+- After editing any handwritten public guide, run `pnpm docs:generate`, then the full `pnpm docs:check` before committing or pushing. Commit any regenerated files. The root `llms-install.md` comes from the Cline section in `docs/public/pages/connect-an-mcp-client.md`.
+- Running `scripts/validate-public-docs.ts` alone or checking the website does not replace `pnpm docs:check` in this repository.
 - Apply the humanizer guidance to all user-facing copy. Do not use em dashes or en dashes in public documentation.
 
 # Anonymous telemetry
