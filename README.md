@@ -28,6 +28,10 @@ fluxmail setup --name "Your name" --email you@example.com
 
 Then follow the [quickstart](https://fluxmail.ai/docs/quickstart) to connect a mailbox and choose how you want to use Fluxmail: MCP, REST API, or CLI.
 
+For a local MCP connection, configure your client to launch `fluxmail` with arguments `["stdio", "--profile", "read-only"]`. The client must run as the same operating-system user and use the same Fluxmail data directory as setup. Stdio uses the local member session; it does not need an API key or a separate HTTP server. Ask the client to call `list_accounts` to check the connection. A fresh instance returns an empty account list.
+
+The `llms-install.md` file includes a project-local pnpm installation and complete Cline MCP settings. See [Connect an MCP client](https://fluxmail.ai/docs/connect-an-mcp-client) for other clients and HTTP connections.
+
 ## Documentation
 
 - [Overview](https://fluxmail.ai/docs/overview)
