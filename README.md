@@ -30,7 +30,7 @@ Then follow the [quickstart](https://fluxmail.ai/docs/quickstart) to connect a m
 
 For a local MCP connection, configure your client to launch `fluxmail` with arguments `["stdio", "--profile", "read-only"]`. The client must run as the same operating-system user and use the same Fluxmail data directory as setup. Stdio uses the local member session; it does not need an API key or a separate HTTP server. Ask the client to call `list_accounts` to check the connection. A fresh instance returns an empty account list.
 
-See [Connect an MCP client](https://fluxmail.ai/docs/connect-an-mcp-client) for client configuration and HTTP connections. Its Cline section includes a project-local pnpm installation and complete MCP settings, also available as `llms-install.md` in this repository.
+See [Connect an MCP client](https://fluxmail.ai/docs/connect-an-mcp-client) for client configuration and HTTP connections. Its Cline section covers MCP settings and Cline CLI setup, also available as `llms-install.md` in this repository.
 
 ## Documentation
 

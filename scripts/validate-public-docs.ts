@@ -9,6 +9,7 @@ import {
   publicDocPages,
   readPublicDocsMeta,
   readPublicDocsManifest,
+  validateClineInstallationGuide,
 } from './public-docs.js';
 
 const meta = readPublicDocsMeta();
@@ -64,6 +65,13 @@ for (const { slug, filename: relativeFilename } of pages) {
   if (/[—–]/u.test(source)) throw new Error(`${slug}.md contains an em dash or en dash. Rewrite it in plain language.`);
   sources.set(slug, source);
 }
+
+const clientGuide = sources.get('connect-an-mcp-client');
+if (!clientGuide) throw new Error('Missing connect-an-mcp-client.md.');
+validateClineInstallationGuide(
+  clientGuide,
+  existsSync('llms-install.md') ? readFileSync('llms-install.md', 'utf8') : undefined,
+);
 
 for (const [slug, source] of sources) {
   if (/\]\(\/docs\/mcp(?:\/|[)#?])/.test(source)) {

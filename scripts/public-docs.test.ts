@@ -4,15 +4,49 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   compatibilityManifest,
+  generateClineInstallationGuide,
   parseFrontmatter,
   parseManifest,
   parseMeta,
   publicDocPages,
   replaceGeneratedSection,
+  validateClineInstallationGuide,
 } from './public-docs.js';
 
 const manifest = { schemaVersion: 1, id: 'fluxmail', category: 'Fluxmail MCP', pages: ['quickstart'] };
 const meta = { title: 'Fluxmail MCP', pages: ['quickstart'] };
+
+describe('Cline installation guide', () => {
+  const section = '<details>\n<summary>Cline</summary>\n\n### Configure Cline\n\nUse read-only.\n\n</details>';
+  const installationGuide = '# Install Fluxmail in Cline\n\n## Configure Cline\n\nUse read-only.\n';
+
+  it('extracts Cline instructions without including other clients', () => {
+    const guide = `<details><summary>Cursor</summary>Cursor instructions</details>\n${section}\n## Test connection`;
+    expect(generateClineInstallationGuide(guide)).toBe(installationGuide);
+    expect(() => validateClineInstallationGuide(guide, installationGuide)).not.toThrow();
+  });
+
+  it('rejects a companion guide after the Cline instructions change', () => {
+    const editedGuide = section.replace('Use read-only.', 'Use read-only.\n\nConfigure Cline CLI.');
+    expect(() => validateClineInstallationGuide(editedGuide, installationGuide)).toThrow(
+      'Generated documentation is stale: llms-install.md. Run pnpm docs:generate.',
+    );
+    expect(() =>
+      validateClineInstallationGuide(editedGuide, generateClineInstallationGuide(editedGuide)),
+    ).not.toThrow();
+  });
+
+  it('rejects a missing companion guide', () => {
+    expect(() => validateClineInstallationGuide(section, undefined)).toThrow(/llms-install.md.*pnpm docs:generate/);
+  });
+
+  it.each(['', '<details><summary>Cline</summary>\n\n</details>', `${section}\n${section}`])(
+    'rejects missing, empty, or duplicate Cline sections',
+    (guide) => {
+      expect(() => generateClineInstallationGuide(guide)).toThrow(/exactly one nonempty Cline section/);
+    },
+  );
+});
 
 describe('public docs bundle validation', () => {
   it('parses Fumadocs metadata without changing page order', () => {
