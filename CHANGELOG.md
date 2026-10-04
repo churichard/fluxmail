@@ -4,6 +4,10 @@ Fluxmail records user-facing changes in this file. The format follows [Common Ch
 
 ## [Unreleased]
 
+### Fixed
+
+- [MCP] Accept `null` for optional tool inputs and treat it as omission so clients that require explicit values can call tools without unused filters or draft fields
+
 ## [0.11.2] - 2026-10-02
 
 ### Changed

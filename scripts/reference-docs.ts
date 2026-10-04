@@ -200,6 +200,12 @@ function schemaType(schema: JsonObject, root: JsonObject, resolvedReferences = n
       .map((item) => schemaType(item, root, resolvedReferences))
       .join(' or ');
   }
+  if (Array.isArray(schema.type)) {
+    return schema.type
+      .filter((type): type is string => typeof type === 'string')
+      .map((type) => schemaType({ ...schema, type }, root, resolvedReferences))
+      .join(' or ');
+  }
   if (schema.type === 'array' && isObject(schema.items)) {
     return `array of ${schemaType(schema.items, root, resolvedReferences)}`;
   }
@@ -225,6 +231,12 @@ function resolveLocalReference(root: JsonObject, reference: string): JsonObject 
 }
 
 function schemaDetails(schema: JsonObject): string {
+  const alternatives = schema.anyOf ?? schema.oneOf;
+  if (Array.isArray(alternatives) && alternatives.length === 2) {
+    const branches = alternatives.filter(isObject);
+    const valueSchema = branches.find((branch) => branch.type !== 'null');
+    if (valueSchema && branches.some((branch) => branch.type === 'null')) schema = { ...valueSchema, ...schema };
+  }
   const details: string[] = [];
   if (typeof schema.description === 'string') details.push(schema.description);
   if (typeof schema.format === 'string') details.push(`Format: \`${schema.format}\`.`);

@@ -18,7 +18,7 @@ Required capabilities: `mail.drafts`.
 
 | Name | Required | Type | Details |
 | --- | --- | --- | --- |
-| `accountId` | No | `string` | Account to operate on. Optional when exactly one account is connected. Minimum length: 1. |
+| `accountId` | No | `string` or `null` | Account to operate on. Optional when exactly one account is connected. Minimum length: 1. |
 | `draftId` | Yes | `string` | Minimum length: 1. |
 
 <details>
@@ -29,8 +29,15 @@ Required capabilities: `mail.drafts`.
   "type": "object",
   "properties": {
     "accountId": {
-      "type": "string",
-      "minLength": 1,
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Account to operate on. Optional when exactly one account is connected."
     },
     "draftId": {

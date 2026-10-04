@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
 import { EmailError } from '@fluxmail/core';
 import type { EmailService } from '../src/service/emailService.js';
 import { buildMcpServer, toSendRequest, type McpServerOptions } from '../src/mcp/buildServer.js';
@@ -75,6 +76,173 @@ describe('toSendRequest', () => {
 
   it('rejects replyAll without a reply target', () => {
     expect(() => toSendRequest({ replyAll: true })).toThrow(/requires replyToMessageId/);
+  });
+});
+
+describe('MCP optional inputs', () => {
+  it('advertises nullable optional fields while required fields still reject null', async () => {
+    const client = await connectMcp({ enforceQuota: () => undefined });
+    try {
+      const validator = new AjvJsonSchemaValidator();
+      for (const tool of (await client.listTools()).tools) {
+        expect(JSON.stringify(tool.inputSchema)).not.toContain('"not":');
+        const required = tool.inputSchema.required ?? [];
+        // Validate each supplied field without requiring unrelated fields in the same tool.
+        const validate = validator.getValidator({ ...tool.inputSchema, required: [] });
+        for (const name of Object.keys(tool.inputSchema.properties ?? {})) {
+          expect(validate({ [name]: null }).valid, `${tool.name}.${name}`).toBe(!required.includes(name));
+        }
+      }
+      const listTool = (await client.listTools()).tools.find((tool) => tool.name === 'list_emails')!;
+      expect(listTool.inputSchema.required ?? []).toEqual([]);
+      expect(listTool.inputSchema.properties?.accountId).toMatchObject({
+        description: 'Account to operate on. Optional when exactly one account is connected.',
+      });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('treats null listing filters and pagination as omitted', async () => {
+    const listMessages = vi.fn().mockResolvedValue({ items: [], exhausted: true });
+    const client = await connectMcp({ enforceQuota: () => undefined, listMessages });
+    try {
+      const tool = (await client.listTools()).tools.find((tool) => tool.name === 'list_emails')!;
+      for (const args of [
+        {},
+        Object.fromEntries(Object.keys(tool.inputSchema.properties!).map((key) => [key, null])),
+      ]) {
+        const result = await client.callTool({ name: 'list_emails', arguments: args });
+        expect(result.isError).toBeFalsy();
+      }
+      expect(listMessages.mock.calls).toEqual([
+        [undefined, {}, {}],
+        [undefined, {}, {}],
+      ]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('preserves false filters and valid values alongside nulls', async () => {
+    const listMessages = vi.fn().mockResolvedValue({ items: [], exhausted: true });
+    const client = await connectMcp({ enforceQuota: () => undefined, listMessages });
+    try {
+      const result = await client.callTool({
+        name: 'list_emails',
+        arguments: {
+          accountId: null,
+          folder: 'inbox',
+          from: 'ann@example.com',
+          subject: null,
+          read: false,
+          starred: false,
+          hasAttachment: false,
+          pageSize: 3,
+          pageToken: null,
+          includeSnippet: false,
+          includeSearchContext: false,
+        },
+      });
+      expect(result.isError).toBeFalsy();
+      expect(listMessages).toHaveBeenCalledWith(
+        undefined,
+        { folder: 'inbox', from: 'ann@example.com', read: false, starred: false, hasAttachment: false },
+        { pageSize: 3, includeSnippet: false, includeSearchContext: false },
+      );
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('normalizes null search filters and nested batch pagination', async () => {
+    const listMessages = vi.fn().mockResolvedValue({ items: [], exhausted: true });
+    const searchMessagesBatch = vi.fn().mockResolvedValue({
+      groups: [{ accountId: 'acct_1', page: { items: [], exhausted: true } }],
+      exhausted: true,
+    });
+    const client = await connectMcp({ enforceQuota: () => undefined, listMessages, searchMessagesBatch });
+    try {
+      const searched = await client.callTool({
+        name: 'search_emails',
+        arguments: { query: 'is:unread', accountId: null, read: null, folder: null, pageToken: null },
+      });
+      expect(searched.isError).toBeFalsy();
+      expect(listMessages).toHaveBeenCalledWith(undefined, { read: false }, {});
+      const batched = await client.callTool({
+        name: 'search_emails_batch',
+        arguments: {
+          accounts: [{ accountId: 'acct_1', pageToken: null }],
+          query: 'is:unread',
+          folder: null,
+          pageSize: null,
+          includeSnippet: null,
+        },
+      });
+      expect(batched.isError).toBeFalsy();
+      expect(searchMessagesBatch).toHaveBeenCalledWith({ accounts: [{ accountId: 'acct_1' }], query: { read: false } });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('normalizes optional draft fields without treating false or empty content as absent', async () => {
+    const createDraft = vi.fn().mockResolvedValue(draftMessage);
+    const client = await connectMcp({ enforceQuota: () => undefined, createDraft });
+    try {
+      const result = await client.callTool({
+        name: 'create_draft',
+        arguments: {
+          accountId: null,
+          from: null,
+          to: ['recipient@example.com'],
+          cc: null,
+          bcc: null,
+          subject: '',
+          bodyText: '',
+          bodyHtml: null,
+          replyToMessageId: null,
+          replyAll: false,
+          attachments: null,
+        },
+      });
+      expect(result.isError).toBeFalsy();
+      expect(createDraft).toHaveBeenCalledWith(undefined, {
+        to: [{ email: 'recipient@example.com' }],
+        subject: '',
+        body: { text: '' },
+        replyAll: false,
+      });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('still rejects required nulls and invalid non-null optional values', async () => {
+    const listMessages = vi.fn();
+    const getMessage = vi.fn();
+    const searchMessagesBatch = vi.fn();
+    const client = await connectMcp({ enforceQuota: () => undefined, listMessages, getMessage, searchMessagesBatch });
+    try {
+      for (const args of [{ folder: '' }, { after: '' }, { pageToken: '' }, { pageSize: 0 }, { read: 'false' }]) {
+        expect((await client.callTool({ name: 'list_emails', arguments: args })).isError).toBe(true);
+      }
+      expect((await client.callTool({ name: 'get_email', arguments: { messageId: null } })).isError).toBe(true);
+      expect((await client.callTool({ name: 'search_emails', arguments: { query: null } })).isError).toBe(true);
+      expect(
+        (
+          await client.callTool({
+            name: 'search_emails_batch',
+            arguments: { accounts: [{ accountId: null, pageToken: null }], query: 'invoice' },
+          })
+        ).isError,
+      ).toBe(true);
+      expect(listMessages).not.toHaveBeenCalled();
+      expect(getMessage).not.toHaveBeenCalled();
+      expect(searchMessagesBatch).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+    }
   });
 });
 

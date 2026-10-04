@@ -21,7 +21,7 @@ Required capabilities: `mail.read`.
 | `accountId` | Yes | `string` | Minimum length: 1. |
 | `messageId` | Yes | `string` | None |
 | `attachmentId` | Yes | `string` | Opaque attachment ID returned by message metadata Minimum length: 1. |
-| `inline` | No | `boolean` | None |
+| `inline` | No | `boolean` or `null` | None |
 
 <details>
 <summary>JSON input schema</summary>
@@ -43,7 +43,10 @@ Required capabilities: `mail.read`.
       "description": "Opaque attachment ID returned by message metadata"
     },
     "inline": {
-      "type": "boolean"
+      "type": [
+        "boolean",
+        "null"
+      ]
     }
   },
   "required": [

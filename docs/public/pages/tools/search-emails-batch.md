@@ -20,18 +20,18 @@ Required capabilities: `mail.read`.
 | --- | --- | --- | --- |
 | `accounts` | Yes | array of `object` | None |
 | `query` | Yes | `string` | Typed portable search syntax Minimum length: 1. |
-| `folder` | No | `inbox` or `sent` or `drafts` or `archive` or `spam` or `trash` or `all` | None |
-| `from` | No | `string` | None |
-| `to` | No | `string` | None |
-| `subject` | No | `string` | None |
-| `read` | No | `boolean` | None |
-| `starred` | No | `boolean` | None |
-| `hasAttachment` | No | `boolean` | None |
-| `after` | No | `string` | YYYY-MM-DD received date, inclusive in UTC Minimum length: 1. |
-| `before` | No | `string` | YYYY-MM-DD received date, exclusive in UTC Minimum length: 1. |
-| `pageSize` | No | `integer` | Defaults to 25 Minimum: 1. Maximum: 100. |
-| `includeSnippet` | No | `boolean` | Request or suppress message previews |
-| `includeSearchContext` | No | `boolean` | Include a match-centered body excerpt; requires a portable text query |
+| `folder` | No | `inbox` or `sent` or `drafts` or `archive` or `spam` or `trash` or `all` or `null` | None |
+| `from` | No | `string` or `null` | None |
+| `to` | No | `string` or `null` | None |
+| `subject` | No | `string` or `null` | None |
+| `read` | No | `boolean` or `null` | None |
+| `starred` | No | `boolean` or `null` | None |
+| `hasAttachment` | No | `boolean` or `null` | None |
+| `after` | No | `string` or `null` | YYYY-MM-DD received date, inclusive in UTC Minimum length: 1. |
+| `before` | No | `string` or `null` | YYYY-MM-DD received date, exclusive in UTC Minimum length: 1. |
+| `pageSize` | No | `integer` or `null` | Defaults to 25 Minimum: 1. Maximum: 100. |
+| `includeSnippet` | No | `boolean` or `null` | Request or suppress message previews |
+| `includeSearchContext` | No | `boolean` or `null` | Include a match-centered body excerpt; requires a portable text query |
 
 <details>
 <summary>JSON input schema</summary>
@@ -50,8 +50,15 @@ Required capabilities: `mail.read`.
             "minLength": 1
           },
           "pageToken": {
-            "type": "string",
-            "minLength": 1
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -68,57 +75,109 @@ Required capabilities: `mail.read`.
       "description": "Typed portable search syntax"
     },
     "folder": {
-      "type": "string",
-      "enum": [
-        "inbox",
-        "sent",
-        "drafts",
-        "archive",
-        "spam",
-        "trash",
-        "all"
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "inbox",
+            "sent",
+            "drafts",
+            "archive",
+            "spam",
+            "trash",
+            "all"
+          ]
+        },
+        {
+          "type": "null"
+        }
       ]
     },
     "from": {
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "to": {
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "subject": {
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "read": {
-      "type": "boolean"
+      "type": [
+        "boolean",
+        "null"
+      ]
     },
     "starred": {
-      "type": "boolean"
+      "type": [
+        "boolean",
+        "null"
+      ]
     },
     "hasAttachment": {
-      "type": "boolean"
+      "type": [
+        "boolean",
+        "null"
+      ]
     },
     "after": {
-      "type": "string",
-      "minLength": 1,
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "YYYY-MM-DD received date, inclusive in UTC"
     },
     "before": {
-      "type": "string",
-      "minLength": 1,
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "YYYY-MM-DD received date, exclusive in UTC"
     },
     "pageSize": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 100,
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Defaults to 25"
     },
     "includeSnippet": {
-      "type": "boolean",
+      "type": [
+        "boolean",
+        "null"
+      ],
       "description": "Request or suppress message previews"
     },
     "includeSearchContext": {
-      "type": "boolean",
+      "type": [
+        "boolean",
+        "null"
+      ],
       "description": "Include a match-centered body excerpt; requires a portable text query"
     }
   },

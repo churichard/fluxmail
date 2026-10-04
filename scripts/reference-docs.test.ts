@@ -33,6 +33,38 @@ describe('MCP documentation generation', () => {
     );
     expect(reference.pages.get('list-emails.md')).toContain('| `pageSize` | Yes | `integer` | Minimum: 1. |');
   });
+
+  it('documents nullable types and retains constraints from the value branch', () => {
+    const reference = generateMcpReference(
+      [
+        {
+          name: 'list_emails',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              subject: { type: ['string', 'null'] },
+              read: { type: ['boolean', 'null'] },
+              pageSize: {
+                description: 'Number of messages.',
+                anyOf: [{ type: 'integer', minimum: 1, maximum: 100 }, { type: 'null' }],
+              },
+              folder: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+              recipients: { type: ['array', 'null'], items: { type: 'string' } },
+            },
+          },
+        },
+      ],
+      new Map(),
+      '2026-10-04',
+    );
+
+    const page = reference.pages.get('list-emails.md');
+    expect(page).toContain('| `subject` | No | `string` or `null` | None |');
+    expect(page).toContain('| `read` | No | `boolean` or `null` | None |');
+    expect(page).toContain('| `pageSize` | No | `integer` or `null` | Number of messages. Minimum: 1. Maximum: 100. |');
+    expect(page).toContain('| `folder` | No | `string` or `null` | Minimum length: 1. |');
+    expect(page).toContain('| `recipients` | No | array of `string` or `null` | None |');
+  });
 });
 
 describe('CLI documentation generation', () => {
