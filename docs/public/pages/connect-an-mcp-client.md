@@ -120,7 +120,7 @@ Use a local stdio connection to call Fluxmail from Cline. You can check the conn
 
 ### Requirements
 
-- Node.js 20.20.x, or Node.js 22.22 or later.
+- Node.js 22.22 or later.
 - Cline with a configured model provider.
 - pnpm 11 for the project-local installation below.
 
@@ -145,7 +145,7 @@ pnpm exec fluxmail setup --name "Your name" --email you@example.com
 
 Fluxmail asks for a password without displaying it. Setup creates a local profile and saves your member session. For unattended setup, supply `FLUXMAIL_PASSWORD` through a secure environment; do not put a password in a command argument or commit it to a file.
 
-Fluxmail normally stores data in your operating system's application-data directory. To use a separate instance, set `FLUXMAIL_DATA_DIR` to an absolute directory before setup. Pass the same value to Cline's MCP server configuration. `FLUXMAIL_TELEMETRY=0` disables anonymous telemetry.
+Fluxmail stores data in `.fluxmail` in your home directory by default. To use a separate instance, set `FLUXMAIL_DATA_DIR` to an absolute directory before setup. Pass the same value to Cline's MCP server configuration. `FLUXMAIL_TELEMETRY=0` disables anonymous telemetry.
 
 You can check the instance before connecting a mailbox:
 
