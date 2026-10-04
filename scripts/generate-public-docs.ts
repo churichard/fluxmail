@@ -174,11 +174,13 @@ async function main(): Promise<void> {
     }
   }
 
-  const clineGuideFile = path.join(PUBLIC_DOCS_ROOT, 'pages', 'install-in-cline.md');
-  const clineGuide = readFileSync(clineGuideFile, 'utf8');
-  const clineGuideMetadata = parseFrontmatter(clineGuide, 'install-in-cline.md');
-  const clineGuideBody = clineGuide.slice(clineGuide.indexOf('\n---\n') + '\n---\n'.length).trimStart();
-  const installationGuide = `# ${clineGuideMetadata.title}\n\n${clineGuideBody}`;
+  const clientGuide = readFileSync(path.join(PUBLIC_DOCS_ROOT, 'pages', 'connect-an-mcp-client.md'), 'utf8');
+  const clineSections = [...clientGuide.matchAll(/<details>\s*<summary>Cline<\/summary>\s*([\s\S]*?)\s*<\/details>/g)];
+  const clineSection = clineSections[0]?.[1];
+  if (clineSections.length !== 1 || !clineSection?.trim()) {
+    throw new Error('connect-an-mcp-client.md must contain exactly one nonempty Cline section.');
+  }
+  const installationGuide = `# Install Fluxmail in Cline\n\n${clineSection.trim().replace(/^### /gm, '## ')}\n`;
   if (readFileIfPresent('llms-install.md') !== installationGuide) {
     if (check) stale.push('llms-install.md');
     else writeFileSync('llms-install.md', installationGuide);

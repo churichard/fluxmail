@@ -1,6 +1,6 @@
 # Install Fluxmail in Cline
 
-Fluxmail is a self-hosted email MCP server. This guide covers a local stdio connection and a connection check that works before you connect a mailbox.
+Use a local stdio connection to call Fluxmail from Cline. You can check the connection before connecting a mailbox. If you completed the [quickstart](https://fluxmail.ai/docs/quickstart), skip to the Cline configuration below.
 
 ## Requirements
 
@@ -55,7 +55,7 @@ Open Cline's MCP Servers view and edit its MCP settings. Add a `fluxmail` entry 
 }
 ```
 
-Replace the command with the absolute path to the installed executable. If you selected a custom data directory, add `"env": { "FLUXMAIL_DATA_DIR": "/absolute/path/to/data" }` to that server entry. The setup command and Cline must run as the same operating-system user and use the same data directory.
+Replace the command with the absolute path to the installed executable. For a global installation, use the path returned by `which fluxmail` (`where fluxmail` on Windows). If you selected a custom data directory, add `"env": { "FLUXMAIL_DATA_DIR": "/absolute/path/to/data" }` to that server entry. The setup command and Cline must run as the same operating-system user and use the same data directory.
 
 For Cline CLI, use its MCP settings file or MCP add command. Consult `cline mcp --help` for the options supported by your installed version. The Fluxmail command and arguments are the same.
 
