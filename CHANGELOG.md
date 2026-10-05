@@ -12,7 +12,7 @@ Fluxmail records user-facing changes in this file. The format follows [Common Ch
 
 ### Added
 
-- [MCP] Add a Claude Code plugin that starts the matching stable Fluxmail release with read-only permissions and telemetry disabled ([#114](https://github.com/churichard/fluxmail/pull/114))
+- [MCP] Add a Claude Code plugin that starts the matching stable Fluxmail release with read-only permissions; enable telemetry by default and honor existing opt-outs ([#114](https://github.com/churichard/fluxmail/pull/114)) ([#120](https://github.com/churichard/fluxmail/pull/120))
 
 ### Fixed
 
