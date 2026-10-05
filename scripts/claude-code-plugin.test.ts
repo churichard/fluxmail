@@ -50,7 +50,8 @@ describe('Claude Code plugin release automation', () => {
     expect(await readFile(manifestPath, 'utf8')).toBe(manifestSource.replace('0.11.2', '0.12.0'));
     const config = JSON.parse(await readFile(path.join(root, 'integrations/claude-code/.mcp.json'), 'utf8'));
     expect(config.mcpServers.fluxmail.args).toEqual(['-y', 'fluxmail@0.12.0', 'stdio', '--profile', 'read-only']);
-    expect(config.mcpServers.fluxmail.env.FLUXMAIL_TELEMETRY).toBe('0');
+    expect(config.mcpServers.fluxmail.env?.FLUXMAIL_TELEMETRY).toBeUndefined();
+    expect(config.mcpServers.fluxmail.env?.DO_NOT_TRACK).toBeUndefined();
   });
 
   it.each(['fluxmail@latest', 'fluxmail@^0.11.2', 'fluxmail@0.11.1'])(
