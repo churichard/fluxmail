@@ -29,8 +29,19 @@ The wrapper includes no hooks, setup scripts, or bundled credentials. Mailbox cr
 - Microsoft OAuth and Graph hosts (`login.microsoftonline.com` and `graph.microsoft.com`), or the configured Exchange host: used for connected Microsoft mailboxes.
 - User-configured IMAP and SMTP hosts: used only for connected mailboxes.
 - Fluxmail's licensing service at `fluxmail.ai`: used when an operator configures a paid license.
+- `t.fluxmail.ai`: anonymous usage telemetry and sanitized error reports, unless you opt out.
 
-Fluxmail normally sends usage telemetry through `t.fluxmail.ai`. This plugin sets `FLUXMAIL_TELEMETRY=0` to disable it. The server still contacts the providers needed for the user's connected mailboxes.
+## Telemetry
+
+Anonymous telemetry is on by default. Fluxmail sends operation names, outcomes, timings, a random installation ID, runtime information, and aggregate installation details to PostHog through `t.fluxmail.ai`. Error reports contain operation names and safe error codes. Telemetry excludes email content, addresses, search text, credentials, and original error messages. See [configuration](https://fluxmail.ai/docs/configuration#telemetry) for the collected properties and [privacy policy](https://fluxmail.ai/privacy) for data handling.
+
+To turn telemetry off, run this command using the same Fluxmail data directory as the plugin:
+
+```sh
+npx -y fluxmail@latest telemetry disable
+```
+
+The plugin also honors `FLUXMAIL_TELEMETRY=0` or `DO_NOT_TRACK=1` in its MCP server environment. Restart the plugin's MCP server after changing these environment variables. Existing opt-outs remain in effect.
 
 ## Source and license
 

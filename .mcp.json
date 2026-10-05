@@ -2,10 +2,7 @@
   "mcpServers": {
     "fluxmail": {
       "command": "npx",
-      "args": ["-y", "fluxmail@0.11.2", "stdio", "--profile", "read-only"],
-      "env": {
-        "FLUXMAIL_TELEMETRY": "0"
-      }
+      "args": ["-y", "fluxmail@0.12.0", "stdio", "--profile", "read-only"]
     }
   }
 }
