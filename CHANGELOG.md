@@ -4,9 +4,20 @@ Fluxmail records user-facing changes in this file. The format follows [Common Ch
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-05
+
+### Changed
+
+- [MCP / CLI / REST] Label anonymous telemetry as self-hosted and send grouped operational error reports using safe error codes; [turn telemetry off](https://fluxmail.ai/docs/configuration/) to disable both ([#118](https://github.com/churichard/fluxmail/pull/118))
+
+### Added
+
+- [MCP] Add a Claude Code plugin that starts the matching stable Fluxmail release with read-only permissions and telemetry disabled ([#114](https://github.com/churichard/fluxmail/pull/114))
+
 ### Fixed
 
-- [MCP] Accept `null` for optional tool inputs and treat it as omission so clients that require explicit values can call tools without unused filters or draft fields
+- [MCP / CLI] Select the sole local profile for stdio when it has a custom name and the active profile is remote or missing, and name the selected profile in login instructions ([#113](https://github.com/churichard/fluxmail/pull/113))
+- [MCP] Accept `null` for optional tool inputs and treat it as omission so clients that require explicit values can call tools without unused filters or draft fields ([#116](https://github.com/churichard/fluxmail/pull/116))
 
 ## [0.11.2] - 2026-10-02
 
@@ -208,7 +219,7 @@ Only the breaking entries for the interfaces you use apply. An MCP-only integrat
 - Prevent hosted Microsoft OAuth responses from forwarding connection credentials through the HTTP referrer ([#43](https://github.com/churichard/fluxmail/pull/43))
 - Stop a pending IMAP connection immediately when its provider closes during setup ([#49](https://github.com/churichard/fluxmail/pull/49))
 
-[Unreleased]: https://github.com/churichard/fluxmail/compare/v0.11.2...HEAD
+[Unreleased]: https://github.com/churichard/fluxmail/compare/v0.12.0...HEAD
 [0.4.0]: https://github.com/churichard/fluxmail/compare/v0.3.0...v0.4.0
 [0.4.1]: https://github.com/churichard/fluxmail/compare/v0.4.0...v0.4.1
 [0.5.0]: https://github.com/churichard/fluxmail/compare/v0.4.1...v0.5.0
@@ -222,3 +233,4 @@ Only the breaking entries for the interfaces you use apply. An MCP-only integrat
 [0.11.0]: https://github.com/churichard/fluxmail/compare/v0.10.0...v0.11.0
 [0.11.1]: https://github.com/churichard/fluxmail/compare/v0.11.0...v0.11.1
 [0.11.2]: https://github.com/churichard/fluxmail/compare/v0.11.1...v0.11.2
+[0.12.0]: https://github.com/churichard/fluxmail/compare/v0.11.2...v0.12.0

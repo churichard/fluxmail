@@ -28,6 +28,7 @@ async function fixture(version = '0.11.2') {
       repository: { url: 'git+https://github.com/churichard/fluxmail.git', directory: 'packages/server' },
     }),
   );
+  await syncClaudePlugin(root);
   return { root, temporary };
 }
 
@@ -37,7 +38,10 @@ afterEach(async () => {
 
 describe('Claude Code plugin release automation', () => {
   it('updates both the manifest and launcher when the Fluxmail version changes', async () => {
-    const { root } = await fixture('0.12.0');
+    const { root } = await fixture();
+    const packagePath = path.join(root, 'packages/server/package.json');
+    const manifest = JSON.parse(await readFile(packagePath, 'utf8'));
+    await writeFile(packagePath, JSON.stringify({ ...manifest, version: '0.12.0' }));
     await expect(checkClaudePlugin(root)).rejects.toThrow('must use Fluxmail version 0.12.0');
     const manifestPath = path.join(root, 'integrations/claude-code/.claude-plugin/plugin.json');
     const manifestSource = await readFile(manifestPath, 'utf8');
