@@ -41,12 +41,9 @@ export async function checkClaudePlugin(root = repositoryRoot) {
   const server = config.mcpServers?.fluxmail;
   if (
     server?.command !== 'npx' ||
-    JSON.stringify(server.args) !== JSON.stringify(['-y', `fluxmail@${version}`, 'stdio', '--profile', 'read-only']) ||
-    server.env?.FLUXMAIL_TELEMETRY !== '0'
+    JSON.stringify(server.args) !== JSON.stringify(['-y', `fluxmail@${version}`, 'stdio', '--profile', 'read-only'])
   ) {
-    throw new Error(
-      `Claude Code plugin must run fluxmail@${version} with read-only permissions and telemetry disabled.`,
-    );
+    throw new Error(`Claude Code plugin must run fluxmail@${version} with read-only permissions.`);
   }
   return version;
 }

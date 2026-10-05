@@ -1,7 +1,7 @@
 {
   "name": "fluxmail",
   "version": "0.12.0",
-  "description": "Search and read Gmail, Outlook, Exchange, and IMAP/SMTP mail through a local Fluxmail instance.",
+  "description": "Search and read Gmail, Outlook, Exchange, and IMAP/SMTP mail through a local Fluxmail instance. Anonymous usage telemetry is on by default; opt out with fluxmail telemetry disable.",
   "author": {
     "name": "Richard Chu",
     "url": "https://github.com/churichard"
