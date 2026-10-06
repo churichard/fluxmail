@@ -1,15 +1,23 @@
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setupInitialAdmin } from '../src/auth.js';
 import { createCliProgram } from '../src/cli.js';
-import { saveLocalInstance, saveRemoteInstance, saveSessionToken, useInstance } from '../src/cliInstances.js';
+import {
+  credentialPath,
+  instanceConfigPath,
+  saveLocalInstance,
+  saveRemoteInstance,
+  saveSessionToken,
+  useInstance,
+} from '../src/cliInstances.js';
+import type { CliStartupReason } from '../src/cliStartupDiagnostics.js';
 import * as contextModule from '../src/context.js';
 import type { AppContext } from '../src/context.js';
 import { LicenseController } from '../src/licensing/refresher.js';
-import { shutdownLogging } from '../src/logging.js';
+import { readLocalLogs, shutdownLogging } from '../src/logging.js';
 import { SendScheduler } from '../src/scheduler/sendScheduler.js';
 
 describe('CLI stdio startup', () => {
@@ -81,7 +89,18 @@ describe('CLI stdio startup', () => {
     return { capture, run };
   }
 
-  function expectEvent(capture: ReturnType<typeof vi.fn>, outcome: string, phase: string, errorCode?: string): void {
+  function expectEvent(
+    capture: ReturnType<typeof vi.fn>,
+    outcome: string,
+    phase: string,
+    errorCode?: string,
+    diagnostics: Partial<{
+      startup_reason: CliStartupReason;
+      startup_io_code: string;
+      startup_data_dir_source: 'environment' | 'default';
+      startup_instance_selection: 'automatic' | 'explicit';
+    }> = {},
+  ): void {
     expect(capture.mock.calls).toEqual([
       [
         'operation completed',
@@ -90,6 +109,9 @@ describe('CLI stdio startup', () => {
           operation: 'stdio',
           outcome,
           startup_phase: phase,
+          startup_data_dir_source: 'environment',
+          startup_instance_selection: 'automatic',
+          ...diagnostics,
           duration_ms: expect.any(Number),
           ...(errorCode ? { error_code: errorCode } : {}),
         },
@@ -126,7 +148,7 @@ describe('CLI stdio startup', () => {
   it('records unconfigured instances without creating a store', async () => {
     const { capture, run } = invocation(['stdio']);
     await expect(run()).rejects.toMatchObject({ code: 'invalid_request' });
-    expectEvent(capture, 'error', 'instance', 'invalid_request');
+    expectEvent(capture, 'error', 'instance', 'invalid_request', { startup_reason: 'instance_not_configured' });
     expect(contextModule.createContext).not.toHaveBeenCalled();
   });
 
@@ -134,7 +156,7 @@ describe('CLI stdio startup', () => {
     saveLocalInstance();
     const { capture, run } = invocation(['stdio']);
     await expect(run()).rejects.toMatchObject({ code: 'permission_denied' });
-    expectEvent(capture, 'error', 'authentication', 'permission_denied');
+    expectEvent(capture, 'error', 'authentication', 'permission_denied', { startup_reason: 'session_missing' });
     expect(contextModule.createContext).not.toHaveBeenCalled();
   });
 
@@ -143,7 +165,7 @@ describe('CLI stdio startup', () => {
     saveSessionToken('local', 'fms_private-invalid');
     const { capture, run } = invocation(['stdio']);
     await expect(run()).rejects.toMatchObject({ code: 'permission_denied' });
-    expectEvent(capture, 'error', 'authentication', 'permission_denied');
+    expectEvent(capture, 'error', 'authentication', 'permission_denied', { startup_reason: 'session_invalid' });
     expect((contexts.at(-1)!.db as unknown as { $client: { open: boolean } }).$client.open).toBe(false);
     expect(McpServer.prototype.connect).not.toHaveBeenCalled();
   });
@@ -205,7 +227,10 @@ describe('CLI stdio startup', () => {
     saveSessionToken('private-work', 'fms_private-remote-token');
     const { capture, run } = invocation(['--instance', 'private-work', 'stdio']);
     await expect(run()).rejects.toMatchObject({ code: 'invalid_request' });
-    expectEvent(capture, 'error', 'instance', 'invalid_request');
+    expectEvent(capture, 'error', 'instance', 'invalid_request', {
+      startup_reason: 'local_instance_required',
+      startup_instance_selection: 'explicit',
+    });
     expect(contextModule.createContext).not.toHaveBeenCalled();
   });
 
@@ -223,7 +248,9 @@ describe('CLI stdio startup', () => {
       message: expect.stringContaining('fluxmail --instance private-personal login'),
     });
 
-    expectEvent(capture, 'error', 'authentication', 'permission_denied');
+    expectEvent(capture, 'error', 'authentication', 'permission_denied', {
+      startup_reason: session === 'missing' ? 'session_missing' : 'session_invalid',
+    });
     expect(JSON.stringify(capture.mock.calls)).not.toContain('private-personal');
     expect(McpServer.prototype.connect).not.toHaveBeenCalled();
     if (session === 'missing') expect(contextModule.createContext).not.toHaveBeenCalled();
@@ -241,7 +268,7 @@ describe('CLI stdio startup', () => {
       message: expect.stringContaining('fluxmail --instance <name> stdio'),
     });
 
-    expectEvent(capture, 'error', 'instance', 'invalid_request');
+    expectEvent(capture, 'error', 'instance', 'invalid_request', { startup_reason: 'local_instance_ambiguous' });
     expect(contextModule.createContext).not.toHaveBeenCalled();
     expect(McpServer.prototype.connect).not.toHaveBeenCalled();
   });
@@ -259,5 +286,78 @@ describe('CLI stdio startup', () => {
     expect(SendScheduler.prototype.start).not.toHaveBeenCalled();
     expect(LicenseController.prototype.start).not.toHaveBeenCalled();
     expect((contexts.at(-1)!.db as unknown as { $client: { open: boolean } }).$client.open).toBe(false);
+  });
+
+  it('distinguishes an unknown explicit instance from an unconfigured installation', async () => {
+    const { capture, run } = invocation(['--instance', 'private-missing', 'stdio']);
+    await expect(run()).rejects.toMatchObject({ code: 'not_found' });
+    expectEvent(capture, 'error', 'instance', 'not_found', {
+      startup_reason: 'instance_not_found',
+      startup_instance_selection: 'explicit',
+    });
+    expect(JSON.stringify(capture.mock.calls)).not.toContain('private-missing');
+    expect(contextModule.createContext).not.toHaveBeenCalled();
+  });
+
+  it.each(['instance_config', 'credentials'] as const)(
+    'identifies invalid %s JSON without capturing its contents',
+    async (kind) => {
+      if (kind === 'credentials') saveLocalInstance();
+      const file = kind === 'instance_config' ? instanceConfigPath() : credentialPath();
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, '{"private-owner@example.com":"fms_private-remote-token"');
+      const { capture, run } = invocation(['stdio']);
+      await expect(run()).rejects.toMatchObject({ code: 'invalid_request' });
+      expectEvent(capture, 'error', 'instance', 'invalid_request', { startup_reason: `${kind}_invalid_json` });
+      expect(JSON.stringify(capture.mock.calls)).not.toContain(file);
+      expect(contextModule.createContext).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['instance_config', 'credentials'] as const)(
+    'records the safe filesystem code for an unreadable %s file',
+    async (kind) => {
+      if (kind === 'credentials') saveLocalInstance();
+      const file = kind === 'instance_config' ? instanceConfigPath() : credentialPath();
+      mkdirSync(file, { recursive: true });
+      const { capture, run } = invocation(['stdio']);
+      await expect(run()).rejects.toMatchObject({ code: 'invalid_request' });
+      expectEvent(capture, 'error', 'instance', 'invalid_request', {
+        startup_reason: `${kind}_read_failed`,
+        startup_io_code: 'EISDIR',
+      });
+      expect(JSON.stringify(capture.mock.calls)).not.toContain(file);
+      expect(contextModule.createContext).not.toHaveBeenCalled();
+    },
+  );
+
+  it('retains the same startup diagnostics in the local structured log', async () => {
+    const { capture, run } = invocation(['stdio']);
+    await expect(run()).rejects.toMatchObject({ code: 'invalid_request' });
+    await shutdownLogging();
+    const entries = readLocalLogs(dataDir, { tail: 20, minimumLevel: 'warn' }).entries;
+    const failure = entries.find((entry) => entry.record.event === 'cli.operation_failed')!.record;
+    expect(failure.details).toEqual({
+      startup_phase: 'instance',
+      startup_data_dir_source: 'environment',
+      startup_instance_selection: 'automatic',
+      startup_reason: 'instance_not_configured',
+    });
+    expect(failure.error?.code).toBe('invalid_request');
+    expect(capture.mock.calls[0]![1]).toMatchObject(failure.details!);
+  });
+
+  it('records the default data directory source without sending the home path', async () => {
+    vi.stubEnv('FLUXMAIL_DATA_DIR', '');
+    const { capture, run } = invocation(['--instance', 'private-missing', 'stdio']);
+    // Keep filesystem access isolated while exercising the unset-directory branch.
+    vi.spyOn(await import('../src/config.js'), 'resolveDataDir').mockReturnValue(dataDir);
+    await expect(run()).rejects.toMatchObject({ code: 'not_found' });
+    expectEvent(capture, 'error', 'instance', 'not_found', {
+      startup_reason: 'instance_not_found',
+      startup_instance_selection: 'explicit',
+      startup_data_dir_source: 'default',
+    });
+    expect(contextModule.createContext).not.toHaveBeenCalled();
   });
 });

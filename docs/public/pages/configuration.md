@@ -136,6 +136,8 @@ For MCP attachment downloads, telemetry records whether the tool returned a reso
 
 For `fluxmail stdio`, telemetry records which startup phase failed, or `ready` when the server starts. The phases cover permission options, local instance selection, configuration and database initialization, session authentication, mailbox selection, and MCP transport startup. No option values or error messages are sent.
 
+Recognized startup failures also record a fixed reason, such as an unconfigured instance, ambiguous local profiles, an unreadable or invalid profile or credentials file, or a missing or invalid session. File-read failures include an allowlisted filesystem error code. Stdio events record whether the data directory came from the environment or the default and whether instance selection was explicit or automatic. They do not include the directory, instance name, session token, file contents, or error text.
+
 Delivery status, send preview, draft retrieval, body continuation, and bulk actions use the same event format. Fluxmail does not send delivery IDs, message IDs, recipients, or message content in these events.
 
 When the MCP server starts, telemetry records the plan and how many mailboxes and members the installation has. The plan is sent as Personal, Pro, Team, Business, or Enterprise, and any other plan name is sent as `other`. It does not send the license key or any address.

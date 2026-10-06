@@ -26,6 +26,25 @@ MCP attachment downloads record `destination` as `resource` for a link or `inlin
 
 CLI `stdio` operations record `startup_phase` as one of `permissions`, `instance`, `context`, `authentication`, `account_scope`, `transport`, or `ready`. Failed starts report the phase that failed; successful starts report `ready`. This distinguishes invalid permission options, local instance selection, configuration or database initialization, session authentication, mailbox selection, and MCP transport startup without collecting option values, instance names, paths, credentials, or error messages. A successful CLI `stdio` operation means the server started, not that a later MCP tool call succeeded.
 
+Stdio events also record `startup_data_dir_source=environment|default` and `startup_instance_selection=explicit|automatic`. These describe whether the launch supplied a data directory or selected an instance by name. The directory and instance name are never sent.
+
+Recognized instance and session failures add an allowlisted `startup_reason`:
+
+| Value                          | Meaning                                                   |
+| ------------------------------ | --------------------------------------------------------- |
+| `instance_not_configured`      | No CLI instance was selected or configured                |
+| `instance_not_found`           | The selected instance is absent from the profile file     |
+| `local_instance_required`      | Stdio selected a remote profile                           |
+| `local_instance_ambiguous`     | Several local profiles require an explicit choice         |
+| `instance_config_read_failed`  | The CLI profile file could not be read                    |
+| `instance_config_invalid_json` | The CLI profile file contains invalid JSON                |
+| `credentials_read_failed`      | The session credentials file could not be read            |
+| `credentials_invalid_json`     | The session credentials file contains invalid JSON        |
+| `session_missing`              | The selected local profile has no session token           |
+| `session_invalid`              | The session token did not authenticate as a local session |
+
+File-read failures also record `startup_io_code`: `EACCES`, `EPERM`, `EISDIR`, `ENOTDIR`, `EIO`, `EMFILE`, `ENFILE`, `ELOOP`, `ENAMETOOLONG`, or `unknown`. Other failures omit this property. Unclassified failures retain their phase and safe error code without a reason. Local `cli.operation_failed` records include the same startup properties in `details`; their error message stays local. None of these diagnostic properties are sent after telemetry is disabled.
+
 ## Mailbox connection properties
 
 Mailbox connection and removal events may add these properties to `operation completed`:
