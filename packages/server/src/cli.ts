@@ -82,6 +82,7 @@ import {
   useInstance,
 } from './cliInstances.js';
 import { cliExitCode, parseOutputFormat, printOutput } from './cliOutput.js';
+import { CliStartupError, cliStartupDiagnostics } from './cliStartupDiagnostics.js';
 import {
   authenticateBearer,
   isBootstrapComplete,
@@ -412,8 +413,22 @@ function finishCliOperation(program: Command, outcome: 'success' | 'error', erro
   const active = activeCliOperations.get(program);
   if (!active) return;
   activeCliOperations.delete(program);
+  const startupProperties =
+    active.operation === 'stdio' && outcome === 'error'
+      ? {
+          startup_phase: active.properties?.startup_phase,
+          startup_data_dir_source: active.properties?.startup_data_dir_source,
+          startup_instance_selection: active.properties?.startup_instance_selection,
+          ...cliStartupDiagnostics(error),
+        }
+      : {};
   if (outcome === 'error') {
-    const context = { productSurface: 'cli' as const, operation: active.operation, skipConsole: true };
+    const context = {
+      productSurface: 'cli' as const,
+      operation: active.operation,
+      skipConsole: true,
+      ...(active.operation === 'stdio' ? { details: startupProperties } : {}),
+    };
     if (error !== undefined) logFailure(active.logger, 'cli.operation_failed', error, context);
     else
       logCodedFailure(
@@ -430,7 +445,7 @@ function finishCliOperation(program: Command, outcome: 'success' | 'error', erro
     outcome,
     durationMs: performance.now() - active.startedAt,
     errorCode,
-    ...(active.properties ? { properties: active.properties } : {}),
+    properties: { ...active.properties, ...startupProperties },
   });
 }
 
@@ -956,24 +971,30 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
       let ctx: ReturnType<typeof createContext> | undefined;
       let server: ReturnType<typeof buildMcpServer> | undefined;
       try {
+        recordCliOperationProperties(program, {
+          startup_data_dir_source: process.env.FLUXMAIL_DATA_DIR ? 'environment' : 'default',
+          startup_instance_selection: selectedInstance() === undefined ? 'automatic' : 'explicit',
+        });
         startupPhase('permissions');
         const permissions = permissionPolicyFromOptions(opts);
         startupPhase('instance');
         const selected = resolveStdioInstance(selectedInstance());
         startupPhase('authentication');
         if (!selected.token)
-          throw new EmailError(
+          throw new CliStartupError(
             'permission_denied',
             `Log in to the local instance before starting stdio MCP. Run "fluxmail --instance ${selected.name} login".`,
+            'session_missing',
           );
         startupPhase('context');
         ctx = createContext();
         startupPhase('authentication');
         const principal = authenticateBearer(ctx.db, selected.token);
         if (!principal || principal.kind !== 'session')
-          throw new EmailError(
+          throw new CliStartupError(
             'permission_denied',
             `The local CLI session has expired. Run "fluxmail --instance ${selected.name} login".`,
+            'session_invalid',
           );
         startupPhase('account_scope');
         const accountIds = accountIdsFromRefs(ctx, opts.account);

@@ -4,6 +4,7 @@ import { EmailError, type EmailErrorCode } from '@fluxmail/core';
 import { resolveDataDir } from './config.js';
 import { createContext } from './context.js';
 import { createApp } from './http/app.js';
+import { CliStartupError } from './cliStartupDiagnostics.js';
 
 export interface LocalInstanceProfile {
   kind: 'local';
@@ -126,12 +127,17 @@ export function credentialPath(): string {
   return path.join(cliDirectory(), 'credentials.json');
 }
 
-function readJson<T>(filePath: string, fallback: T): T {
+function readJson<T>(filePath: string, fallback: T, kind: 'instance_config' | 'credentials'): T {
   try {
     return JSON.parse(readFileSync(filePath, 'utf8')) as T;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return fallback;
-    throw new EmailError('invalid_request', `Could not read ${filePath}: ${(error as Error).message}`);
+    throw new CliStartupError(
+      'invalid_request',
+      `Could not read ${filePath}: ${(error as Error).message}`,
+      error instanceof SyntaxError ? `${kind}_invalid_json` : `${kind}_read_failed`,
+      (error as NodeJS.ErrnoException).code,
+    );
   }
 }
 
@@ -144,7 +150,7 @@ function writePrivateJson(filePath: string, value: unknown): void {
 }
 
 export function loadInstanceConfig(): CliInstanceConfig {
-  return readJson(instanceConfigPath(), { instances: {} });
+  return readJson(instanceConfigPath(), { instances: {} }, 'instance_config');
 }
 
 function saveInstanceConfig(config: CliInstanceConfig): void {
@@ -152,7 +158,7 @@ function saveInstanceConfig(config: CliInstanceConfig): void {
 }
 
 function loadCredentials(): CliCredentials {
-  return readJson(credentialPath(), { sessions: {} });
+  return readJson(credentialPath(), { sessions: {} }, 'credentials');
 }
 
 function saveCredentials(credentials: CliCredentials): void {
@@ -225,12 +231,13 @@ export function resolveInstance(name?: string): { name: string; profile: Instanc
   const config = loadInstanceConfig();
   const selected = name ?? config.active;
   if (!selected)
-    throw new EmailError(
+    throw new CliStartupError(
       'invalid_request',
       'No CLI instance is configured.\nFor an existing local instance, run "fluxmail --instance local login".\nFor a new local instance, run "fluxmail setup".\nFor a remote instance, run "fluxmail login --server <url>".',
+      'instance_not_configured',
     );
   const profile = config.instances[selected];
-  if (!profile) throw new EmailError('not_found', `No CLI instance named "${selected}".`);
+  if (!profile) throw new CliStartupError('not_found', `No CLI instance named "${selected}".`, 'instance_not_found');
   return { name: selected, profile, token: loadCredentials().sessions[selected] };
 }
 
@@ -244,9 +251,10 @@ export function resolveStdioInstance(name?: string): ReturnType<typeof resolveIn
     else {
       const localNames = Object.keys(config.instances).filter((key) => config.instances[key]?.kind === 'local');
       if (localNames.length > 1) {
-        throw new EmailError(
+        throw new CliStartupError(
           'invalid_request',
           'Multiple local CLI profiles are configured. Run "fluxmail --instance <name> stdio" to choose one.',
+          'local_instance_ambiguous',
         );
       }
       selectedName = localNames[0] ?? config.active;
@@ -254,9 +262,10 @@ export function resolveStdioInstance(name?: string): ReturnType<typeof resolveIn
   }
   const selected = resolveInstance(selectedName);
   if (selected.profile.kind !== 'local') {
-    throw new EmailError(
+    throw new CliStartupError(
       'invalid_request',
       'Stdio MCP requires a local instance. Run "fluxmail --instance local login", or use the remote HTTP MCP endpoint with an API key.',
+      'local_instance_required',
     );
   }
   return selected;
