@@ -1,14 +1,14 @@
 ---
 title: 'Connect Outlook / Exchange'
 description: 'Register a Microsoft Entra application for Microsoft 365 or Outlook.com.'
-updated: '2026-07-17'
+updated: '2026-10-06'
 ---
 
 Fluxmail connects to Microsoft 365 and Outlook.com through Microsoft Graph. You create the Microsoft Entra app registration, and Fluxmail stores its OAuth tokens on the server you run.
 
 This integration supports Exchange Online mailboxes in Microsoft 365 and personal Outlook.com accounts, including Hotmail addresses. For an on-premises Exchange server without Microsoft Graph access, use [IMAP and SMTP](/docs/connect-an-imap-mailbox).
 
-Mailbox aliases can be registered in Fluxmail and selected when sending. The alias must already belong to the mailbox in Microsoft 365 or Outlook.com. Fluxmail does not create aliases or grant delegated mailbox access. See [Send from another address](/docs/send-as-addresses).
+Before registering the app, decide whether you need a local or hosted callback. Local CLI and Docker connections use a public client without a secret. A remote server with a public HTTPS URL uses a Web callback and client secret. The steps below show both paths.
 
 ## 1. Register the application
 
@@ -130,6 +130,17 @@ docker compose exec fluxmail \
 
 Open the printed connection link in your browser, continue to Microsoft, and approve access. The link expires after 10 minutes and works once.
 
+## 5. Verify the connection
+
+List the connected mailboxes, then use the Outlook account ID to fetch its folders:
+
+```bash
+fluxmail accounts list
+fluxmail --mail-account <account-id> folders list
+```
+
+For Docker, prefix both commands with `docker compose exec fluxmail`. The folder call checks Microsoft access without reading message bodies or changing mail. Continue with [MCP setup](/docs/connect-an-mcp-client) or [REST](/docs/build-with-rest) to verify access through your client as well.
+
 ## Create hosted connection links through the API
 
 A product backend can create a hosted link without running the CLI. The API key needs `admin.accounts`, and its owner must still be an administrator:
@@ -162,6 +173,8 @@ For Docker, prefix the command with `docker compose exec fluxmail`. Choose the M
 Accounts connected before category support can keep reading and sending mail without reconnecting. Listing Outlook categories requires `MailboxSettings.Read`. If Fluxmail reports that this permission is missing, reauthorize the account after adding it to the Entra app registration.
 
 ## How Outlook categories work
+
+Mailbox aliases can be registered in Fluxmail and selected when sending. The alias must already belong to the mailbox in Microsoft 365 or Outlook.com. Fluxmail does not create aliases or grant delegated mailbox access. See [Send from another address](/docs/send-as-addresses).
 
 Fluxmail exposes Outlook mail folders as folders and Outlook master categories as labels. Message label lists contain category names. Adding or removing a label updates the message's categories without replacing its other categories. If a category name is not in the master list, Outlook adds the name to the message without assigning a color. It does not appear in label listings.
 

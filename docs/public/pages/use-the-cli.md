@@ -1,7 +1,7 @@
 ---
 title: 'Use the CLI'
 description: 'Read and manage email, then configure the Fluxmail instance from the same command line.'
-updated: '2026-09-23'
+updated: '2026-10-06'
 ---
 
 The Fluxmail CLI can read, draft, send, schedule, and organize email. It also configures and runs the service. Mail commands call the same authenticated REST operations for local and remote instances, so permissions and mailbox access rules stay the same across CLI, MCP, and REST.
@@ -58,6 +58,8 @@ fluxmail labels list
 Gmail user labels appear in both listings because Gmail uses them as mailbox views and message tags. IMAP mailboxes support folders but not labels.
 
 ## Draft, send, and forward
+
+Read [Sending and retries](/docs/sending-and-retries) before submitting a delivery. Keep the same idempotency key when retrying the same request.
 
 Build a message with flags:
 
@@ -219,6 +221,8 @@ fluxmail emails send --help
 The [CLI reference](/docs/cli) lists every command and option.
 
 ## Update Fluxmail
+
+Follow [Upgrade Fluxmail](/docs/upgrade-fluxmail) to check compatibility and back up the instance before installing a new release.
 
 Fluxmail checks npm for a newer stable release at most once every 24 hours when you run an interactive CLI command. The check runs in the background. If it finds a newer release, a later command prints an update notice to stderr. Registry and cache errors do not affect the command.
 

@@ -1,10 +1,19 @@
 ---
 title: 'Authentication and instances'
 description: 'Log in to local and remote Fluxmail instances, enroll members, manage sessions, and create API keys.'
-updated: '2026-10-03'
+updated: '2026-10-06'
 ---
 
 Fluxmail uses member sessions for people and API keys for MCP clients, scripts, and other automation. A member session follows the member's current role and mailbox access. An API key is narrower: Fluxmail also checks its capabilities and optional mailbox allowlist on every request.
+
+An *instance profile* tells your CLI which installation to use. A *member session* signs you in to that installation. A connected email *account* is a mailbox; its Google, Microsoft, or IMAP credentials are separate from your Fluxmail login.
+
+| Task | Use |
+| --- | --- |
+| Create the first administrator | `fluxmail setup` once on a new instance |
+| Sign in again | `fluxmail --instance <name> login` |
+| Connect a local MCP client | Saved local member session plus stdio permissions |
+| Connect an HTTP MCP client or app | A named, scoped API key |
 
 ## Set up a local instance
 

@@ -1,10 +1,17 @@
 ---
 title: 'Configuration'
 description: 'Deployment configuration, encrypted instance settings, outbound proxies, local logging, secret files, and telemetry controls.'
-updated: '2026-09-25'
+updated: '2026-10-06'
 ---
 
-Fluxmail has two configuration domains. Deployment configuration controls how the process starts. Instance settings control OAuth applications and the license used by a running instance.
+Deployment settings control startup, storage paths, and the server address. Instance settings hold OAuth applications and the license. Start with the setting you need to change:
+
+| Task | Where to change it | Restart? |
+| --- | --- | --- |
+| Change the port, public URL, or storage path | `config.toml` or process environment | Yes |
+| Configure a Google or Microsoft OAuth app | `fluxmail oauth configure` | No, unless using environment overrides |
+| Activate a license | `fluxmail license activate` | No, unless using environment overrides |
+| Inspect effective settings and their sources | `fluxmail config show` and `fluxmail oauth status` | No |
 
 ## Deployment configuration
 
@@ -58,7 +65,7 @@ The encryption key is resolved from one source:
 2. `FLUXMAIL_ENCRYPTION_KEY_FILE`
 3. `<data dir>/encryption.key`
 
-Fluxmail generates `<data dir>/encryption.key` with owner-only permissions when no external key is configured. Back up this file with the database. A database backup is not usable without the matching key.
+Fluxmail generates `<data dir>/encryption.key` with owner-only permissions when no external key is configured. Back up this file with the database. A database backup is not usable without the matching key. Follow [Back up and restore](/docs/backup-and-restore) to preserve the complete installation.
 
 For managed deployments, use `*_FILE` variables instead of putting secrets directly in the process environment. Fluxmail supports files for `FLUXMAIL_ENCRYPTION_KEY`, `GOOGLE_CLIENT_SECRET`, `MICROSOFT_CLIENT_SECRET`, and `FLUXMAIL_LICENSE_KEY`. Paths must be absolute. Fluxmail reads UTF-8, removes one final newline, rejects empty files, and leaves externally managed file permissions unchanged.
 
@@ -126,32 +133,12 @@ HTTP MCP requests require an API key. REST requests accept an active member sess
 
 ## Telemetry
 
-Fluxmail sends anonymous operation events to its PostHog project by default. Events record the CLI command, MCP tool, or REST operation, plus the outcome, duration, selected feature modes, a random installation ID, and basic runtime information.
+Fluxmail sends anonymous operation events and grouped error reports by default. They exclude email content, credentials, command arguments, and original error text. See [Telemetry](/docs/telemetry) for the event fields and exclusions.
 
-Each event is labeled `deployment_type=self_hosted` so package usage can be counted separately from Fluxmail Cloud and website traffic.
-
-Internal, provider, timeout, and uncertain-send failures also send a grouped error report with the operation name and a safe error code. MCP and REST reports include partial account or item failures. Reports exclude the original error message, stack trace, and provider response. Turning telemetry off also disables these reports.
-
-For MCP attachment downloads, telemetry records whether the tool returned a resource link or inline content. It records the same choice if the download fails, without sending the attachment name or content.
-
-For `fluxmail stdio`, telemetry records which startup phase failed, or `ready` when the server starts. The phases cover permission options, local instance selection, configuration and database initialization, session authentication, mailbox selection, and MCP transport startup. No option values or error messages are sent.
-
-Recognized startup failures also record a fixed reason, such as an unconfigured instance, ambiguous local profiles, an unreadable or invalid profile or credentials file, or a missing or invalid session. File-read failures include an allowlisted filesystem error code. Stdio events record whether the data directory came from the environment or the default and whether instance selection was explicit or automatic. They do not include the directory, instance name, session token, file contents, or error text.
-
-Delivery status, send preview, draft retrieval, body continuation, and bulk actions use the same event format. Fluxmail does not send delivery IDs, message IDs, recipients, or message content in these events.
-
-When the MCP server starts, telemetry records the plan and how many mailboxes and members the installation has. The plan is sent as Personal, Pro, Team, Business, or Enterprise, and any other plan name is sent as `other`. It does not send the license key or any address.
-
-After Fluxmail connects or removes a mailbox, telemetry records its provider and the installation's mailbox totals. OAuth connection events also record whether the callback used your public URL or the local port, and whether Google used Fluxmail's built-in application or one you registered. Local connections record whether the redirect reached Fluxmail directly, you pasted the callback URL, or the command timed out. The pasted URL is never sent. Connection events report whether they replaced credentials for an existing mailbox.
-
-Fluxmail never sends command arguments, email or mailbox data, identifiers, search text, file paths, credentials, configuration values, request payloads, provider responses, stack traces, or error text. PostHog person profiles and GeoIP lookup are disabled.
-
-For batch search, telemetry records the surface operation and marks the outcome as an error when any account group fails. It does not include account IDs, queries, page tokens, or group errors.
-
-Turn telemetry off for the installation:
+To turn it off for this installation:
 
 ```bash
 fluxmail telemetry disable
 ```
 
-You can also set `FLUXMAIL_TELEMETRY=0` or `DO_NOT_TRACK=1`. Any disabling source takes priority over an enabling source. Use `fluxmail telemetry status` to check the effective state.
+You can also set `FLUXMAIL_TELEMETRY=0` or `DO_NOT_TRACK=1`. Any disabling source takes priority. Run `fluxmail telemetry status` to check the effective state.
