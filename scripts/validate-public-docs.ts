@@ -13,6 +13,10 @@ import {
 } from './public-docs.js';
 
 const meta = readPublicDocsMeta();
+const agentSetup = readFileSync(path.join(PUBLIC_DOCS_ROOT, 'setup.txt'), 'utf8');
+if (!agentSetup.trim()) throw new Error('docs/public/setup.txt must contain agent setup instructions.');
+if (/[—–]/u.test(agentSetup))
+  throw new Error('setup.txt contains an em dash or en dash. Rewrite it in plain language.');
 const pages = publicDocPages(meta);
 const manifest = readPublicDocsManifest();
 const expectedManifest = compatibilityManifest(
