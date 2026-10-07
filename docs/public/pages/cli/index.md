@@ -113,6 +113,7 @@ docker compose exec fluxmail fluxmail accounts list
 | [`fluxmail scheduled`](/docs/cli/scheduled) | Manage scheduled sends |
 | [`fluxmail scheduled list`](/docs/cli/scheduled-list) | List scheduled sends |
 | [`fluxmail scheduled cancel`](/docs/cli/scheduled-cancel) | Cancel a scheduled send and keep its draft |
+| [`fluxmail scheduled run`](/docs/cli/scheduled-run) | Run scheduled delivery for this local instance without HTTP or MCP |
 | [`fluxmail attachments`](/docs/cli/attachments) | Download message attachments |
 | [`fluxmail attachments download`](/docs/cli/attachments-download) | Download an attachment |
 | [`fluxmail status`](/docs/cli/status) | Show mailbox and provider status for the selected instance |

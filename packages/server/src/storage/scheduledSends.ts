@@ -14,6 +14,8 @@ export interface ScheduledSendRow {
   createdAt: number;
   status: ScheduledSendStatus;
   attempts: number;
+  /** Internal retry deadline, in epoch milliseconds. */
+  nextAttemptAt: number;
   lastError: string | null;
   sentMessageId: string | null;
   sentThreadId: string | null;
@@ -61,6 +63,7 @@ export function createScheduledSend(
       createdAt,
       status: 'pending',
       attempts: 0,
+      nextAttemptAt: 0,
       lastError: null,
       sentMessageId: null,
       sentThreadId: null,
@@ -139,6 +142,8 @@ export function claimScheduledSend(
     .where(
       and(
         eq(scheduledSends.id, id),
+        lte(scheduledSends.sendAt, now),
+        lte(scheduledSends.nextAttemptAt, now),
         or(
           eq(scheduledSends.status, 'pending'),
           and(eq(scheduledSends.status, 'sending'), lte(scheduledSends.claimUntil, now)),
@@ -165,37 +170,62 @@ export function completeClaim(
       claimToken: null,
       claimUntil: null,
     })
-    .where(and(eq(scheduledSends.id, id), eq(scheduledSends.claimToken, token)))
+    .where(and(eq(scheduledSends.id, id), eq(scheduledSends.claimToken, token), eq(scheduledSends.status, 'sending')))
     .run();
 }
 
 export function failClaim(db: FluxmailDb, id: string, token: string, error: string): void {
   db.update(scheduledSends)
     .set({ status: 'failed', lastError: error, claimToken: null, claimUntil: null })
-    .where(and(eq(scheduledSends.id, id), eq(scheduledSends.claimToken, token)))
+    .where(and(eq(scheduledSends.id, id), eq(scheduledSends.claimToken, token), eq(scheduledSends.status, 'sending')))
     .run();
 }
 
 export function uncertainClaim(db: FluxmailDb, id: string, token: string, error: string): void {
   db.update(scheduledSends)
     .set({ status: 'uncertain', lastError: error, claimToken: null, claimUntil: null })
-    .where(and(eq(scheduledSends.id, id), eq(scheduledSends.claimToken, token)))
+    .where(and(eq(scheduledSends.id, id), eq(scheduledSends.claimToken, token), eq(scheduledSends.status, 'sending')))
     .run();
 }
 
-export function retryClaim(db: FluxmailDb, id: string, token: string, error: string): void {
-  const row = getScheduledSend(db, id);
-  if (!row || row.claimToken !== token) return;
-  db.update(scheduledSends)
-    .set({
-      status: 'pending',
-      attempts: row.attempts + 1,
-      lastError: error,
-      claimToken: null,
-      claimUntil: null,
-    })
-    .where(and(eq(scheduledSends.id, id), eq(scheduledSends.claimToken, token)))
-    .run();
+/** Renew only a live claim owned by this worker. Also used immediately before dispatch. */
+export function renewClaim(db: FluxmailDb, id: string, token: string, now: number, leaseMs: number): boolean {
+  return (
+    db
+      .update(scheduledSends)
+      .set({ claimUntil: now + leaseMs })
+      .where(and(eq(scheduledSends.id, id), eq(scheduledSends.claimToken, token), eq(scheduledSends.status, 'sending')))
+      .run().changes === 1
+  );
+}
+
+/** Persist the attempt and its deadline in the same transaction that releases ownership. */
+export function retryClaim(
+  db: FluxmailDb,
+  id: string,
+  token: string,
+  error: string,
+  now = Date.now(),
+): number | undefined {
+  return db.transaction((tx) => {
+    const row = getScheduledSend(tx, id);
+    if (!row || row.claimToken !== token || row.status !== 'sending') return undefined;
+    const attempt = row.attempts + 1;
+    const nextAttemptAt = now + Math.min(30_000 * 2 ** Math.min(attempt - 1, 5), 15 * 60_000);
+    const result = tx
+      .update(scheduledSends)
+      .set({
+        status: 'pending',
+        attempts: attempt,
+        nextAttemptAt,
+        lastError: error,
+        claimToken: null,
+        claimUntil: null,
+      })
+      .where(and(eq(scheduledSends.id, id), eq(scheduledSends.claimToken, token), eq(scheduledSends.status, 'sending')))
+      .run();
+    return result.changes === 1 ? attempt : undefined;
+  });
 }
 
 export function listClaimable(db: FluxmailDb, now: number): ScheduledSendRow[] {
@@ -203,9 +233,13 @@ export function listClaimable(db: FluxmailDb, now: number): ScheduledSendRow[] {
     .select()
     .from(scheduledSends)
     .where(
-      or(
-        eq(scheduledSends.status, 'pending'),
-        and(eq(scheduledSends.status, 'sending'), lte(scheduledSends.claimUntil, now)),
+      and(
+        lte(scheduledSends.sendAt, now),
+        lte(scheduledSends.nextAttemptAt, now),
+        or(
+          eq(scheduledSends.status, 'pending'),
+          and(eq(scheduledSends.status, 'sending'), lte(scheduledSends.claimUntil, now)),
+        ),
       ),
     )
     .all()

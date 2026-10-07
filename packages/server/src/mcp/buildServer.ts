@@ -928,8 +928,8 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
             .describe(
               'Schedule delivery instead of sending now: ISO 8601 with timezone offset or Z ' +
                 '(e.g. 2026-07-11T09:00:00-07:00). Fluxmail saves the message as a real draft in the mailbox ' +
-                'and sends it at this time; the server must be running then (anything missed while it was ' +
-                'down goes out at the next startup). Returns a scheduleId for list/cancel.',
+                'for delivery by fluxmail serve or fluxmail scheduled run using the same store. Stdio does not ' +
+                'deliver schedules. Overdue mail may send when a worker starts. Returns a scheduleId for list/cancel.',
             ),
         },
         annotations: { destructiveHint: true },

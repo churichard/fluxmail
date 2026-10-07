@@ -20,6 +20,7 @@ services:
       options:
         max-size: 5m
         max-file: '3'
+    stop_grace_period: 45s
     restart: unless-stopped
 
 volumes:

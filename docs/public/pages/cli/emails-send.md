@@ -34,5 +34,5 @@ fluxmail emails send [options]
 | `--reply-all` | No | Include the original recipients in the reply | None |
 | `--input <file>` | No | Read an exact REST JSON body from a file, or pass - for stdin | None |
 | `--draft <draft-id>` | No | Send an existing draft | None |
-| `--send-at <timestamp>` | No | Schedule delivery at an ISO timestamp | None |
+| `--send-at <timestamp>` | No | Schedule at an ISO timestamp; delivery requires serve or scheduled run using the same store | None |
 | `--idempotency-key <key>` | No | Reuse a delivery request safely | None |

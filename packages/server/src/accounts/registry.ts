@@ -50,7 +50,9 @@ export class AccountRegistry {
       ({ provider }) => provider as EmailProvider & { close?: () => Promise<void> },
     );
     this.providers.clear();
-    await Promise.all(providers.map((provider) => provider.close?.()));
+    const results = await Promise.allSettled(providers.map((provider) => provider.close?.()));
+    const failure = results.find((result) => result.status === 'rejected');
+    if (failure?.status === 'rejected') throw failure.reason;
   }
 
   private evictProvider(accountId: string): void {

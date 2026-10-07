@@ -780,7 +780,12 @@ export class EmailService {
     );
   }
 
-  deliverScheduled(accountId: string, draftId: string, scheduleId: string): Promise<DeliveryOperation> {
+  deliverScheduled(
+    accountId: string,
+    draftId: string,
+    scheduleId: string,
+    ownsClaim: () => boolean = () => true,
+  ): Promise<DeliveryOperation> {
     return new DeliveryCoordinator(this.db).fireScheduled(
       accountId,
       draftId,
@@ -794,6 +799,7 @@ export class EmailService {
         }),
       () =>
         this.withProvider(accountId, async (provider, resolvedId) => {
+          if (!ownsClaim()) throw new Error('Scheduled delivery claim is no longer owned.');
           const result = await provider.send({ draftId });
           const pending = findPendingByDraft(this.db, resolvedId, draftId);
           if (pending) {
@@ -802,6 +808,7 @@ export class EmailService {
           }
           return result;
         }),
+      ownsClaim,
     );
   }
 

@@ -202,6 +202,7 @@
     "cli/scheduled",
     "cli/scheduled-list",
     "cli/scheduled-cancel",
+    "cli/scheduled-run",
     "cli/attachments",
     "cli/attachments-download",
     "cli/status",

@@ -405,12 +405,15 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
     });
-    c.env.outgoing.on('close', () => {
-      void transport.close();
-      void server.close();
-    });
-    await server.connect(transport);
-    await transport.handleRequest(c.env.incoming, c.env.outgoing, body);
+    try {
+      await server.connect(transport);
+      // Keep the JSON response promise alive until the operation finishes, even
+      // if the client disconnects. Closing the transport early abandons that
+      // promise and prevents the runtime from draining this request.
+      await transport.handleRequest(c.env.incoming, c.env.outgoing, body);
+    } finally {
+      await server.close();
+    }
     return RESPONSE_ALREADY_SENT;
   });
 

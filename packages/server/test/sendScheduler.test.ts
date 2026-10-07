@@ -2,9 +2,12 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { eq } from 'drizzle-orm';
+import * as scheduledStorage from '../src/storage/scheduledSends.js';
 import { EmailError } from '@fluxmail/core';
-import { accounts, openDb, type FluxmailDb } from '../src/storage/db.js';
+import { accounts, openDb, scheduledSends, type FluxmailDb } from '../src/storage/db.js';
 import {
+  claimScheduledSend,
   cancelScheduledSend,
   createScheduledSend,
   getScheduledSend,
@@ -51,8 +54,9 @@ describe('SendScheduler', () => {
     scheduler = new SendScheduler(db, { send, enforceQuota }, logger);
   });
 
-  afterEach(() => {
-    scheduler.stop();
+  afterEach(async () => {
+    await scheduler.stop();
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -280,10 +284,10 @@ describe('SendScheduler', () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
-  it('arms no timer when nothing is pending', async () => {
+  it('keeps polling when nothing is pending', async () => {
     scheduler.start();
     await settle();
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(1);
     expect(listPending(db)).toHaveLength(0);
   });
 
@@ -320,9 +324,234 @@ describe('SendScheduler', () => {
     expect(send).not.toHaveBeenCalled();
 
     enforceQuota.mockReturnValue(undefined);
-    scheduler.wake();
+    scheduler.licenseRefreshed();
     await settle();
 
     expect(send).toHaveBeenCalledTimes(1);
   });
+  it('discovers new and earlier work through an independent connection, even from an empty queue', async () => {
+    await scheduler.stop();
+    const dbPath = path.join(mkdtempSync(path.join(tmpdir(), 'fluxmail-discovery-')), 'fluxmail.db');
+    const first = openDb(dbPath);
+    first
+      .insert(accounts)
+      .values({ id: 'acct_1', provider: 'gmail', email: 'me@example.com', status: 'active', createdAt: Date.now() })
+      .run();
+    const other = openDb(dbPath);
+    scheduler = new SendScheduler(first, { send, enforceQuota });
+    try {
+      scheduler.start();
+      scheduler.start();
+      await settle();
+      createScheduledSend(other, { accountId: 'acct_1', draftId: 'far', sendAt: Date.now() + 60_000 });
+      const canceled = createScheduledSend(other, { accountId: 'acct_1', draftId: 'canceled', sendAt: Date.now() });
+      cancelScheduledSend(other, canceled.id);
+      const earlier = createScheduledSend(other, { accountId: 'acct_1', draftId: 'earlier', sendAt: Date.now() + 300 });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(send.mock.calls.map((call) => call[1].draftId)).toEqual(['earlier']);
+      expect(getScheduledSend(other, earlier.id)?.status).toBe('sent');
+    } finally {
+      await scheduler.stop();
+      (first as unknown as { $client: { close(): void } }).$client.close();
+      (other as unknown as { $client: { close(): void } }).$client.close();
+    }
+  });
+
+  it.each(['sendAt', 'nextAttemptAt'] as const)('rechecks stale batch %s eligibility when claiming', async (field) => {
+    let release!: (result: { id: string; threadId: string }) => void;
+    send.mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
+    createScheduledSend(db, { accountId: 'acct_1', draftId: 'first', sendAt: Date.now() - 2 });
+    const second = createScheduledSend(db, { accountId: 'acct_1', draftId: 'second', sendAt: Date.now() - 1 });
+    scheduler.start();
+    await settle();
+    db.update(scheduledSends)
+      .set({ [field]: Date.now() + 60_000 })
+      .where(eq(scheduledSends.id, second.id))
+      .run();
+    release({ id: 'sent', threadId: 'thread' });
+    await settle();
+    expect(send).toHaveBeenCalledOnce();
+    expect(getScheduledSend(db, second.id)?.status).toBe('pending');
+  });
+
+  it('preserves retry deadlines and attempt counts across competing workers and a database restart', async () => {
+    await scheduler.stop();
+    const dbPath = path.join(mkdtempSync(path.join(tmpdir(), 'fluxmail-retry-')), 'fluxmail.db');
+    const first = openDb(dbPath);
+    first
+      .insert(accounts)
+      .values({ id: 'acct_1', provider: 'gmail', email: 'me@example.com', status: 'active', createdAt: Date.now() })
+      .run();
+    const row = createScheduledSend(first, { accountId: 'acct_1', draftId: 'retry', sendAt: Date.now() - 1 });
+    send.mockRejectedValue(new EmailError('rate_limited', 'private provider failure'));
+    scheduler = new SendScheduler(first, { send, enforceQuota });
+    scheduler.start();
+    await settle();
+    const deadline = Date.now() + 30_000;
+    expect(getScheduledSend(first, row.id)).toMatchObject({ attempts: 1, nextAttemptAt: deadline });
+    await scheduler.stop();
+    (first as unknown as { $client: { close(): void } }).$client.close();
+    const reopened = openDb(dbPath);
+    const other = openDb(dbPath);
+    scheduler = new SendScheduler(reopened, { send, enforceQuota });
+    const competitor = new SendScheduler(other, { send, enforceQuota });
+    try {
+      scheduler.start();
+      competitor.start();
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(send).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(send).toHaveBeenCalledTimes(2);
+      expect(getScheduledSend(reopened, row.id)).toMatchObject({ attempts: 2, nextAttemptAt: deadline + 60_000 });
+    } finally {
+      await scheduler.stop();
+      await competitor.stop();
+      (reopened as unknown as { $client: { close(): void } }).$client.close();
+      (other as unknown as { $client: { close(): void } }).$client.close();
+    }
+  });
+
+  it('renews a long delivery during shutdown while another worker polls, then clears all timers', async () => {
+    let release!: (result: { id: string; threadId: string }) => void;
+    send.mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
+    const row = createScheduledSend(db, { accountId: 'acct_1', draftId: 'long', sendAt: Date.now() - 1 });
+    scheduler.start();
+    await settle();
+    const stopping = scheduler.stop();
+    const competitor = new SendScheduler(db, { send, enforceQuota });
+    competitor.start();
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    expect(send).toHaveBeenCalledOnce();
+    expect(getScheduledSend(db, row.id)!.claimUntil).toBeGreaterThan(Date.now());
+    release({ id: 'sent', threadId: 'thread' });
+    await stopping;
+    await competitor.stop();
+    expect(getScheduledSend(db, row.id)?.status).toBe('sent');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('drains the first delivery and leaves later batch entries unclaimed on shutdown', async () => {
+    let release!: (result: { id: string; threadId: string }) => void;
+    send.mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
+    const first = createScheduledSend(db, { accountId: 'acct_1', draftId: 'first', sendAt: Date.now() - 2 });
+    const second = createScheduledSend(db, { accountId: 'acct_1', draftId: 'second', sendAt: Date.now() - 1 });
+    scheduler.start();
+    await settle();
+    const stopping = scheduler.stop();
+    scheduler.wake();
+    release({ id: 'sent', threadId: 'thread' });
+    await stopping;
+    expect(send).toHaveBeenCalledOnce();
+    expect(getScheduledSend(db, first.id)?.status).toBe('sent');
+    expect(getScheduledSend(db, second.id)).toMatchObject({ status: 'pending', claimToken: null });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('polling and ordinary wakeups do not bypass a quota hold or repeat writes and logs', async () => {
+    enforceQuota.mockImplementation(() => {
+      throw new EmailError('entitlement_exceeded', 'over quota');
+    });
+    const hold = vi.spyOn(scheduledStorage, 'holdPending');
+    createScheduledSend(db, { accountId: 'acct_1', draftId: 'held', sendAt: Date.now() - 1 });
+    scheduler.start();
+    await settle();
+    scheduler.wake();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(hold).toHaveBeenCalledOnce();
+    expect(enforceQuota).toHaveBeenCalledOnce();
+    expect(logWarn).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(14 * 60_000);
+    expect(hold).toHaveBeenCalledTimes(2);
+    expect(enforceQuota).toHaveBeenCalledTimes(2);
+    expect(getScheduledSend(db, listPending(db)[0]!.id)?.attempts).toBe(0);
+  });
+
+  it.each(['lost', 'error'] as const)('does not dispatch after %s claim renewal during preflight', async (mode) => {
+    const coordinator = new DeliveryCoordinator(db);
+    let release!: () => void;
+    const preflight = () => new Promise<void>((resolve) => (release = resolve));
+    scheduler = new SendScheduler(db, {
+      send,
+      enforceQuota,
+      deliverScheduled: (accountId, draftId, scheduleId, ownsClaim) =>
+        coordinator.fireScheduled(accountId, draftId, scheduleId, preflight, send, ownsClaim),
+    });
+    const row = createScheduledSend(db, { accountId: 'acct_1', draftId: 'preflight', sendAt: Date.now() - 1 });
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(0);
+    if (mode === 'lost')
+      db.update(scheduledSends).set({ claimToken: 'other-worker' }).where(eq(scheduledSends.id, row.id)).run();
+    else
+      vi.spyOn(scheduledStorage, 'renewClaim').mockImplementation(() => {
+        throw new Error('database busy');
+      });
+    await vi.advanceTimersByTimeAsync(60_000);
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(send).not.toHaveBeenCalled();
+    expect(coordinator.findScheduled('acct_1', row.id)?.status).toBe('queued');
+    expect(getScheduledSend(db, row.id)?.status).toBe('sending');
+    await scheduler.stop();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not replace an unresolved provider request after losing its schedule lease', async () => {
+    const coordinator = new DeliveryCoordinator(db);
+    let release!: (result: { id: string; threadId: string }) => void;
+    const dispatch = vi.fn(() => new Promise<{ id: string; threadId: string }>((resolve) => (release = resolve)));
+    const service = {
+      send,
+      enforceQuota,
+      deliverScheduled: (accountId: string, draftId: string, scheduleId: string, ownsClaim: () => boolean) =>
+        coordinator.fireScheduled(accountId, draftId, scheduleId, async () => {}, dispatch, ownsClaim),
+    };
+    scheduler = new SendScheduler(db, service);
+    const row = createScheduledSend(db, { accountId: 'acct_1', draftId: 'uncertain', sendAt: Date.now() - 1 });
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(0);
+    db.update(scheduledSends)
+      .set({ claimToken: 'expired-worker', claimUntil: Date.now() - 1 })
+      .where(eq(scheduledSends.id, row.id))
+      .run();
+    const competitor = new SendScheduler(db, service);
+    competitor.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getScheduledSend(db, row.id)?.status).toBe('uncertain');
+    expect(dispatch).toHaveBeenCalledOnce();
+    release({ id: 'sent', threadId: 'thread' });
+    await scheduler.stop();
+    await competitor.stop();
+    expect(getScheduledSend(db, row.id)?.status).toBe('uncertain');
+    expect(coordinator.findScheduled('acct_1', row.id)?.status).toBe('succeeded');
+  });
+
+  it.each(['queued', 'sending', 'succeeded'] as const)(
+    'recovers an expired schedule with a %s delivery record',
+    async (status) => {
+      const coordinator = new DeliveryCoordinator(db);
+      const row = createScheduledSend(db, { accountId: 'acct_1', draftId: 'recovery', sendAt: Date.now() - 1 });
+      claimScheduledSend(db, row.id, Date.now() - 6 * 60_000, 5 * 60_000);
+      coordinator.queueScheduled('acct_1', row.id, row.draftId);
+      if (status !== 'queued') {
+        const { deliveryOperations } = await import('../src/storage/db.js');
+        db.update(deliveryOperations)
+          .set({
+            status,
+            ...(status === 'succeeded' ? { resultJson: JSON.stringify({ id: 'recorded', threadId: 'thread' }) } : {}),
+          })
+          .run();
+      }
+      scheduler = new SendScheduler(db, {
+        send,
+        enforceQuota,
+        deliverScheduled: (accountId, draftId, scheduleId, ownsClaim) =>
+          coordinator.fireScheduled(accountId, draftId, scheduleId, async () => {}, send, ownsClaim),
+      });
+      scheduler.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(send).toHaveBeenCalledTimes(status === 'queued' ? 1 : 0);
+      expect(getScheduledSend(db, row.id)?.status).toBe(status === 'sending' ? 'uncertain' : 'sent');
+      if (status === 'succeeded') expect(getScheduledSend(db, row.id)?.sentMessageId).toBe('recorded');
+    },
+  );
 });

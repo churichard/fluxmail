@@ -35,6 +35,10 @@ docker compose up -d fluxmail
 
 Keep the existing data volume mounted. For local stdio, restart each MCP client so it launches the updated executable. For a local HTTP installation, restart the server.
 
+Scheduled delivery now belongs to `serve` or `scheduled run`. Stdio-only installations must start a persistent worker using the same data directory as their MCP clients. See [Keep scheduled delivery running](/docs/sending-and-retries#keep-scheduled-delivery-running). Remote HTTP and standard Docker installations already run the worker through `serve`.
+
+This change migrates the SQLite store to format 6 to persist retry deadlines. Stop every process sharing the store before the first upgraded process opens it. Existing schedules and delivery records are retained. Existing retry delays cannot be reconstructed, so due schedules may be eligible immediately; subsequent retry delays survive restarts. Queued mail remains stored, and overdue mail may send when a worker starts. Rollback requires the matching pre-upgrade backup.
+
 ## 4. Verify the upgrade
 
 ```bash

@@ -563,7 +563,10 @@ export function registerMailCommands(program: Command, options: MailCommandOptio
 
   const send = addMessageContentOptions(emails.command('send').description('Send or schedule a message'))
     .option('--draft <draft-id>', 'Send an existing draft')
-    .option('--send-at <timestamp>', 'Schedule delivery at an ISO timestamp')
+    .option(
+      '--send-at <timestamp>',
+      'Schedule at an ISO timestamp; delivery requires serve or scheduled run using the same store',
+    )
     .option('--idempotency-key <key>', 'Reuse a delivery request safely');
   send.action(async (sendOptions: SendOptions) =>
     run(async () => {

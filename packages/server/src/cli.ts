@@ -10,6 +10,7 @@ import { serve } from '@hono/node-server';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { EmailError, isEmailError } from '@fluxmail/core';
 import { createContext } from './context.js';
+import { RuntimeLifecycle } from './lifecycle.js';
 import {
   configTomlPath,
   createConfigurationService,
@@ -626,7 +627,7 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
       command === 'accounts list' ||
       command === 'status';
     const interactive =
-      ['setup', 'login', 'serve', 'stdio'].includes(command) ||
+      ['setup', 'login', 'serve', 'stdio', 'scheduled run'].includes(command) ||
       group === 'auth' ||
       command === 'accounts add' ||
       command === 'accounts configure' ||
@@ -668,7 +669,11 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
       process.exitCode !== 0;
     finishCliOperation(program, failed ? 'error' : 'success', failed ? 'command_failed' : undefined);
     try {
-      if (actionCommand.name() !== 'serve' && actionCommand.name() !== 'stdio') {
+      if (
+        actionCommand.name() !== 'serve' &&
+        actionCommand.name() !== 'stdio' &&
+        commandPath(actionCommand) !== 'scheduled run'
+      ) {
         await Promise.all([options.telemetry ? Promise.resolve() : shutdownTelemetry(), shutdownLogging()]);
       }
     } finally {
@@ -920,11 +925,22 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
     .command('serve')
     .description('Run the HTTP server (MCP at /mcp and REST at /api/v1)')
     .action(async () => {
-      installTelemetrySignalHandlers();
-      const ctx = createContext();
-      const app = createApp(ctx);
-      ctx.scheduler.start();
-      const server = serve({ fetch: app.fetch, port: ctx.config.port }, () => {
+      let lifecycle: RuntimeLifecycle | undefined;
+      try {
+        const ctx = createContext();
+        lifecycle = new RuntimeLifecycle(ctx, shutdownTelemetryAndLogging);
+        const app = createApp(ctx);
+        const runtime = lifecycle;
+        const server = serve({
+          fetch: (request, env) =>
+            runtime.stopping
+              ? new Response('Server is shutting down.', { status: 503 })
+              : runtime.request(() => app.fetch(request, env)),
+          port: ctx.config.port,
+        });
+        lifecycle.attachServer(server);
+        await waitForServerListening(server);
+        if (lifecycle.stopping) return;
         ctx.logger.info('server.started', 'Fluxmail HTTP server started', {
           details: { port: ctx.config.port },
           skipConsole: true,
@@ -954,8 +970,12 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         console.log(`  Plan:           ${planLine(getEntitlements(ctx.db))}`);
         warnLicense(ctx.db, console.log);
         ctx.licenseController.start();
-      });
-      await waitForServerListening(server);
+        ctx.scheduler.start();
+      } catch (error) {
+        finishCliOperation(program, 'error', apiErrorCode(error), error);
+        await lifecycle?.close();
+        throw error;
+      }
     });
 
   program
@@ -1010,7 +1030,6 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         installTelemetrySignalHandlers();
         installStdioShutdownHandler(process.stdin);
         await server.connect(new StdioServerTransport());
-        ctx.scheduler.start();
         ctx.telemetry.capture('mcp server started', {
           ...instanceUsageProperties(ctx.db),
           product_surface: 'mcp',
@@ -1025,8 +1044,13 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         ctx.licenseController.start();
         console.error('Fluxmail MCP server running on stdio');
         warnLicense(ctx.db);
-        const pending = scopedService.listScheduled().filter((send) => send.status === 'pending').length;
-        if (pending > 0) console.error(`Scheduled sends pending: ${pending}`);
+        const pending = permissions.capabilities.includes('mail.read')
+          ? scopedService.listScheduled().filter((send) => send.status === 'pending').length
+          : 0;
+        if (pending > 0)
+          console.error(
+            `Scheduled sends pending: ${pending}. Delivery requires "fluxmail serve" or "fluxmail scheduled run" using the same data directory.`,
+          );
         startupPhase('ready');
       } catch (error) {
         finishCliOperation(program, 'error', apiErrorCode(error), error);
@@ -2301,6 +2325,39 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
       process.exitCode = cliExitCode(code);
     },
   });
+
+  program.commands
+    .find((command) => command.name() === 'scheduled')!
+    .command('run')
+    .description('Run scheduled delivery for this local instance without HTTP or MCP')
+    .action(async () => {
+      let lifecycle: RuntimeLifecycle | undefined;
+      try {
+        if (selectedAccount() !== undefined) {
+          throw new EmailError('invalid_request', 'scheduled run processes the whole instance; omit --mail-account.');
+        }
+        const name = selectedInstance();
+        if (name !== undefined) {
+          const profile = loadInstanceConfig().instances[name];
+          if (!profile) throw new EmailError('not_found', `No CLI instance named "${name}".`);
+          if (profile.kind !== 'local') {
+            throw new EmailError(
+              'invalid_request',
+              'scheduled run requires a local instance. Run it on the host that stores the schedules.',
+            );
+          }
+        }
+        const ctx = createContext();
+        lifecycle = new RuntimeLifecycle(ctx, shutdownTelemetryAndLogging);
+        ctx.licenseController.start();
+        ctx.scheduler.start();
+        console.log('Fluxmail scheduled delivery running. Press Ctrl-C to stop.');
+      } catch (error) {
+        finishCliOperation(program, 'error', apiErrorCode(error), error);
+        await lifecycle?.close();
+        throw error;
+      }
+    });
 
   program
     .command('status')
