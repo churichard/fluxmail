@@ -233,16 +233,19 @@ export class LicenseController {
     void this.refreshNow();
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.stopped = true;
     this.refreshPending = false;
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
+    await this.running;
   }
 }
 
 export function startLicenseRefresher(deps: LicenseControllerOptions): () => void {
   const controller = new LicenseController(deps);
   controller.start();
-  return () => controller.stop();
+  return () => {
+    void controller.stop();
+  };
 }

@@ -124,6 +124,8 @@ Verify through the client as well as inside the container. A container-only chec
 
 ## Keep the server running
 
-The Compose service restarts unless you explicitly stop it. Scheduled sends need a running server; sends missed during downtime can run when Fluxmail starts again.
+The Compose service restarts unless you explicitly stop it. Its existing `serve` process delivers scheduled mail after clients disconnect; no additional worker is needed. Queued mail remains in the data volume, overdue mail may send on startup, and retry delays survive restarts.
+
+The shipped Compose file sets `stop_grace_period: 45s`. Keep that allowance when customizing it. Other supervisors should also allow at least 45 seconds: Fluxmail stops accepting requests and new deliveries, then waits up to 30 seconds for active work before closing providers and storage.
 
 Before updating the image, follow [Upgrade Fluxmail](/docs/upgrade-fluxmail). Set up [backups](/docs/backup-and-restore) and use [Local logs](/docs/logging) or [Troubleshooting](/docs/troubleshooting) when a connection fails.

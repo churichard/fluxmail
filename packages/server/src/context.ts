@@ -21,7 +21,7 @@ export interface AppContext {
   service: EmailService;
   telemetry: Telemetry;
   logger: Logger;
-  /** Inert until start(); only the long-lived serve/stdio commands start it. */
+  /** Inert until start(); only the long-lived serve/scheduled run commands start it. */
   scheduler: SendScheduler;
   licenseController: LicenseController;
 }
@@ -38,25 +38,24 @@ export function createContext(options: { logger?: Logger; processMode?: ProcessM
       destination: deployment.logDestination,
     });
   const db = openDb(deployment.dbPath, { dataDir: deployment.dataDir });
-  let configuration: ConfigurationService;
   try {
-    configuration = createConfigurationService(deployment, db);
+    const configuration: ConfigurationService = createConfigurationService(deployment, db);
+    const config = configuration.config;
+    const registry = new AccountRegistry(db, config);
+    const service = new EmailService(registry, db, undefined, config.encryptionKey, config.maxAttachmentBytes);
+    const scheduler = new SendScheduler(db, service, logger);
+    const telemetry = getTelemetry(config.dataDir, deployment.environment);
+    const licenseController = new LicenseController({
+      db,
+      config,
+      configuration,
+      logger,
+      onRefreshed: () => scheduler.licenseRefreshed(),
+    });
+    service.onScheduleChanged = () => scheduler.wake();
+    return { config, configuration, db, registry, service, scheduler, telemetry, logger, licenseController };
   } catch (error) {
     (db as unknown as { $client: { close(): void } }).$client.close();
     throw error;
   }
-  const config = configuration.config;
-  const registry = new AccountRegistry(db, config);
-  const service = new EmailService(registry, db, undefined, config.encryptionKey, config.maxAttachmentBytes);
-  const scheduler = new SendScheduler(db, service, logger);
-  const telemetry = getTelemetry(config.dataDir, deployment.environment);
-  const licenseController = new LicenseController({
-    db,
-    config,
-    configuration,
-    logger,
-    onRefreshed: () => scheduler.wake(),
-  });
-  service.onScheduleChanged = () => scheduler.wake();
-  return { config, configuration, db, registry, service, scheduler, telemetry, logger, licenseController };
 }

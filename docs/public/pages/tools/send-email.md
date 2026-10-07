@@ -31,7 +31,7 @@ Required capabilities: `mail.send`.
 | `replyToMessageId` | No | `string` or `null` | Message being replied to; threads correctly and computes recipients if "to" is omitted |
 | `replyAll` | No | `boolean` or `null` | With replyToMessageId: reply to all original recipients |
 | `attachments` | No | array of `object` or `null` | None |
-| `sendAt` | No | `string` or `null` | Schedule delivery instead of sending now: ISO 8601 with timezone offset or Z (e.g. 2026-07-11T09:00:00-07:00). Fluxmail saves the message as a real draft in the mailbox and sends it at this time; the server must be running then (anything missed while it was down goes out at the next startup). Returns a scheduleId for list/cancel. Format: `date-time`. |
+| `sendAt` | No | `string` or `null` | Schedule delivery instead of sending now: ISO 8601 with timezone offset or Z (e.g. 2026-07-11T09:00:00-07:00). Fluxmail saves the message as a real draft in the mailbox for delivery by fluxmail serve or fluxmail scheduled run using the same store. Stdio does not deliver schedules. Overdue mail may send when a worker starts. Returns a scheduleId for list/cancel. Format: `date-time`. |
 
 <details>
 <summary>JSON input schema</summary>
@@ -201,7 +201,7 @@ Required capabilities: `mail.send`.
           "type": "null"
         }
       ],
-      "description": "Schedule delivery instead of sending now: ISO 8601 with timezone offset or Z (e.g. 2026-07-11T09:00:00-07:00). Fluxmail saves the message as a real draft in the mailbox and sends it at this time; the server must be running then (anything missed while it was down goes out at the next startup). Returns a scheduleId for list/cancel."
+      "description": "Schedule delivery instead of sending now: ISO 8601 with timezone offset or Z (e.g. 2026-07-11T09:00:00-07:00). Fluxmail saves the message as a real draft in the mailbox for delivery by fluxmail serve or fluxmail scheduled run using the same store. Stdio does not deliver schedules. Overdue mail may send when a worker starts. Returns a scheduleId for list/cancel."
     }
   },
   "required": [

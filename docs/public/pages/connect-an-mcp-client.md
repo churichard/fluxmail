@@ -6,7 +6,7 @@ updated: '2026-10-06'
 
 Connect your client after installing Fluxmail and connecting a mailbox through the [local quickstart](/docs/quickstart) or [Docker guide](/docs/deploy-with-docker). For an agent to do the configuration, use [agent-first setup](/docs/quickstart#agent-first-setup).
 
-Before starting or restarting an existing instance, [review pending schedules](/docs/sending-and-retries#before-restarting-an-existing-instance). Both stdio and the HTTP server start the instance-wide scheduler, which can send overdue mail even when the new client has read-only access.
+Stdio can create and inspect schedules within the client's permissions, but it does not deliver them. For a stdio installation, keep `fluxmail serve` or `fluxmail scheduled run` running with the same data directory. Remote HTTP installations already deliver schedules through `serve`, including after a client disconnects. Before starting a delivery worker, [review pending schedules](/docs/sending-and-retries#before-restarting-an-existing-instance).
 
 ## Choose one transport
 

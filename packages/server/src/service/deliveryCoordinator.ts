@@ -196,6 +196,7 @@ export class DeliveryCoordinator {
     scheduleId: string,
     preflight: () => Promise<void>,
     deliver: () => Promise<SendResult>,
+    ownsClaim: () => boolean = () => true,
   ): Promise<DeliveryOperation> {
     let row = this.db.select().from(deliveryOperations).where(eq(deliveryOperations.scheduleId, scheduleId)).get();
     if (!row) {
@@ -225,6 +226,7 @@ export class DeliveryCoordinator {
       }
       throw error;
     }
+    if (!ownsClaim()) return fromRow(row);
     const claimed = this.db
       .update(deliveryOperations)
       .set({ status: 'sending', updatedAt: Date.now() })

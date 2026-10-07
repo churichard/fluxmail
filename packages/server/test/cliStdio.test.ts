@@ -3,7 +3,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { setupInitialAdmin } from '../src/auth.js';
+import { authenticateBearer, setupInitialAdmin } from '../src/auth.js';
+import { accounts } from '../src/storage/db.js';
+import { createScheduledSend } from '../src/storage/scheduledSends.js';
 import { createCliProgram } from '../src/cli.js';
 import {
   credentialPath,
@@ -201,9 +203,45 @@ describe('CLI stdio startup', () => {
     expect(JSON.stringify(capture.mock.calls)).not.toContain(token);
     expect(JSON.stringify(capture.mock.calls)).not.toContain('private');
     expect(McpServer.prototype.connect).toHaveBeenCalledOnce();
-    expect(SendScheduler.prototype.start).toHaveBeenCalledOnce();
+    expect(SendScheduler.prototype.start).not.toHaveBeenCalled();
     expect(LicenseController.prototype.start).toHaveBeenCalledOnce();
     expect(console.log).not.toHaveBeenCalled();
+  });
+
+  it('reports pending mail only in the connection mailbox scope and never starts delivery', async () => {
+    const token = await localSession();
+    const context = contexts.at(-1)!;
+    const memberId = authenticateBearer(context.db, token)!.memberId;
+    for (const id of ['visible', 'hidden']) {
+      context.db
+        .insert(accounts)
+        .values({
+          id,
+          provider: 'gmail',
+          email: `${id}@example.com`,
+          ownerMemberId: memberId,
+          status: 'active',
+          createdAt: Date.now(),
+        })
+        .run();
+      createScheduledSend(context.db, { accountId: id, draftId: `draft_${id}`, sendAt: Date.now() - 1 });
+    }
+    const f = invocation(['stdio', '--account', 'visible', '--profile', 'read-only']);
+    await f.run();
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining('Scheduled sends pending: 1. Delivery requires'),
+    );
+    expect(SendScheduler.prototype.start).not.toHaveBeenCalled();
+  });
+
+  it('does not inspect schedules for a client without mail.read', async () => {
+    await localSession();
+    const service = await import('../src/service/emailService.js');
+    const list = vi.spyOn(service.EmailService.prototype, 'listScheduled');
+    const f = invocation(['stdio', '--allow', 'mail.send']);
+    await f.run();
+    expect(list).not.toHaveBeenCalled();
+    expect(SendScheduler.prototype.start).not.toHaveBeenCalled();
   });
 
   it('starts with a sole named local profile when the active profile is remote', async () => {

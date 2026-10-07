@@ -1,8 +1,19 @@
+import { mkdtempSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { EmailError } from '@fluxmail/core';
-import { accounts, openDb, type FluxmailDb } from '../src/storage/db.js';
+import { accounts, deliveryOperations, inspectStoreCompatibility, openDb, type FluxmailDb } from '../src/storage/db.js';
 import {
   cancelScheduledSend,
+  claimScheduledSend,
+  completeClaim,
+  failClaim,
+  listClaimable,
+  renewClaim,
+  retryClaim,
+  uncertainClaim,
   countPending,
   createScheduledSend,
   findPendingByDraft,
@@ -106,5 +117,82 @@ describe('scheduled sends storage', () => {
     createScheduledSend(db, { accountId: 'acct_1', draftId: 'draft_1', sendAt: 1234 });
     db.delete(accounts).where(eq(accounts.id, 'acct_1')).run();
     expect(listScheduledSends(db)).toHaveLength(0);
+  });
+  it('migration 6 retains schedules and recorded deliveries and creates a matching backup', () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'fluxmail-migration-six-'));
+    const dbPath = path.join(directory, 'fluxmail.db');
+    const first = openDb(dbPath);
+    first
+      .insert(accounts)
+      .values({ id: 'acct_1', provider: 'gmail', email: 'private@example.com', status: 'active', createdAt: 1 })
+      .run();
+    const row = createScheduledSend(first, { accountId: 'acct_1', draftId: 'draft', sendAt: 1 });
+    first
+      .insert(deliveryOperations)
+      .values({
+        id: 'dop_recorded',
+        principalId: 'scheduler',
+        idempotencyKey: row.id,
+        requestHash: 'hash',
+        accountId: 'acct_1',
+        kind: 'scheduled',
+        status: 'succeeded',
+        scheduleId: row.id,
+        resultJson: JSON.stringify({ id: 'sent', threadId: 'thread' }),
+        createdAt: 1,
+        updatedAt: 1,
+      })
+      .run();
+    const client = (first as unknown as { $client: Database.Database }).$client;
+    client.exec('ALTER TABLE scheduled_sends DROP COLUMN next_attempt_at');
+    client.pragma('user_version = 5');
+    client.close();
+    expect(inspectStoreCompatibility(dbPath, directory)).toMatchObject({
+      storeFormat: 5,
+      compatible: true,
+      requiresMigration: true,
+    });
+    const reopened = openDb(dbPath);
+    expect(getScheduledSend(reopened, row.id)).toMatchObject({ ...row, nextAttemptAt: 0 });
+    expect(reopened.select().from(deliveryOperations).get()).toMatchObject({ id: 'dop_recorded', status: 'succeeded' });
+    expect(inspectStoreCompatibility(dbPath, directory).storeFormat).toBe(6);
+    const backups = readdirSync(path.join(directory, 'backups'));
+    expect(backups).toHaveLength(1);
+    const backup = new Database(path.join(directory, 'backups', backups[0]!), { readonly: true });
+    expect(backup.pragma('user_version', { simple: true })).toBe(5);
+    expect(backup.prepare('SELECT id FROM scheduled_sends').pluck().get()).toBe(row.id);
+    backup.close();
+    (reopened as unknown as { $client: Database.Database }).$client.close();
+  });
+
+  it('only the current sending token may renew, retry, or finalize a claim', () => {
+    const db = testDb();
+    const row = createScheduledSend(db, { accountId: 'acct_1', draftId: 'draft', sendAt: 1 });
+    const first = claimScheduledSend(db, row.id, 1, 100)!;
+    const second = claimScheduledSend(db, row.id, 101, 100)!;
+    expect(renewClaim(db, row.id, first.token, 102, 100)).toBe(false);
+    expect(retryClaim(db, row.id, first.token, 'error', 102)).toBeUndefined();
+    completeClaim(db, row.id, first.token, { id: 'wrong', threadId: 'wrong' });
+    failClaim(db, row.id, first.token, 'wrong');
+    uncertainClaim(db, row.id, first.token, 'wrong');
+    expect(getScheduledSend(db, row.id)).toMatchObject({ status: 'sending', claimToken: second.token, attempts: 0 });
+    expect(renewClaim(db, row.id, second.token, 102, 100)).toBe(true);
+    expect(retryClaim(db, row.id, second.token, 'error', 102)).toBe(1);
+    expect(getScheduledSend(db, row.id)).toMatchObject({ status: 'pending', attempts: 1, nextAttemptAt: 30_102 });
+    expect(renewClaim(db, row.id, second.token, 103, 100)).toBe(false);
+    expect(listClaimable(db, 30_101)).toEqual([]);
+    expect(claimScheduledSend(db, row.id, 30_101, 100)).toBeUndefined();
+  });
+
+  it('persists doubling retry delays capped at fifteen minutes without limiting attempts', () => {
+    const db = testDb();
+    const row = createScheduledSend(db, { accountId: 'acct_1', draftId: 'draft', sendAt: 1 });
+    let now = 1;
+    for (const [index, delay] of [30_000, 60_000, 120_000, 240_000, 480_000, 900_000, 900_000].entries()) {
+      const claim = claimScheduledSend(db, row.id, now, 100)!;
+      expect(retryClaim(db, row.id, claim.token, 'retry', now)).toBe(index + 1);
+      expect(getScheduledSend(db, row.id)?.nextAttemptAt).toBe(now + delay);
+      now += delay;
+    }
   });
 });

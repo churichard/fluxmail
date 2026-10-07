@@ -44,13 +44,29 @@ MCP marks failed and uncertain sends as tool errors, but the structured result s
 
 ## Schedule a message
 
-Use the sending interface's `sendAt` field or CLI scheduling option. Fluxmail saves the scheduled message as a draft in the mailbox. The server must be running at delivery time; a send missed while it is stopped can run when it starts again.
+Use the sending interface's `sendAt` field or CLI scheduling option. Fluxmail saves the scheduled message as a draft in the mailbox. `fluxmail serve` or `fluxmail scheduled run` must be running against the same store for delivery. Stdio connections never start a delivery worker. Queued mail stays stored while the worker is stopped; overdue mail may send when it starts again. Retry delays survive worker restarts.
 
 Review pending schedules before restoring a backup or restarting an instance after a long outage. Use the [MCP tools](/docs/tools), [CLI guide](/docs/use-the-cli), or [REST reference](/docs/rest-api) to list and cancel scheduled sends.
 
+## Keep scheduled delivery running
+
+For a stdio-only installation, run a persistent worker on the computer that stores the schedules:
+
+```bash
+FLUXMAIL_DATA_DIR=/path/to/your/fluxmail-data fluxmail scheduled run
+```
+
+Use the same `FLUXMAIL_DATA_DIR` as the stdio clients. The runner uses local deployment configuration independently of the active CLI profile and needs no CLI login session. An explicit `--instance` must name an existing local profile. Omit `--mail-account`: the runner processes all mailboxes in the instance.
+
+The worker runs in the foreground. Keep it running with your process supervisor and allow at least 45 seconds for shutdown. SIGINT, SIGTERM, and SIGHUP stop new delivery and wait up to 30 seconds for active work. A second signal forces termination.
+
+For remote HTTP installations, schedules live on the server and `serve` continues delivery after clients disconnect. Docker's existing `serve` process handles delivery; no extra worker is needed. The standalone runner reads storage on its own host, which can be a VPS. It cannot consume another server's queue over HTTP.
+
+Workers may share one SQLite store on the same host. Do not share the store over a network filesystem. Claims reduce conflicting work, but cannot guarantee exactly-once delivery by an external mail provider. If a delivery outcome is uncertain, check Sent before sending again.
+
 ## Before restarting an existing instance
 
-Starting `fluxmail stdio`, `fluxmail serve`, or the Docker service starts the instance-wide scheduler. Overdue scheduled messages can send immediately. A client's read-only profile and mailbox restrictions apply to its tool calls; they do not pause the scheduler or limit it to that client's mailboxes.
+Starting `fluxmail serve`, `fluxmail scheduled run`, or the Docker service starts the instance-wide scheduler. Overdue scheduled messages can send immediately. A client's read-only profile and mailbox restrictions apply to its tool calls; the worker processes the whole instance. Starting `fluxmail stdio` leaves schedules queued.
 
 Before restarting an instance, inspect pending schedules with a one-shot local CLI command for each mailbox you can access:
 

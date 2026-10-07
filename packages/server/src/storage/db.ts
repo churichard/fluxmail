@@ -8,7 +8,7 @@ import { VERSION } from '../version.js';
 import { decryptString } from './crypto.js';
 import { withFileLock } from './fileLock.js';
 
-export const CURRENT_STORE_FORMAT = 5;
+export const CURRENT_STORE_FORMAT = 6;
 export const MIN_SUPPORTED_STORE_FORMAT = 1;
 export const MAX_SUPPORTED_STORE_FORMAT = CURRENT_STORE_FORMAT;
 export const LEGACY_STORE_FORMAT = 0;
@@ -279,6 +279,7 @@ export const scheduledSends = sqliteTable(
     createdAt: integer('created_at').notNull(),
     status: text('status').notNull().default('pending'),
     attempts: integer('attempts').notNull().default(0),
+    nextAttemptAt: integer('next_attempt_at').notNull().default(0),
     lastError: text('last_error'),
     sentMessageId: text('sent_message_id'),
     sentThreadId: text('sent_thread_id'),
@@ -885,12 +886,17 @@ function migrateToFormatFive(sqlite: Database.Database): void {
   `);
 }
 
+function migrateToFormatSix(sqlite: Database.Database): void {
+  sqlite.exec('ALTER TABLE scheduled_sends ADD COLUMN next_attempt_at INTEGER NOT NULL DEFAULT 0');
+}
+
 const MIGRATIONS = [
   { format: 1, run: migrateToFormatOne },
   { format: 2, run: migrateToFormatTwo },
   { format: 3, run: migrateToFormatThree },
   { format: 4, run: migrateToFormatFour },
   { format: 5, run: migrateToFormatFive },
+  { format: 6, run: migrateToFormatSix },
 ] as const;
 
 function openCompatibleDb(dbPath: string, dataDir: string, options: { backupBeforeMigration?: boolean }): FluxmailDb {

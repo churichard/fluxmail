@@ -521,6 +521,37 @@ describe('activateLicense', () => {
 describe('LicenseController', () => {
   afterEach(() => vi.unstubAllEnvs());
 
+  it('awaits an active refresh on stop without scheduling a queued replacement', async () => {
+    vi.useFakeTimers();
+    vi.stubEnv('FLUXMAIL_LICENSE_PUBLIC_KEYS', keys.publicKeyB64);
+    const dir = mkdtempSync(path.join(tmpdir(), 'fluxmail-controller-shutdown-'));
+    const db = openDb(':memory:');
+    const token = signLease(keys.privateKey, leasePayload());
+    let finish!: (response: Response) => void;
+    const response = new Promise<Response>((resolve) => (finish = resolve));
+    const { fetchImpl, calls } = fakeFetch(() => response);
+    const configuration = configurationFor(db, dir);
+    configuration.setLicenseKey(`fluxmail_lic_${'ef'.repeat(20)}`);
+    const controller = new LicenseController({ db, config: configuration.config, configuration, fetchImpl });
+    try {
+      controller.start();
+      controller.wake();
+      const stopped = vi.fn();
+      const stopping = controller.stop().then(stopped);
+      await Promise.resolve();
+      expect(stopped).not.toHaveBeenCalled();
+      finish(Response.json({ lease: token }));
+      await stopping;
+      expect(readLeaseRow(db)?.token).toBe(token);
+      expect(calls).toHaveLength(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      await controller.stop();
+      (db as unknown as { $client: { close(): void } }).$client.close();
+      vi.useRealTimers();
+    }
+  });
+
   it('notices a license stored through another local database connection', async () => {
     vi.useFakeTimers();
     vi.stubEnv('FLUXMAIL_LICENSE_PUBLIC_KEYS', keys.publicKeyB64);

@@ -26,3 +26,4 @@ This command has no command-specific options.
 | --- | --- |
 | [`fluxmail scheduled list`](/docs/cli/scheduled-list) | List scheduled sends |
 | [`fluxmail scheduled cancel`](/docs/cli/scheduled-cancel) | Cancel a scheduled send and keep its draft |
+| [`fluxmail scheduled run`](/docs/cli/scheduled-run) | Run scheduled delivery for this local instance without HTTP or MCP |

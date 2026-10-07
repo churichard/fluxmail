@@ -167,6 +167,7 @@ describe('delivery operations', () => {
       INSERT INTO member_sessions (id, member_id, token_hash, device_name, created_at, expires_at, last_used_at)
       VALUES ('session_old', 'member_1', 'hash_old', 'test', 1, 9999999999999, 1);
       ALTER TABLE delivery_operations DROP COLUMN member_id;
+      ALTER TABLE scheduled_sends DROP COLUMN next_attempt_at;
       INSERT INTO delivery_operations
         (id, principal_id, idempotency_key, request_hash, account_id, kind, status, created_at, updated_at)
       VALUES ('dop_old', 'session_old', 'key_old', 'hash', 'acct_1', 'send', 'succeeded', 1, 1);

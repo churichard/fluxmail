@@ -87,6 +87,7 @@
     "scheduled",
     "scheduled-list",
     "scheduled-cancel",
+    "scheduled-run",
     "attachments",
     "attachments-download",
     "status"

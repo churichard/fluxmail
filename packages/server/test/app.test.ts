@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
-import { EmailError } from '@fluxmail/core';
+import { request } from 'node:http';
+import { serve } from '@hono/node-server';
+import { EmailError, type EmailProvider } from '@fluxmail/core';
+import type { AppContext } from '../src/context.js';
+import { RuntimeLifecycle } from '../src/lifecycle.js';
 import type { FluxmailConfig } from '../src/config.js';
 import { createApp, type AppDeps } from '../src/http/app.js';
 import { AccountRegistry } from '../src/accounts/registry.js';
 import { createApiKey } from '../src/storage/apiKeys.js';
-import { members, openDb } from '../src/storage/db.js';
+import { accounts, members, openDb } from '../src/storage/db.js';
 import { createGmailConnectionGrant, createOutlookConnectionGrant } from '../src/storage/gmailConnectionGrants.js';
 import { addMember, setMemberRole } from '../src/storage/members.js';
 import { exchangeCode } from '../src/accounts/googleAuth.js';
@@ -59,6 +63,101 @@ function microsoftCredentials(refreshToken = 'refresh'): MicrosoftCredentials {
 }
 
 describe('HTTP app', () => {
+  it.each(['success', 'error'])(
+    'drains a disconnected MCP call that finishes with %s before shutdown',
+    async (outcome) => {
+      const deps = appDeps();
+      const member = addMember(deps.db, { name: 'Owner' });
+      const { key } = createApiKey(deps.db, 'test', member.id);
+      deps.db
+        .insert(accounts)
+        .values({
+          id: 'acct_test',
+          provider: 'gmail',
+          email: 'test@example.com',
+          ownerMemberId: member.id,
+          status: 'active',
+          createdAt: Date.now(),
+        })
+        .run();
+      let release!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const listFolders = vi.fn(async () => {
+        await pending;
+        if (outcome === 'error') throw new EmailError('provider_unavailable', 'Provider unavailable');
+        return [];
+      });
+      vi.spyOn(deps.registry, 'getProvider').mockReturnValue({ listFolders } as unknown as EmailProvider);
+      const closeProviders = vi.spyOn(deps.registry, 'close');
+      const client = (deps.db as unknown as { $client: { open: boolean; close(): void } }).$client;
+      const flush = vi.fn(async () => {});
+      const terminate = vi.fn();
+      const runtime = new RuntimeLifecycle(
+        {
+          ...deps,
+          scheduler: { stop: async () => {} },
+          licenseController: { stop: async () => {} },
+        } as unknown as AppContext,
+        flush,
+        terminate,
+        1_000,
+      );
+      const app = createApp(deps);
+      const server = serve({ fetch: (req, env) => runtime.request(() => app.fetch(req, env)), port: 0 });
+      runtime.attachServer(server);
+      await new Promise<void>((resolve) => server.once('listening', resolve));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected a TCP listener');
+      const disconnected = new Promise<void>((resolve) => {
+        server.once('request', (_incoming, outgoing) => outgoing.once('close', resolve));
+      });
+      const req = request({
+        port: address.port,
+        path: '/mcp',
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${key}`,
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          'mcp-protocol-version': '2025-03-26',
+        },
+      });
+      req.on('error', () => {});
+      try {
+        req.end(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'tools/call',
+            params: { name: 'list_folders', arguments: { accountId: 'acct_test' } },
+          }),
+        );
+        await vi.waitFor(() => expect(listFolders).toHaveBeenCalledOnce());
+        req.destroy();
+        await disconnected;
+        process.emit('SIGTERM');
+        expect(server.listening).toBe(false);
+        expect(closeProviders).not.toHaveBeenCalled();
+        expect(client.open).toBe(true);
+        expect(flush).not.toHaveBeenCalled();
+        release();
+        await vi.waitFor(() => expect(terminate).toHaveBeenCalledWith('SIGTERM'), { timeout: 1_500 });
+        expect(closeProviders).toHaveBeenCalledOnce();
+        expect(client.open).toBe(false);
+        expect(flush).toHaveBeenCalledOnce();
+        await runtime.close();
+      } finally {
+        release();
+        req.destroy();
+        if (!runtime.stopping) process.emit('SIGTERM');
+        await vi.waitFor(() => expect(terminate).toHaveBeenCalled(), { timeout: 1_500 });
+        if (client.open) client.close();
+      }
+    },
+  );
+
   it('reports the package version on the health endpoint', async () => {
     const response = await createApp(appDeps()).request('/healthz');
 
