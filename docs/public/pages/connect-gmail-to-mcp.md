@@ -1,7 +1,7 @@
 ---
 title: 'Connect Gmail / Google Workspace'
 description: 'Connect a Gmail or Google Workspace mailbox, configure Google OAuth, and reconnect expired tokens.'
-updated: '2026-09-24'
+updated: '2026-10-06'
 ---
 
 Fluxmail includes a Google Desktop OAuth client, so you can connect Gmail locally without creating Google Cloud credentials. The local flow uses PKCE, and your OAuth tokens stay with the Fluxmail server you run.
@@ -10,11 +10,15 @@ This setup works with personal Gmail and Google Workspace mailboxes.
 
 Fluxmail's built-in app requests Google's `gmail.modify` permission. You can read, draft, send, and organize mail, including moving messages to Trash. Gmail does not allow immediate permanent deletion with this permission.
 
-Fluxmail also reads Gmail's Send mail as settings with the same permission. Verified aliases can be used for drafts, replies, forwards, immediate sends, and scheduled messages. See [Send from another address](/docs/send-as-addresses) for sender selection rules.
-
 ## Connect Gmail
 
-Choose the setup that matches how you run Fluxmail.
+Choose the setup that matches your installation:
+
+| Setup | OAuth app | Next step |
+| --- | --- | --- |
+| CLI or Docker on the same computer as your browser | Bundled Google app | Connect locally below. |
+| Public server with a hosted callback | Your Google Web app | [Create the app](#create-oauth-credentials-for-a-hosted-connection), then connect through Docker below. |
+| CLI over SSH without a hosted callback | Bundled app or your Desktop app | Follow [Browser on a different computer](#browser-on-a-different-computer). |
 
 For a fresh local instance, create the first administrator and log in:
 
@@ -67,6 +71,17 @@ ssh -L 8976:127.0.0.1:8976 you@server
 ```
 
 The command stops waiting after 10 minutes. Run it again to get a new consent URL.
+
+## Verify the connection
+
+List the connected mailboxes, then use the Gmail account ID to fetch its folders:
+
+```bash
+fluxmail accounts list
+fluxmail --mail-account <account-id> folders list
+```
+
+For Docker, prefix both commands with `docker compose exec fluxmail`. The folder call checks Google access without reading message bodies or changing mail. Continue with [MCP setup](/docs/connect-an-mcp-client) or [REST](/docs/build-with-rest) to verify access through your client as well.
 
 ## Use your own Google OAuth app
 
@@ -165,6 +180,8 @@ Reauthorization updates the stored token for the same mailbox. It does not add a
 If your server reaches Google through an HTTP proxy, set `HTTPS_PROXY` before starting Fluxmail. Gmail API and Google sign-in requests will use it. See [Outbound proxy](/docs/configuration#outbound-proxy) for `NO_PROXY` rules and variable precedence.
 
 ## How Gmail labels work
+
+Fluxmail also reads Gmail's Send mail as settings with the same permission. Verified aliases can be used for drafts, replies, forwards, immediate sends, and scheduled messages. See [Send from another address](/docs/send-as-addresses) for sender selection rules.
 
 Fluxmail returns Gmail user labels in both folder and label listings. The folder listing lets clients navigate a label as a mailbox view. The label listing describes tags that can be added to or removed from messages, including the label colors configured in Gmail.
 
