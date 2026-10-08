@@ -11,11 +11,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/churichard/fluxmail"
+    "url": "https://github.com/fluxmailai/fluxmail"
   },
   "homepage": "https://fluxmail.ai",
   "documentation": "https://fluxmail.ai/docs/connect-an-mcp-client",
-  "support": "https://github.com/churichard/fluxmail/issues",
+  "support": "https://github.com/fluxmailai/fluxmail/issues",
   "icon": "icon.png",
   "license": "Elastic-2.0",
   "privacy_policies": ["https://fluxmail.ai/privacy"],

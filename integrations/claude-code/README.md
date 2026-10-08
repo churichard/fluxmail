@@ -45,4 +45,4 @@ The plugin also honors `FLUXMAIL_TELEMETRY=0` or `DO_NOT_TRACK=1` in its MCP ser
 
 ## Source and license
 
-Richard Chu maintains Fluxmail at [churichard/fluxmail](https://github.com/churichard/fluxmail). The plugin wrapper and Fluxmail are source available under the [Elastic License 2.0](LICENSE.md).
+Richard Chu maintains Fluxmail at [fluxmailai/fluxmail](https://github.com/fluxmailai/fluxmail). The plugin wrapper and Fluxmail are source available under the [Elastic License 2.0](LICENSE.md).

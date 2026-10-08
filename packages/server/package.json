@@ -1,7 +1,7 @@
 {
   "name": "fluxmail",
   "version": "0.12.0",
-  "mcpName": "io.github.churichard/fluxmail",
+  "mcpName": "io.github.fluxmailai/fluxmail",
   "description": "Self-hosted email API with MCP and REST support for Gmail, Outlook, and IMAP/SMTP",
   "keywords": [
     "email",
@@ -31,14 +31,14 @@
     "typescript"
   ],
   "license": "Elastic-2.0",
-  "homepage": "https://github.com/churichard/fluxmail#readme",
+  "homepage": "https://github.com/fluxmailai/fluxmail#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/churichard/fluxmail.git",
+    "url": "git+https://github.com/fluxmailai/fluxmail.git",
     "directory": "packages/server"
   },
   "bugs": {
-    "url": "https://github.com/churichard/fluxmail/issues"
+    "url": "https://github.com/fluxmailai/fluxmail/issues"
   },
   "type": "module",
   "main": "./dist/index.js",

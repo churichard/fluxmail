@@ -5,7 +5,7 @@
   "license": "Elastic-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/churichard/fluxmail.git",
+    "url": "git+https://github.com/fluxmailai/fluxmail.git",
     "directory": "packages/provider-outlook"
   },
   "type": "module",

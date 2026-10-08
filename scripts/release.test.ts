@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 import { loadReleasePackages, repositoryRoot } from './release-config.mjs';
 import { classifyNpmChannel, inspectNpmTag, parseArgs, planNpmAndDockerRelease, run } from './publish.mjs';
@@ -8,6 +8,7 @@ import {
   buildDoctorReport,
   buildNpmTrustFailureCheck,
   insertReleaseEntry,
+  inspectRegistryStatus,
   isExpectedNpmTrustedPublisher,
   isMainOnlyEnvironmentPolicy,
   planRelease,
@@ -23,14 +24,14 @@ const changelog = `# Changelog
 
 ### Changed
 
-- Require Node.js 22 for the CLI ([#51](https://github.com/churichard/fluxmail/pull/51))
+- Require Node.js 22 for the CLI ([#51](https://github.com/fluxmailai/fluxmail/pull/51))
 
 ### Added
 
-- Add shared Outlook mailboxes ([#52](https://github.com/churichard/fluxmail/pull/52))
+- Add shared Outlook mailboxes ([#52](https://github.com/fluxmailai/fluxmail/pull/52))
 
-[Unreleased]: https://github.com/churichard/fluxmail/compare/v0.5.0...HEAD
-[0.5.0]: https://github.com/churichard/fluxmail/compare/v0.4.0...v0.5.0
+[Unreleased]: https://github.com/fluxmailai/fluxmail/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/fluxmailai/fluxmail/compare/v0.4.0...v0.5.0
 `;
 
 describe('release inventory', () => {
@@ -52,7 +53,7 @@ describe('release inventory', () => {
     for (const { directory, manifest } of packages) {
       expect(manifest.repository).toMatchObject({
         type: 'git',
-        url: 'git+https://github.com/churichard/fluxmail.git',
+        url: 'git+https://github.com/fluxmailai/fluxmail.git',
         directory,
       });
     }
@@ -72,11 +73,23 @@ describe('release preflight', () => {
       isExpectedNpmTrustedPublisher({
         type: 'github',
         file: 'publish-release.yml',
-        repository: 'churichard/fluxmail',
+        repository: 'fluxmailai/fluxmail',
         environment: 'release',
         permissions: ['createPackage'],
       }),
     ).toBe(true);
+  });
+
+  it('rejects the previous repository owner as an npm trusted publisher', () => {
+    expect(
+      isExpectedNpmTrustedPublisher({
+        type: 'github',
+        file: 'publish-release.yml',
+        repository: 'churichard/fluxmail',
+        environment: 'release',
+        permissions: ['createPackage'],
+      }),
+    ).toBe(false);
   });
 
   it('accepts npm registry trust list output', () => {
@@ -91,7 +104,7 @@ describe('release preflight', () => {
           type: 'github',
           claims: {
             workflow_ref: { file: 'publish-release.yml' },
-            repository: 'churichard/fluxmail',
+            repository: 'fluxmailai/fluxmail',
             environment: 'release',
           },
           permissions: ['createPackage'],
@@ -107,7 +120,7 @@ describe('release preflight', () => {
           type: 'github',
           claims: {
             workflow_ref: { file: 'other.yml' },
-            repository: 'churichard/fluxmail',
+            repository: 'fluxmailai/fluxmail',
             environment: 'release',
           },
           permissions: ['createPackage'],
@@ -162,37 +175,73 @@ describe('release preflight', () => {
 });
 
 describe('Common Changelog releases', () => {
+  it('preserves historical release notes when preparing the next release', () => {
+    const historical = changelog.replaceAll('fluxmailai/fluxmail', 'churichard/fluxmail');
+    const originalNotes = renderReleaseNotes(historical, '0.5.0');
+    const prepared = insertReleaseEntry(historical, {
+      version: '0.12.1',
+      date: '2026-10-08',
+      previousTag: 'v0.12.0',
+      body: '_No user-facing changes._',
+    });
+
+    expect(originalNotes).toContain('https://github.com/churichard/fluxmail/compare/v0.4.0...v0.5.0');
+    expect(renderReleaseNotes(prepared, '0.5.0')).toBe(originalNotes);
+    expect(renderReleaseNotes(prepared, '0.12.1')).toContain(
+      'https://github.com/fluxmailai/fluxmail/compare/v0.12.0...v0.12.1',
+    );
+  });
+
+  it('retains the published comparison URL for the last pre-transfer release', async () => {
+    const committedChangelog = await readFile(path.join(repositoryRoot, 'CHANGELOG.md'), 'utf8');
+
+    expect(renderReleaseNotes(committedChangelog, '0.12.0')).toContain(
+      '**Full Changelog**: https://github.com/churichard/fluxmail/compare/v0.11.2...v0.12.0',
+    );
+  });
+
+  it('accepts historical first-release URLs but rejects the old owner for new releases', () => {
+    const historical = changelog.replace(
+      'https://github.com/fluxmailai/fluxmail/compare/v0.4.0...v0.5.0',
+      'https://github.com/churichard/fluxmail/releases/tag/v0.5.0',
+    );
+    expect(() => validateChangelogEntry(historical, '0.5.0')).not.toThrow();
+    expect(() => validateChangelogEntry(historical.replaceAll('0.5.0', '0.12.1'), '0.12.1')).toThrow(
+      'The [0.12.1] release link must target v0.12.1 in the Fluxmail repository.',
+    );
+  });
+
   it('moves Unreleased changes into a versioned entry and updates comparison links', () => {
     const prepared = insertReleaseEntry(
       `# Changelog
 
 ## [Unreleased]
 
-[Unreleased]: https://github.com/churichard/fluxmail/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/fluxmailai/fluxmail/compare/v0.4.0...HEAD
 `,
       {
         version: '0.5.0',
         date: '2026-07-15',
         previousTag: 'v0.4.0',
-        body: '### Added\n\n- Add shared mailboxes ([#52](https://github.com/churichard/fluxmail/pull/52))',
+        body: '### Added\n\n- Add shared mailboxes ([#52](https://github.com/fluxmailai/fluxmail/pull/52))',
       },
     );
 
     expect(prepared).toContain('## [0.5.0] - 2026-07-15');
-    expect(prepared).toContain('[Unreleased]: https://github.com/churichard/fluxmail/compare/v0.5.0...HEAD');
-    expect(prepared).toContain('[0.5.0]: https://github.com/churichard/fluxmail/compare/v0.4.0...v0.5.0');
+    expect(prepared).toContain('[Unreleased]: https://github.com/fluxmailai/fluxmail/compare/v0.5.0...HEAD');
+    expect(prepared).toContain('[0.5.0]: https://github.com/fluxmailai/fluxmail/compare/v0.4.0...v0.5.0');
   });
 
   it('renders the committed entry as a GitHub Release body', () => {
     expect(renderReleaseNotes(changelog, '0.5.0')).toBe(`## Changed
 
-- Require Node.js 22 for the CLI ([#51](https://github.com/churichard/fluxmail/pull/51))
+- Require Node.js 22 for the CLI ([#51](https://github.com/fluxmailai/fluxmail/pull/51))
 
 ## Added
 
-- Add shared Outlook mailboxes ([#52](https://github.com/churichard/fluxmail/pull/52))
+- Add shared Outlook mailboxes ([#52](https://github.com/fluxmailai/fluxmail/pull/52))
 
-**Full Changelog**: https://github.com/churichard/fluxmail/compare/v0.4.0...v0.5.0
+**Full Changelog**: https://github.com/fluxmailai/fluxmail/compare/v0.4.0...v0.5.0
 `);
   });
 
@@ -204,7 +253,7 @@ describe('Common Changelog releases', () => {
   });
 
   it('requires the release comparison link', () => {
-    const invalid = changelog.replace('[0.5.0]: https://github.com/churichard/fluxmail/compare/v0.4.0...v0.5.0\n', '');
+    const invalid = changelog.replace('[0.5.0]: https://github.com/fluxmailai/fluxmail/compare/v0.4.0...v0.5.0\n', '');
 
     expect(() => validateChangelogEntry(invalid, '0.5.0')).toThrow('Add the [0.5.0] release link to CHANGELOG.md.');
   });
@@ -219,11 +268,66 @@ describe('Common Changelog releases', () => {
 
   it('accepts the release link used when there is no previous tag', () => {
     const firstRelease = changelog.replace(
-      'https://github.com/churichard/fluxmail/compare/v0.4.0...v0.5.0',
-      'https://github.com/churichard/fluxmail/releases/tag/v0.5.0',
+      'https://github.com/fluxmailai/fluxmail/compare/v0.4.0...v0.5.0',
+      'https://github.com/fluxmailai/fluxmail/releases/tag/v0.5.0',
     );
 
     expect(() => validateChangelogEntry(firstRelease, '0.5.0')).not.toThrow();
+  });
+});
+
+describe('MCP Registry release identities', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each([
+    ['0.4.0', 'churichard'],
+    ['0.9.0', 'churichard'],
+    ['0.11.2', 'churichard'],
+    ['0.12.0-beta.1', 'churichard'],
+    ['0.12.0', 'churichard'],
+    ['0.12.1-beta.1', 'fluxmailai'],
+    ['0.12.1', 'fluxmailai'],
+    ['0.13.0', 'fluxmailai'],
+    ['1.0.0', 'fluxmailai'],
+  ])('checks %s under %s and recognizes a completed release', async (version, owner) => {
+    const name = `io.github.${owner}/fluxmail`;
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ server: { name, version } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const registry = await inspectRegistryStatus(version, 1);
+    const url = `https://registry.modelcontextprotocol.io/v0.1/servers/${encodeURIComponent(name)}/versions/${version}`;
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(url);
+    expect(registry).toEqual({ published: true, url });
+    expect(
+      planRelease({
+        version,
+        npmTag: version.includes('-') ? 'next' : 'latest',
+        npm: [{ name: 'fluxmail', version, published: true, tagVersion: version }],
+        docker: { published: true, channelMatches: true },
+        registry,
+        githubRelease: { state: 'published' },
+        gitTag: { published: true },
+      }),
+    ).toMatchObject({ complete: true, inconsistent: false, publishRegistry: false });
+  });
+
+  it.each([
+    ['io.github.fluxmailai/fluxmail', '0.12.0'],
+    ['io.github.churichard/fluxmail', '0.11.2'],
+  ])('rejects registry responses with mismatched identity %s@%s', async (name, version) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ server: { name, version } })));
+
+    expect(await inspectRegistryStatus('0.12.0', 1)).toMatchObject({ published: false });
+  });
+
+  it('reports a missing new release without falling back to the old namespace', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await inspectRegistryStatus('0.12.1', 1)).toMatchObject({ published: false });
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+      'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.fluxmailai%2Ffluxmail/versions/0.12.1',
+    );
   });
 });
 

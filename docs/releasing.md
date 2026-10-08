@@ -34,7 +34,7 @@ Configure GitHub Actions as the trusted publisher for these packages:
 
 Use the same settings for each package:
 
-- Repository: `churichard/fluxmail`
+- Repository: `fluxmailai/fluxmail`
 - Workflow file: `publish-release.yml`
 - Environment: `release`
 - Permission: `npm publish`
@@ -50,7 +50,7 @@ for package in \
   fluxmail
 do
   npx --yes npm@11 trust github "$package" \
-    --repo churichard/fluxmail \
+    --repo fluxmailai/fluxmail \
     --file publish-release.yml \
     --env release \
     --allow-publish \
@@ -63,9 +63,19 @@ The release flow does not audit these private npm settings before publishing. Th
 
 ### GHCR Actions access
 
-Connect the `fluxmail` container package to `churichard/fluxmail`. A linked package inherits GitHub Actions access from that repository. The Dockerfile's `org.opencontainers.image.source` label keeps future images linked to the repository.
+Connect the `fluxmail` container package to `fluxmailai/fluxmail`. A linked package inherits GitHub Actions access from that repository. The Dockerfile's `org.opencontainers.image.source` label keeps future images linked to the repository.
 
-If preflight reports a mismatch, open the package settings and add `churichard/fluxmail` under Manage Actions access with write permission.
+If preflight reports a mismatch, open the package settings and add `fluxmailai/fluxmail` under Manage Actions access with write permission.
+
+### Repository transfer
+
+The GitHub repository is now `fluxmailai/fluxmail`. npm package names remain `fluxmail` and `@fluxmail/*`. Each package's trusted publisher must name the new repository, with `publish-release.yml` and the `release` environment. Remove the old repository's trust entry after verifying the replacement.
+
+Container releases use `ghcr.io/fluxmailai/fluxmail`. Existing release images were copied with their original tags and digests; the old images remain available for existing installations.
+
+The next npm release carries the MCP Registry name `io.github.fluxmailai/fluxmail`. Publish the new registry listing only after that npm version is available: already-published npm versions still identify `io.github.churichard/fluxmail` and cannot be overwritten. Keep the old registry listing available for those releases. Do not resume a pre-transfer release using the new registry identity.
+
+Release status and verification use the old registry identity through `0.12.0` and the new identity for later versions. Keep historical changelog comparison URLs unchanged so verification can match the published GitHub release notes.
 
 ## Agent-driven release flow
 

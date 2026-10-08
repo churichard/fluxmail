@@ -1,11 +1,11 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.churichard/fluxmail",
+  "name": "io.github.fluxmailai/fluxmail",
   "title": "Fluxmail",
   "description": "Read, search, draft, send, and organize email through Gmail, Outlook, and IMAP/SMTP mailboxes.",
   "websiteUrl": "https://fluxmail.ai",
   "repository": {
-    "url": "https://github.com/churichard/fluxmail",
+    "url": "https://github.com/fluxmailai/fluxmail",
     "source": "github",
     "id": "1295539777",
     "subfolder": "packages/server"

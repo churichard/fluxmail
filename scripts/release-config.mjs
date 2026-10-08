@@ -5,13 +5,19 @@ import { fileURLToPath } from 'node:url';
 export const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 export const releaseConfig = Object.freeze({
-  githubRepository: 'churichard/fluxmail',
-  githubRepositoryUrl: 'git+https://github.com/churichard/fluxmail.git',
+  githubRepository: 'fluxmailai/fluxmail',
+  githubRepositoryUrl: 'git+https://github.com/fluxmailai/fluxmail.git',
   githubWorkflow: 'publish-release.yml',
   githubEnvironment: 'release',
-  dockerImage: 'ghcr.io/churichard/fluxmail',
-  registryName: 'io.github.churichard/fluxmail',
+  dockerImage: 'ghcr.io/fluxmailai/fluxmail',
+  registryName: 'io.github.fluxmailai/fluxmail',
   registryUrl: 'https://registry.modelcontextprotocol.io',
+});
+
+export const legacyReleaseConfig = Object.freeze({
+  lastVersion: '0.12.0',
+  githubRepository: 'churichard/fluxmail',
+  registryName: 'io.github.churichard/fluxmail',
 });
 
 export async function loadReleasePackages(root = repositoryRoot) {

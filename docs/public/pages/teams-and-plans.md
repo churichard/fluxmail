@@ -79,7 +79,7 @@ Lowering the member limit takes effect at the end of the billing period. If the 
 
 ## Software license
 
-Fluxmail is source available under the [Elastic License 2.0](https://github.com/churichard/fluxmail/blob/main/LICENSE.md). You may use, modify, create derivative works, and redistribute it subject to that license. A fork does not need a paid Fluxmail subscription merely because it is a fork. Without a valid paid key, Fluxmail uses the Personal plan with 3 mailboxes and 1 member.
+Fluxmail is source available under the [Elastic License 2.0](https://github.com/fluxmailai/fluxmail/blob/main/LICENSE.md). You may use, modify, create derivative works, and redistribute it subject to that license. A fork does not need a paid Fluxmail subscription merely because it is a fork. Without a valid paid key, Fluxmail uses the Personal plan with 3 mailboxes and 1 member.
 
 Official Pro, Business, and Enterprise entitlements require a valid Fluxmail license key. ELv2 does not allow you to change or circumvent license key functionality or remove functionality protected by a key. It also does not allow you to provide Fluxmail to third parties as a hosted or managed service that exposes a substantial set of its features.
 
