@@ -25,7 +25,7 @@ async function fixture(version = '0.11.2') {
     JSON.stringify({
       name: 'fluxmail',
       version,
-      repository: { url: 'git+https://github.com/churichard/fluxmail.git', directory: 'packages/server' },
+      repository: { url: 'git+https://github.com/fluxmailai/fluxmail.git', directory: 'packages/server' },
     }),
   );
   await syncClaudePlugin(root);

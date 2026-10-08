@@ -1,10 +1,10 @@
 ---
 title: "Deploy with Docker"
 description: "Run a persistent Fluxmail server, configure HTTPS, and verify a client connection."
-updated: '2026-10-06'
+updated: '2026-10-08'
 ---
 
-Use Docker when clients connect over a network or share one Fluxmail instance. The [Fluxmail image](https://github.com/churichard/fluxmail/pkgs/container/fluxmail) supports amd64 and arm64.
+Use Docker when clients connect over a network or share one Fluxmail instance. The [Fluxmail image](https://github.com/fluxmailai/fluxmail/pkgs/container/fluxmail) supports amd64 and arm64.
 
 You'll need Docker with Compose. For remote access, also prepare a domain pointing to your server and an HTTPS reverse proxy. If your agent should guide the setup, use the [agent-first prompt](/docs/quickstart#agent-first-setup) and tell it you want Docker.
 
@@ -12,13 +12,15 @@ You'll need Docker with Compose. For remote access, also prepare a domain pointi
 
 ```bash
 mkdir fluxmail && cd fluxmail
-curl -fsSLO https://raw.githubusercontent.com/churichard/fluxmail/main/docker-compose.yml
-curl -fsSL https://raw.githubusercontent.com/churichard/fluxmail/main/.env.example -o .env
+curl -fsSLO https://raw.githubusercontent.com/fluxmailai/fluxmail/main/docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/fluxmailai/fluxmail/main/.env.example -o .env
 ```
 
 Review both files before starting. The Compose service stores its database, configuration, and generated encryption key in the `fluxmail-data` volume mounted at `/data`. Keep that volume when recreating the container. See [Back up and restore](/docs/backup-and-restore) before replacing storage.
 
 The downloaded file uses the `latest` image. For controlled upgrades, replace that tag with the release tag or image digest you intend to run and record it with your backups.
+
+If your existing Compose file uses `ghcr.io/churichard/fluxmail`, change the image name to `ghcr.io/fluxmailai/fluxmail` and keep your current tag or digest. Published release images are available at the new location. Keep the existing volume and configuration, then run `docker compose pull` and `docker compose up -d` when you are ready to restart. Future releases use the new image name.
 
 ## 2. Choose local or remote access
 
