@@ -4,6 +4,24 @@ Fluxmail records user-facing changes in this file. The format follows [Common Ch
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-08
+
+### Changed
+
+- [MCP / CLI] Stop delivering scheduled mail from stdio sessions; run `fluxmail serve` or `fluxmail scheduled run` against the same data directory to keep delivery running; [update stdio-only installations](https://fluxmail.ai/docs/sending-and-retries/#keep-scheduled-delivery-running) ([#125](https://github.com/fluxmailai/fluxmail/pull/125))
+- Advance the SQLite store to format 6 for persistent retry deadlines; stop all processes sharing the store and back it up before upgrading, and restore that backup for rollback; [prepare existing installations](https://fluxmail.ai/docs/upgrade-fluxmail/) ([#125](https://github.com/fluxmailai/fluxmail/pull/125))
+- Use `ghcr.io/fluxmailai/fluxmail` for Docker images and `io.github.fluxmailai/fluxmail` in the MCP Registry after the repository move ([#126](https://github.com/fluxmailai/fluxmail/pull/126))
+- [CLI] Record safe stdio startup failure reasons, filesystem error codes, and selection categories in anonymous telemetry without collecting paths, credentials, or option values ([#122](https://github.com/fluxmailai/fluxmail/pull/122))
+
+### Added
+
+- [CLI] Add `fluxmail scheduled run` to process scheduled delivery for the whole local instance without starting HTTP or MCP ([#125](https://github.com/fluxmailai/fluxmail/pull/125))
+
+### Fixed
+
+- [MCP / CLI / REST] Preserve scheduled-send retry delays across worker restarts, discover schedules created by other processes, and renew delivery claims during slow sends ([#125](https://github.com/fluxmailai/fluxmail/pull/125))
+- [MCP / CLI / REST] Drain active HTTP requests, scheduled deliveries, and license refreshes before closing the store on shutdown, and keep HTTP MCP operations running after clients disconnect ([#125](https://github.com/fluxmailai/fluxmail/pull/125))
+
 ## [0.12.0] - 2026-10-05
 
 ### Changed
@@ -219,7 +237,7 @@ Only the breaking entries for the interfaces you use apply. An MCP-only integrat
 - Prevent hosted Microsoft OAuth responses from forwarding connection credentials through the HTTP referrer ([#43](https://github.com/churichard/fluxmail/pull/43))
 - Stop a pending IMAP connection immediately when its provider closes during setup ([#49](https://github.com/churichard/fluxmail/pull/49))
 
-[Unreleased]: https://github.com/fluxmailai/fluxmail/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/fluxmailai/fluxmail/compare/v0.13.0...HEAD
 [0.4.0]: https://github.com/churichard/fluxmail/compare/v0.3.0...v0.4.0
 [0.4.1]: https://github.com/churichard/fluxmail/compare/v0.4.0...v0.4.1
 [0.5.0]: https://github.com/churichard/fluxmail/compare/v0.4.1...v0.5.0
@@ -234,3 +252,4 @@ Only the breaking entries for the interfaces you use apply. An MCP-only integrat
 [0.11.1]: https://github.com/churichard/fluxmail/compare/v0.11.0...v0.11.1
 [0.11.2]: https://github.com/churichard/fluxmail/compare/v0.11.1...v0.11.2
 [0.12.0]: https://github.com/churichard/fluxmail/compare/v0.11.2...v0.12.0
+[0.13.0]: https://github.com/fluxmailai/fluxmail/compare/v0.12.0...v0.13.0
