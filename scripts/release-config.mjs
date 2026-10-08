@@ -14,6 +14,12 @@ export const releaseConfig = Object.freeze({
   registryUrl: 'https://registry.modelcontextprotocol.io',
 });
 
+export const legacyReleaseConfig = Object.freeze({
+  lastVersion: '0.12.0',
+  githubRepository: 'churichard/fluxmail',
+  registryName: 'io.github.churichard/fluxmail',
+});
+
 export async function loadReleasePackages(root = repositoryRoot) {
   const packagesRoot = path.join(root, 'packages');
   const entries = await readdir(packagesRoot, { withFileTypes: true });

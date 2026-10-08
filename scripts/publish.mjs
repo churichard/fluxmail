@@ -410,7 +410,7 @@ export async function inspectNpmTag(
   return tagVersion;
 }
 
-function compareReleaseVersions(left, right) {
+export function compareReleaseVersions(left, right) {
   const leftVersion = parseReleaseVersion(left);
   const rightVersion = parseReleaseVersion(right);
   if (!leftVersion || !rightVersion) return undefined;

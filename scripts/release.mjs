@@ -5,9 +5,21 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
-import { loadReleasePackages, loadReleaseVersion, releaseConfig, repositoryRoot } from './release-config.mjs';
+import {
+  legacyReleaseConfig,
+  loadReleasePackages,
+  loadReleaseVersion,
+  releaseConfig,
+  repositoryRoot,
+} from './release-config.mjs';
 import { checkClaudePlugin, syncClaudePlugin } from './claude-code-plugin.mjs';
-import { classifyNpmChannel, inspectDockerReleaseTags, inspectNpmReleaseState, run } from './publish.mjs';
+import {
+  classifyNpmChannel,
+  compareReleaseVersions,
+  inspectDockerReleaseTags,
+  inspectNpmReleaseState,
+  run,
+} from './publish.mjs';
 
 const changelogPath = path.join(repositoryRoot, 'CHANGELOG.md');
 
@@ -616,12 +628,16 @@ export function validateChangelogEntry(changelog, version) {
   const versionLink = changelog.match(new RegExp(`^\\[${escapeRegExp(version)}\\]:\\s*(\\S+)\\s*$`, 'm'))?.[1];
   const releaseTarget = `v${version}`;
   const previousVersion = String.raw`v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?`;
-  const compareLink = new RegExp(
-    `^https://github\\.com/${escapeRegExp(releaseConfig.githubRepository)}/compare/${previousVersion}\\.\\.\\.${escapeRegExp(releaseTarget)}$`,
-  );
-  const firstReleaseLink = `https://github.com/${releaseConfig.githubRepository}/releases/tag/${releaseTarget}`;
+  const repositories = new Set([releaseConfig.githubRepository, releaseIdentityForVersion(version).githubRepository]);
+  const validReleaseLink = [...repositories].some((repository) => {
+    const compareLink = new RegExp(
+      `^https://github\\.com/${escapeRegExp(repository)}/compare/${previousVersion}\\.\\.\\.${escapeRegExp(releaseTarget)}$`,
+    );
+    const firstReleaseLink = `https://github.com/${repository}/releases/tag/${releaseTarget}`;
+    return compareLink.test(versionLink) || versionLink === firstReleaseLink;
+  });
   if (!versionLink) errors.push(`Add the [${version}] release link to CHANGELOG.md.`);
-  else if (!compareLink.test(versionLink) && versionLink !== firstReleaseLink) {
+  else if (!validReleaseLink) {
     errors.push(`The [${version}] release link must target ${releaseTarget} in the Fluxmail repository.`);
   }
   if (/[\u2013\u2014]/.test(section.body)) errors.push('Replace en dashes and em dashes in the changelog entry.');
@@ -894,8 +910,14 @@ async function inspectDockerDigest(image) {
   return manifest.digest;
 }
 
-async function inspectRegistryStatus(version, attempts) {
-  const name = encodeURIComponent(releaseConfig.registryName);
+function releaseIdentityForVersion(version) {
+  assertVersion(version);
+  return compareReleaseVersions(version, legacyReleaseConfig.lastVersion) <= 0 ? legacyReleaseConfig : releaseConfig;
+}
+
+export async function inspectRegistryStatus(version, attempts) {
+  const { registryName } = releaseIdentityForVersion(version);
+  const name = encodeURIComponent(registryName);
   const url = `${releaseConfig.registryUrl}/v0.1/servers/${name}/versions/${version}`;
   let delayMs = 1_000;
 
@@ -903,7 +925,7 @@ async function inspectRegistryStatus(version, attempts) {
     const response = await fetch(url);
     if (response.ok) {
       const body = await response.json();
-      const published = body.server?.name === releaseConfig.registryName && body.server?.version === version;
+      const published = body.server?.name === registryName && body.server?.version === version;
       return { published, url };
     }
     if (response.status !== 404) throw new Error(`MCP Registry returned HTTP ${response.status} for ${url}.`);

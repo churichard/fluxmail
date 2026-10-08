@@ -75,6 +75,8 @@ Container releases use `ghcr.io/fluxmailai/fluxmail`. Existing release images we
 
 The next npm release carries the MCP Registry name `io.github.fluxmailai/fluxmail`. Publish the new registry listing only after that npm version is available: already-published npm versions still identify `io.github.churichard/fluxmail` and cannot be overwritten. Keep the old registry listing available for those releases. Do not resume a pre-transfer release using the new registry identity.
 
+Release status and verification use the old registry identity through `0.12.0` and the new identity for later versions. Keep historical changelog comparison URLs unchanged so verification can match the published GitHub release notes.
+
 ## Agent-driven release flow
 
 Invoke `/release` and let the agent continue until it presents the publication approval packet. The packet includes the selected version, compatibility reasoning, complete changelog entry, pull request, release commit, npm tag, and destinations.
