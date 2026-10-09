@@ -19,6 +19,19 @@ const meta = { title: 'Fluxmail MCP', pages: ['quickstart'] };
 describe('Cline installation guide', () => {
   const section = '<details>\n<summary>Cline</summary>\n\n### Configure Cline\n\nUse read-only.\n\n</details>';
   const installationGuide = '# Install Fluxmail in Cline\n\n## Configure Cline\n\nUse read-only.\n';
+  const headingSection =
+    '### Cline\n\n#### Local connection\n\nUse read-only.\n\n#### HTTP connection\n\nUse an API key.\n';
+
+  it.each(['### Hermes\nOther client instructions', '## Test connection\nTest instructions', ''])(
+    'extracts both transports from Markdown headings before %s',
+    (nextSection) => {
+      const guide = `### Cursor\nCursor instructions\n${headingSection}\n${nextSection}`;
+      const expected =
+        '# Install Fluxmail in Cline\n\n## Local connection\n\nUse read-only.\n\n## HTTP connection\n\nUse an API key.\n';
+      expect(generateClineInstallationGuide(guide)).toBe(expected);
+      expect(() => validateClineInstallationGuide(guide, expected)).not.toThrow();
+    },
+  );
 
   it('extracts Cline instructions without including other clients', () => {
     const guide = `<details><summary>Cursor</summary>Cursor instructions</details>\n${section}\n## Test connection`;
@@ -40,12 +53,16 @@ describe('Cline installation guide', () => {
     expect(() => validateClineInstallationGuide(section, undefined)).toThrow(/llms-install.md.*pnpm docs:generate/);
   });
 
-  it.each(['', '<details><summary>Cline</summary>\n\n</details>', `${section}\n${section}`])(
-    'rejects missing, empty, or duplicate Cline sections',
-    (guide) => {
-      expect(() => generateClineInstallationGuide(guide)).toThrow(/exactly one nonempty Cline section/);
-    },
-  );
+  it.each([
+    '',
+    '<details><summary>Cline</summary>\n\n</details>',
+    `${section}\n${section}`,
+    '### Cline\n\n### Hermes\nOther client instructions',
+    `${headingSection}\n${headingSection}`,
+    `${section}\n${headingSection}`,
+  ])('rejects missing, empty, or duplicate Cline sections', (guide) => {
+    expect(() => generateClineInstallationGuide(guide)).toThrow(/exactly one nonempty Cline section/);
+  });
 });
 
 describe('public docs bundle validation', () => {

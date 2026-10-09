@@ -1,10 +1,12 @@
 ---
 title: "Deploy with Docker"
 description: "Run a persistent Fluxmail server, configure HTTPS, and verify a client connection."
-updated: '2026-10-08'
+updated: '2026-10-09'
 ---
 
 Use Docker when clients connect over a network or share one Fluxmail instance. The [Fluxmail image](https://github.com/fluxmailai/fluxmail/pkgs/container/fluxmail) supports amd64 and arm64.
+
+For remote access without maintaining a server or configuring HTTPS, use [Fluxmail Cloud](https://fluxmail.ai/docs/cloud/quickstart).
 
 You'll need Docker with Compose. For remote access, also prepare a domain pointing to your server and an HTTPS reverse proxy. If your agent should guide the setup, use the [agent-first prompt](/docs/quickstart#agent-first-setup) and tell it you want Docker.
 

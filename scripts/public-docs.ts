@@ -143,12 +143,18 @@ export function replaceGeneratedSection(source: string, marker: string, content:
 }
 
 export function generateClineInstallationGuide(clientGuide: string): string {
-  const sections = [...clientGuide.matchAll(/<details>\s*<summary>Cline<\/summary>\s*([\s\S]*?)\s*<\/details>/g)];
-  const section = sections[0]?.[1];
-  if (sections.length !== 1 || !section?.trim()) {
+  const detailsSections = [
+    ...clientGuide.matchAll(/<details>\s*<summary>Cline<\/summary>\s*([\s\S]*?)\s*<\/details>/g),
+  ].map((match) => match[1].trim().replace(/^### /gm, '## '));
+  const headingSections = [...clientGuide.matchAll(/^### Cline[ \t]*\r?\n([\s\S]*?)(?=^#{1,3} |(?![\s\S]))/gm)].map(
+    (match) => match[1].trim().replace(/^#### /gm, '## '),
+  );
+  const sections = [...detailsSections, ...headingSections];
+  const section = sections[0];
+  if (sections.length !== 1 || !section) {
     throw new Error('connect-an-mcp-client.md must contain exactly one nonempty Cline section.');
   }
-  return `# Install Fluxmail in Cline\n\n${section.trim().replace(/^### /gm, '## ')}\n`;
+  return `# Install Fluxmail in Cline\n\n${section}\n`;
 }
 
 export function validateClineInstallationGuide(clientGuide: string, installationGuide: string | undefined): void {

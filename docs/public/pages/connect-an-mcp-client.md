@@ -1,7 +1,7 @@
 ---
 title: 'Connect an MCP client'
 description: 'Choose your MCP client, configure local or HTTP access, and verify the mailbox connection.'
-updated: '2026-10-06'
+updated: '2026-10-09'
 ---
 
 Connect your client after installing Fluxmail and connecting a mailbox through the [local quickstart](/docs/quickstart) or [Docker guide](/docs/deploy-with-docker). For an agent to do the configuration, use [agent-first setup](/docs/quickstart#agent-first-setup).
@@ -47,28 +47,24 @@ Docker Compose already starts the server. The local endpoint is `http://localhos
 
 Use the local or HTTP instructions within your client's section. In HTTP examples, replace the URL with your server's endpoint and enter the key privately wherever `fmk_...` appears. Preserve other servers in your configuration.
 
-<details>
-<summary>Claude Code</summary>
+### Claude Code
 
-### Local connection
+#### Local connection
 
 ```bash
 claude mcp add fluxmail -- fluxmail stdio --profile read-only
 ```
 
-### HTTP connection
+#### HTTP connection
 
 ```bash
 claude mcp add --transport http fluxmail http://localhost:8977/mcp \
   --header "Authorization: Bearer fmk_..."
 ```
 
-</details>
+### Claude Desktop
 
-<details>
-<summary>Claude Desktop</summary>
-
-### Local connection
+#### Local connection
 
 Add this server to `claude_desktop_config.json` under Settings > Developer > Edit Config:
 
@@ -83,7 +79,7 @@ Add this server to `claude_desktop_config.json` under Settings > Developer > Edi
 }
 ```
 
-### HTTP connection
+#### HTTP connection
 
 Claude Desktop's built-in remote connectors accept OAuth or no authentication, so they cannot send a Fluxmail API key. Use the local [`mcp-remote`](https://github.com/geelen/mcp-remote) bridge.
 
@@ -114,12 +110,9 @@ Add this server to `claude_desktop_config.json` under Settings > Developer > Edi
 
 Replace `fmk_...` with the API key, then restart Claude Desktop. The bridge requires Node.js and npm on the same computer as Claude Desktop.
 
-</details>
+### ChatGPT / Codex app
 
-<details>
-<summary>ChatGPT / Codex app</summary>
-
-### Local connection
+#### Local connection
 
 Open Settings > Plugins > MCPs > Add server, then enter:
 
@@ -130,7 +123,7 @@ Open Settings > Plugins > MCPs > Add server, then enter:
 
 Save the server and restart the app.
 
-### HTTP connection
+#### HTTP connection
 
 Open Settings > Plugins > MCPs > Add server, then enter:
 
@@ -142,12 +135,9 @@ Open Settings > Plugins > MCPs > Add server, then enter:
 
 Save the server and restart the app.
 
-</details>
+### Codex CLI
 
-<details>
-<summary>Codex CLI</summary>
-
-### Local connection
+#### Local connection
 
 ```bash
 codex mcp add fluxmail -- fluxmail stdio --profile read-only
@@ -161,7 +151,7 @@ command = "fluxmail"
 args = ["stdio", "--profile", "read-only"]
 ```
 
-### HTTP connection
+#### HTTP connection
 
 Add the server to `~/.codex/config.toml`:
 
@@ -171,12 +161,9 @@ url = "http://localhost:8977/mcp"
 http_headers = { Authorization = "Bearer fmk_..." }
 ```
 
-</details>
+### Cursor
 
-<details>
-<summary>Cursor</summary>
-
-### Local connection
+#### Local connection
 
 Add the server to `~/.cursor/mcp.json`, or to `.cursor/mcp.json` in a project:
 
@@ -191,7 +178,7 @@ Add the server to `~/.cursor/mcp.json`, or to `.cursor/mcp.json` in a project:
 }
 ```
 
-### HTTP connection
+#### HTTP connection
 
 Add the server to `~/.cursor/mcp.json`, or to `.cursor/mcp.json` in a project:
 
@@ -206,10 +193,9 @@ Add the server to `~/.cursor/mcp.json`, or to `.cursor/mcp.json` in a project:
 }
 ```
 
-</details>
+### Cline
 
-<details>
-<summary>Cline</summary>
+#### Local connection
 
 Open Cline's MCP Servers view, edit its MCP settings, and add this entry under `mcpServers` alongside any existing servers:
 
@@ -234,12 +220,29 @@ cline mcp install fluxmail -- fluxmail stdio --profile read-only
 
 Review and save the configuration in the add-server wizard.
 
-</details>
+#### HTTP connection
 
-<details>
-<summary>Hermes</summary>
+Open Cline's MCP settings and add this entry under `mcpServers` alongside any existing servers:
 
-### Local connection
+```json
+{
+  "mcpServers": {
+    "fluxmail": {
+      "type": "streamableHttp",
+      "url": "http://localhost:8977/mcp",
+      "headers": { "Authorization": "Bearer fmk_..." }
+    }
+  }
+}
+```
+
+Set `type` to `streamableHttp`; omitting it makes Cline use the legacy SSE transport. Replace the URL with your server's endpoint and enter your Fluxmail API key privately in place of `fmk_...`.
+
+For Cline CLI, run `cline mcp` in an interactive terminal, add a server, choose Streamable HTTP, and enter the same URL and Authorization header.
+
+### Hermes
+
+#### Local connection
 
 Add the server to `~/.hermes/config.yaml`, then run `/reload-mcp`. You can also use the dashboard opened by `hermes dashboard`.
 
@@ -250,7 +253,7 @@ mcp_servers:
     args: ['stdio', '--profile', 'read-only']
 ```
 
-### HTTP connection
+#### HTTP connection
 
 Add the server to `~/.hermes/config.yaml`, then run `/reload-mcp`:
 
@@ -262,62 +265,15 @@ mcp_servers:
       Authorization: 'Bearer fmk_...'
 ```
 
-</details>
+### ChatGPT.com
 
-<details>
-<summary>Gemini CLI</summary>
+To use Fluxmail from ChatGPT.com without running a server, use [Fluxmail Cloud](https://cloud.fluxmail.ai). Cloud provides a hosted MCP endpoint with OAuth sign-in. Follow the [ChatGPT.com setup guide](https://fluxmail.ai/docs/cloud/mcp#chatgpt-remote-app). Your ChatGPT account needs access to developer mode, and organization policies may require administrator setup.
 
-### Local connection
-
-Add the server to `~/.gemini/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "fluxmail": {
-      "command": "fluxmail",
-      "args": ["stdio", "--profile", "read-only"]
-    }
-  }
-}
-```
-
-### HTTP connection
-
-Add the server to `~/.gemini/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "fluxmail": {
-      "httpUrl": "http://localhost:8977/mcp",
-      "headers": { "Authorization": "Bearer fmk_..." }
-    }
-  }
-}
-```
-
-</details>
-
-<details>
-<summary>Other clients</summary>
+### Other clients
 
 For stdio, register `fluxmail` as the command and `stdio`, `--profile`, and `read-only` as its arguments. Add mailbox restrictions with repeated `--account` options.
 
 For HTTP, use your server's `/mcp` URL and send `Authorization: Bearer fmk_...`. Clients that cannot supply an authorization header are not compatible with the HTTP endpoint without a suitable bridge.
-
-</details>
-
-<details>
-<summary>ChatGPT.com developer mode</summary>
-
-The ChatGPT / Codex app entry above configures Codex inside the ChatGPT app. Developer-mode apps used from regular ChatGPT chats have separate settings.
-
-ChatGPT cannot connect directly to `localhost`. For a local Docker server, use OpenAI's [Secure MCP Tunnel](https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt-beta#h_8e76ef4c26). You can also deploy Fluxmail at a public HTTPS URL.
-
-ChatGPT connectors currently support OAuth or no authentication, so they cannot send Fluxmail's API key. Fluxmail does not offer an unauthenticated MCP mode. ChatGPT developer-mode apps are not compatible until Fluxmail supports MCP OAuth.
-
-</details>
 
 ## Test the connection
 

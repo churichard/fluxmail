@@ -1,12 +1,14 @@
 ---
 title: 'Connect Outlook / Exchange'
 description: 'Register a Microsoft Entra application for Microsoft 365 or Outlook.com.'
-updated: '2026-10-06'
+updated: '2026-10-09'
 ---
 
 Fluxmail connects to Microsoft 365 and Outlook.com through Microsoft Graph. You create the Microsoft Entra app registration, and Fluxmail stores its OAuth tokens on the server you run.
 
 This integration supports Exchange Online mailboxes in Microsoft 365 and personal Outlook.com accounts, including Hotmail addresses. For an on-premises Exchange server without Microsoft Graph access, use [IMAP and SMTP](/docs/connect-an-imap-mailbox).
+
+With [Fluxmail Cloud](https://fluxmail.ai/docs/cloud/mailboxes#outlook-and-microsoft-accounts), you can connect through Microsoft sign-in without registering your own Entra app.
 
 Before registering the app, decide whether you need a local or hosted callback. Local CLI and Docker connections use a public client without a secret. A remote server with a public HTTPS URL uses a Web callback and client secret. The steps below show both paths.
 
