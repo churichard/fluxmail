@@ -12,6 +12,8 @@ export {
   ADMIN_CAPABILITIES,
   NAMED_PERMISSION_PROFILES,
   FULL_PERMISSION_POLICY,
+  ALL_MAIL_PERMISSION_POLICY,
+  DEFAULT_PERMISSION_POLICY,
   permissionPolicyForProfile,
   customPermissionPolicy,
   type McpCapability,

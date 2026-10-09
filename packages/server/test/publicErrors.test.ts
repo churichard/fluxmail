@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EmailError } from '@fluxmail/core';
-import { ClientInputError, publicError } from '../src/service/publicErrors.js';
+import { ClientInputError, MissingCapabilityError, publicError } from '../src/service/publicErrors.js';
 
 describe('public errors', () => {
   it('keeps Fluxmail input guidance and search diagnostics', () => {
@@ -12,6 +12,17 @@ describe('public errors', () => {
       message: 'Choose one sender.',
       requestId: 'request_1',
       data: { diagnostics },
+    });
+  });
+
+  it('keeps missing capability guidance', () => {
+    expect(
+      publicError(new MissingCapabilityError('This API key does not allow: mail.send.', ['mail.send']), 'request_3'),
+    ).toEqual({
+      code: 'permission_denied',
+      message: 'This API key does not allow: mail.send.',
+      requestId: 'request_3',
+      data: { missingCapabilities: ['mail.send'] },
     });
   });
 

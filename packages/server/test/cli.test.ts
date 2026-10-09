@@ -20,7 +20,13 @@ import { setupInitialAdmin } from '../src/auth.js';
 import { saveLocalInstance, saveRemoteInstance, saveSessionToken } from '../src/cliInstances.js';
 import { InstanceConfigStore } from '../src/instanceConfig.js';
 import { getLogger } from '../src/logging.js';
-import { customPermissionPolicy, permissionPolicyForProfile } from '../src/permissions.js';
+import {
+  FULL_PERMISSION_POLICY,
+  customPermissionPolicy,
+  enableCapabilitiesInstructions,
+  permissionOptionsGranting,
+  permissionPolicyForProfile,
+} from '../src/permissions.js';
 import { encryptString } from '../src/storage/crypto.js';
 import {
   accountCredentials,
@@ -1383,9 +1389,57 @@ describe('API key permission options', () => {
     );
   });
 
-  it('keeps full as the default mail profile when creating an administrative key', () => {
+  it('suggests profiles while keeping deletion explicit and preserving custom grants', () => {
+    const readOnly = permissionPolicyForProfile('read-only');
+    expect(permissionOptionsGranting(readOnly, ['mail.drafts', 'mail.organize', 'mail.trash'])).toBe(
+      '--profile read-write',
+    );
+    for (const capability of ['mail.drafts', 'mail.organize', 'mail.trash'] as const) {
+      expect(permissionOptionsGranting(readOnly, [capability])).toBe('--profile read-write');
+    }
+    expect(permissionOptionsGranting(readOnly, ['mail.send'])).toBe('--profile full');
+    expect(permissionOptionsGranting(readOnly, ['mail.delete'])).toBe('--profile read-only --allow mail.delete');
+    expect(permissionOptionsGranting(readOnly, ['mail.send', 'mail.delete'])).toBe(
+      '--profile full --allow mail.delete',
+    );
+    const readWriteAdmin = permissionPolicyForProfile('read-write', ['admin.audit']);
+    expect(permissionOptionsGranting(readWriteAdmin, ['mail.send'])).toBe('--profile full --admin admin.audit');
+    expect(permissionOptionsGranting(FULL_PERMISSION_POLICY, ['mail.delete'])).toBe(
+      '--profile full --allow mail.delete',
+    );
+    expect(permissionOptionsGranting(customPermissionPolicy(['mail.read', 'admin.audit']), ['mail.drafts'])).toBe(
+      '--allow mail.read --allow mail.drafts --allow admin.audit',
+    );
+    expect(permissionOptionsGranting(customPermissionPolicy(['mail.read', 'mail.delete']), ['mail.send'])).toBe(
+      '--allow mail.read --allow mail.delete --allow mail.send',
+    );
+    expect(enableCapabilitiesInstructions(readOnly, ['mail.send'], undefined)).toBe(
+      'To enable it, change the Fluxmail permissions for this connection.',
+    );
+  });
+
+  it('adds --allow capabilities to a named profile', () => {
+    expect(permissionPolicyFromOptions({ profile: 'full', allow: ['mail.delete'] })).toEqual(
+      customPermissionPolicy(['mail.read', 'mail.drafts', 'mail.organize', 'mail.trash', 'mail.send', 'mail.delete']),
+    );
+    expect(permissionPolicyFromOptions({ profile: 'read-only', allow: ['mail.send'], admin: ['admin.audit'] })).toEqual(
+      customPermissionPolicy(['mail.read', 'mail.send', 'admin.audit']),
+    );
+    expect(
+      permissionPolicyForUpdate({ profile: 'full', allow: ['mail.delete'] }, { permissionProfile: 'full' }),
+    ).toEqual(customPermissionPolicy([...FULL_PERMISSION_POLICY.capabilities, 'mail.delete']));
+    expect(() => permissionPolicyFromOptions({ profile: 'full', allow: ['mail.unknown'] })).toThrow(
+      /Unknown capability: mail.unknown/,
+    );
+    expect(() => permissionPolicyFromOptions({ allow: ['mail.read'], admin: ['admin.audit'] })).toThrow(
+      /--admin can only be combined with a named --profile/,
+    );
+  });
+
+  it('uses read-only as the default mail profile', () => {
+    expect(permissionPolicyFromOptions({ allow: [] })).toEqual(permissionPolicyForProfile('read-only'));
     expect(permissionPolicyFromOptions({ allow: [], admin: ['admin.accounts'] })).toEqual(
-      permissionPolicyForProfile('full', ['admin.accounts']),
+      permissionPolicyForProfile('read-only', ['admin.accounts']),
     );
   });
 });

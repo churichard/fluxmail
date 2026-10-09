@@ -7,6 +7,13 @@ export class ClientInputError extends EmailError {
   }
 }
 
+/** A capability check failure whose message names the missing capabilities and how to enable them. */
+export class MissingCapabilityError extends EmailError {
+  constructor(message: string, missingCapabilities: readonly string[]) {
+    super('permission_denied', message, { missingCapabilities: [...missingCapabilities] });
+  }
+}
+
 const MESSAGES: Record<string, string> = {
   auth_expired: 'The account needs to be connected again.',
   rate_limited: 'The mail provider is rate limiting requests. Try again later.',
@@ -32,10 +39,13 @@ export function publicError(
   const code = isEmailError(error) ? error.code : 'internal';
   const retryAfterMs = isEmailError(error) ? error.data?.retryAfterMs : undefined;
   const diagnostics = error instanceof ClientInputError ? error.data?.diagnostics : undefined;
+  const missingCapabilities = error instanceof MissingCapabilityError ? error.data?.missingCapabilities : undefined;
+  const callerSafe = error instanceof ClientInputError || error instanceof MissingCapabilityError;
   return {
     code,
-    message: error instanceof ClientInputError ? error.message : (MESSAGES[code] ?? MESSAGES.internal!),
+    message: callerSafe ? error.message : (MESSAGES[code] ?? MESSAGES.internal!),
     requestId,
+    ...(missingCapabilities !== undefined ? { data: { missingCapabilities } } : {}),
     ...(diagnostics !== undefined ||
     (typeof retryAfterMs === 'number' && Number.isFinite(retryAfterMs) && retryAfterMs >= 0)
       ? {

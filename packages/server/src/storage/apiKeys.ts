@@ -5,7 +5,7 @@ import { apiKeys, type FluxmailDb } from './db.js';
 import { getMember, type MemberRole } from './members.js';
 import {
   deserializePermissionPolicy,
-  FULL_PERMISSION_POLICY,
+  DEFAULT_PERMISSION_POLICY,
   normalizePermissionPolicy,
   serializeCustomCapabilities,
   serializeSupplementalCapabilities,
@@ -56,7 +56,7 @@ export function createApiKey(
   db: FluxmailDb,
   name: string,
   memberId: string,
-  permissions: PermissionPolicy = FULL_PERMISSION_POLICY,
+  permissions: PermissionPolicy = DEFAULT_PERMISSION_POLICY,
   accountIds: readonly string[] | null = null,
 ): { key: string; info: ApiKeyInfo } {
   if (!memberId) throw new EmailError('invalid_request', 'A member is required when creating an API key.');

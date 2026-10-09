@@ -159,7 +159,7 @@ describe('scheduled delivery process handoff', { timeout: 20_000 }, () => {
     const worker = launch(['scheduled', 'run'], f.env);
     await vi.waitFor(() => expect(worker.stdout()).toContain('scheduled delivery running'), { timeout: 8_000 });
     expect(worker.child.exitCode).toBeNull();
-    const mcp = await stdio(f.env);
+    const mcp = await stdio(f.env, ['--profile', 'full']);
     let id: string;
     try {
       id = await schedule(mcp.client);
@@ -179,7 +179,7 @@ describe('scheduled delivery process handoff', { timeout: 20_000 }, () => {
     'recovers after a process crash at %s without replacing an unresolved delivery',
     async (crashPoint) => {
       const f = await setup();
-      const mcp = await stdio(f.env);
+      const mcp = await stdio(f.env, ['--profile', 'full']);
       let id: string;
       try {
         id = await schedule(mcp.client);

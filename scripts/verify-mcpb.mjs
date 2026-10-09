@@ -15,7 +15,8 @@ const manifest = JSON.parse(await readFile(path.join(extractedDirectory, 'manife
 assert.equal(manifest.version, expectedVersion);
 assert.deepEqual(manifest.compatibility.platforms, ['darwin', 'win32', 'linux']);
 assert.equal(manifest.server.mcp_config.args[0], '${__dirname}/' + manifest.server.entry_point);
-assert.deepEqual(manifest.server.mcp_config.args.slice(1), ['stdio']);
+assert.deepEqual(manifest.server.mcp_config.args.slice(1), ['stdio', '--profile', '${user_config.permission_profile}']);
+assert.equal(manifest.user_config.permission_profile.default, 'read-only');
 
 const nativePackages = {
   'darwin-arm64': 'darwin-arm64',
@@ -78,7 +79,11 @@ console.log('Extracted MCPB passed CLI, native dependency, and MCP tool checks.'
 
 function checkTools(entryPoint, dataDirectory, expectedTools) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [entryPoint, 'stdio'], {
+    const allowAll = ['read', 'drafts', 'organize', 'trash', 'delete', 'send'].flatMap((name) => [
+      '--allow',
+      `mail.${name}`,
+    ]);
+    const child = spawn(process.execPath, [entryPoint, 'stdio', ...allowAll], {
       env: { ...process.env, FLUXMAIL_DATA_DIR: dataDirectory, FLUXMAIL_TELEMETRY: '0' },
       stdio: ['pipe', 'pipe', 'pipe'],
     });

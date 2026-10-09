@@ -8,7 +8,12 @@ import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv
 import { EmailError } from '@fluxmail/core';
 import type { EmailService } from '../src/service/emailService.js';
 import { buildMcpServer, toSendRequest, type McpServerOptions } from '../src/mcp/buildServer.js';
-import { customPermissionPolicy, permissionPolicyForProfile } from '../src/permissions.js';
+import {
+  ALL_MAIL_PERMISSION_POLICY,
+  FULL_PERMISSION_POLICY,
+  customPermissionPolicy,
+  permissionPolicyForProfile,
+} from '../src/permissions.js';
 import { createTelemetry, type Telemetry } from '../src/telemetry.js';
 import type { Logger } from '../src/logging.js';
 
@@ -43,7 +48,7 @@ function loggerSpy(): { logger: Logger; warn: ReturnType<typeof vi.fn>; error: R
 }
 
 async function connectMcp(service: Partial<EmailService>, options?: McpServerOptions) {
-  const server = buildMcpServer(service as EmailService, options);
+  const server = buildMcpServer(service as EmailService, { permissions: FULL_PERMISSION_POLICY, ...options });
   const client = new Client({ name: 'test', version: '0.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -271,6 +276,10 @@ describe('MCP permissions', () => {
     return (await client.listTools()).tools.map((tool) => tool.name).sort();
   }
 
+  it('defaults to the read-only profile', async () => {
+    await expect(toolNames({ permissions: undefined })).resolves.toEqual(readTools);
+  });
+
   it('advertises only read tools for the read-only profile', async () => {
     await expect(toolNames({ permissions: permissionPolicyForProfile('read-only') })).resolves.toEqual(readTools);
   });
@@ -323,6 +332,18 @@ describe('MCP permissions', () => {
     });
     expect(deleted.isError).toBe(true);
     expect(modify).toHaveBeenCalledTimes(2);
+  });
+
+  it('requires an explicit mail.delete grant for permanent deletion', async () => {
+    const modify = vi.fn().mockResolvedValue({ succeededIds: ['m1'], failed: [], uncertainIds: [] });
+    const actionsFor = async (options: McpServerOptions) => {
+      const client = await connectMcp({ enforceQuota: () => undefined, modify } as Partial<EmailService>, options);
+      const tool = (await client.listTools()).tools.find((item) => item.name === 'modify_emails')!;
+      return (tool.inputSchema.properties!.action as { enum: string[] }).enum;
+    };
+    expect(FULL_PERMISSION_POLICY.capabilities).not.toContain('mail.delete');
+    await expect(actionsFor({ permissions: FULL_PERMISSION_POLICY })).resolves.not.toContain('delete');
+    await expect(actionsFor({ permissions: ALL_MAIL_PERMISSION_POLICY })).resolves.toContain('delete');
   });
 
   it('uses mail.organize for reversible message organization', async () => {
@@ -1007,11 +1028,67 @@ describe('scheduled send tools', () => {
   });
 });
 
+describe('permission instructions', () => {
+  it('tells the agent how to enable disabled actions for a stdio connection', async () => {
+    const client = await connectMcp(
+      { enforceQuota: () => undefined },
+      {
+        permissions: permissionPolicyForProfile('read-only'),
+        transport: 'stdio',
+      },
+    );
+    const instructions = client.getInstructions()!;
+    expect(instructions).toContain('Tools for the disabled actions below are not available.');
+    expect(instructions).toContain('Do not use another tool or email connector instead.');
+    expect(instructions).toContain('explicit approval for that permission change.');
+    expect(instructions).toContain('A request to perform an email action does not authorize changing permissions.');
+    expect(instructions).toContain(
+      '- mail.send (Send or schedule messages). To enable it, start "fluxmail stdio --profile full"',
+    );
+    expect(instructions).toContain('- mail.drafts (Create, update, and delete drafts; cancel scheduled sends).');
+    expect(instructions).not.toContain('- mail.read');
+  });
+
+  it('names the API key command for an HTTP connection', async () => {
+    const client = await connectMcp(
+      { enforceQuota: () => undefined },
+      {
+        permissions: permissionPolicyForProfile('read-write'),
+        transport: 'http',
+        permissionSource: { kind: 'api_key', keyId: 'key_123' },
+      },
+    );
+    const instructions = client.getInstructions()!;
+    expect(instructions).toContain(
+      '- mail.send (Send or schedule messages). To enable it, an administrator can run ' +
+        '"fluxmail apikey permissions key_123 --profile full".',
+    );
+    expect(instructions).toContain(
+      '- mail.delete (Permanently delete messages). To enable it, an administrator can run ' +
+        '"fluxmail apikey permissions key_123 --profile read-write --allow mail.delete".',
+    );
+    expect(instructions).not.toContain('- mail.trash');
+  });
+
+  it('lists only permanent deletion for the full profile', async () => {
+    const client = await connectMcp({ enforceQuota: () => undefined }, { permissions: FULL_PERMISSION_POLICY });
+    const instructions = client.getInstructions()!;
+    expect(instructions).toContain('- mail.delete (Permanently delete messages).');
+    expect(instructions).not.toContain('- mail.send');
+  });
+
+  it('adds nothing when every action is allowed', async () => {
+    const client = await connectMcp({ enforceQuota: () => undefined }, { permissions: ALL_MAIL_PERMISSION_POLICY });
+    expect(client.getInstructions()).not.toContain('limited permissions');
+  });
+});
+
 describe('reply permissions', () => {
   it('requires read access for reply drafts', async () => {
     const createDraft = vi.fn();
     const client = await connectMcp({ enforceQuota: () => undefined, createDraft } as Partial<EmailService>, {
       permissions: customPermissionPolicy(['mail.drafts']),
+      transport: 'stdio',
     });
 
     const result = await client.callTool({
@@ -1020,6 +1097,14 @@ describe('reply permissions', () => {
     });
     expect(result.isError).toBe(true);
     expect(createDraft).not.toHaveBeenCalled();
+    expect(JSON.parse((result.content as { text: string }[])[0]!.text)).toMatchObject({
+      error: 'permission_denied',
+      message:
+        'This MCP connection does not allow: mail.read. To enable it, start ' +
+        '"fluxmail stdio --allow mail.read --allow mail.drafts" in the MCP client configuration, ' +
+        'replacing any existing --profile or --allow options, then restart the client.',
+      data: { missingCapabilities: ['mail.read'] },
+    });
   });
 
   it('uses the normal create and update capabilities for reply drafts', async () => {

@@ -49,7 +49,8 @@ import type { ImapSecurity } from '@fluxmail/provider-imap';
 import {
   customPermissionPolicy,
   ADMIN_CAPABILITIES,
-  FULL_PERMISSION_POLICY,
+  DEFAULT_PERMISSION_POLICY,
+  DEFAULT_PERMISSION_PROFILE,
   isNamedPermissionProfile,
   MCP_CAPABILITIES,
   NAMED_PERMISSION_PROFILES,
@@ -158,10 +159,7 @@ function accountIdsFromRefs(ctx: ReturnType<typeof createContext>, refs: readonl
 export function permissionPolicyFromOptions(opts: PermissionOptions, requireSelection = false): PermissionPolicy {
   try {
     const supplemental = opts.admin ?? [];
-    if (opts.profile && opts.allow.length) {
-      throw new Error('--profile cannot be combined with --allow.');
-    }
-    if (opts.allow.length && supplemental.length) {
+    if (!opts.profile && opts.allow.length && supplemental.length) {
       throw new Error(
         '--admin can only be combined with a named --profile. Put admin capabilities in --allow for a custom policy.',
       );
@@ -170,12 +168,14 @@ export function permissionPolicyFromOptions(opts: PermissionOptions, requireSele
       if (!isNamedPermissionProfile(opts.profile)) {
         throw new Error(`Unknown profile "${opts.profile}". Expected one of: ${NAMED_PERMISSION_PROFILES.join(', ')}.`);
       }
-      return permissionPolicyForProfile(opts.profile, supplemental);
+      const named = permissionPolicyForProfile(opts.profile, supplemental);
+      // --allow adds capabilities to the profile, which makes the result a custom policy.
+      return opts.allow.length ? customPermissionPolicy([...named.capabilities, ...opts.allow]) : named;
     }
     if (opts.allow.length) return customPermissionPolicy(opts.allow);
-    if (supplemental.length) return permissionPolicyForProfile('full', supplemental);
+    if (supplemental.length) return permissionPolicyForProfile(DEFAULT_PERMISSION_PROFILE, supplemental);
     if (requireSelection) throw new Error('Choose --profile or at least one --allow capability.');
-    return FULL_PERMISSION_POLICY;
+    return DEFAULT_PERMISSION_POLICY;
   } catch (error) {
     throw new EmailError('invalid_request', error instanceof Error ? error.message : String(error));
   }
@@ -983,7 +983,12 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
     .description('Run as a stdio MCP server (for Claude Desktop / Claude Code local config)')
     .option('--account <account>', 'Limit access to one mailbox; repeat as needed', collectOption, [])
     .option('--profile <profile>', `Tool profile: ${NAMED_PERMISSION_PROFILES.join(', ')}`)
-    .option('--allow <capability>', 'Allow one MCP capability; repeat as needed', collectOption, [])
+    .option(
+      '--allow <capability>',
+      'Allow one MCP capability, or add it to --profile; repeat as needed',
+      collectOption,
+      [],
+    )
     .action(async (opts: ScopedMcpOptions) => {
       const startupPhase = (
         phase: 'permissions' | 'instance' | 'context' | 'authentication' | 'account_scope' | 'transport' | 'ready',
@@ -1043,6 +1048,12 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
         // stdout belongs to the MCP protocol; log to stderr only.
         ctx.licenseController.start();
         console.error('Fluxmail MCP server running on stdio');
+        if (!opts.profile && !opts.allow.length) {
+          console.error(
+            'No permission profile selected, so this connection is read-only. ' +
+              'Add --profile or --allow to enable drafts, organizing, or sending: https://fluxmail.ai/docs/permissions',
+          );
+        }
         warnLicense(ctx.db);
         const pending = permissions.capabilities.includes('mail.read')
           ? scopedService.listScheduled().filter((send) => send.status === 'pending').length
@@ -1827,7 +1838,12 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
     .option('--member <member>', 'Admin only: issue the key to another member')
     .option('--account <account>', 'Limit the key to one mailbox; repeat as needed', collectOption, [])
     .option('--profile <profile>', `Tool profile: ${NAMED_PERMISSION_PROFILES.join(', ')}`)
-    .option('--allow <capability>', 'Allow one capability in a custom policy; repeat as needed', collectOption, [])
+    .option(
+      '--allow <capability>',
+      'Allow one capability in a custom policy, or add it to --profile; repeat as needed',
+      collectOption,
+      [],
+    )
     .option('--admin <capability>', 'Add one admin capability to a named profile; repeat as needed', collectOption, [])
     .description('Create an API key (shown once)')
     .action(async (opts: { name: string; member?: string; account: string[] } & PermissionOptions) => {
@@ -1935,7 +1951,12 @@ export function createCliProgram(options: CliProgramOptions = {}): Command {
     .command('permissions')
     .argument('<keyId>')
     .option('--profile <profile>', `Tool profile: ${NAMED_PERMISSION_PROFILES.join(', ')}`)
-    .option('--allow <capability>', 'Allow one capability in a custom policy; repeat as needed', collectOption, [])
+    .option(
+      '--allow <capability>',
+      'Allow one capability in a custom policy, or add it to --profile; repeat as needed',
+      collectOption,
+      [],
+    )
     .option('--admin <capability>', 'Add one admin capability to a named profile; repeat as needed', collectOption, [])
     .description('Change the permissions for an API key')
     .action(async (keyId: string, opts: PermissionOptions) => {

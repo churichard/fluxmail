@@ -21,7 +21,7 @@ import type { EmailService, SendInput } from '../service/emailService.js';
 import type { FluxmailDb } from '../storage/db.js';
 import { authenticateBearer, isBootstrapComplete, type Principal } from '../auth.js';
 import { completeIdempotencyKey, lookupIdempotencyKey, reserveIdempotencyKey } from '../storage/restIdempotency.js';
-import { type Capability, type McpCapability } from '../permissions.js';
+import { enableCapabilitiesInstructions, type Capability, type McpCapability } from '../permissions.js';
 import { allowsCapability } from '../authorization.js';
 import { captureOperation, type OperationOutcome, type Telemetry, type TelemetryProperties } from '../telemetry.js';
 import { VERSION } from '../version.js';
@@ -30,7 +30,7 @@ import { recordAdminAuditEvent } from '../storage/adminAudit.js';
 import { identityOperationId, registerIdentityRoutes } from './identity.js';
 import { operationProperties } from './operationTelemetry.js';
 import { logCodedFailure, logFailure, type Logger } from '../logging.js';
-import { ClientInputError, publicError } from '../service/publicErrors.js';
+import { ClientInputError, MissingCapabilityError, publicError } from '../service/publicErrors.js';
 
 interface RestVariables {
   restAuth: Principal;
@@ -742,7 +742,12 @@ async function runJson(
     const auth = c.get('restAuth');
     const missing = options.capabilities.filter((capability) => !allowsCapability(auth, capability));
     if (missing.length) {
-      throw new EmailError('permission_denied', `This API key does not allow: ${missing.join(', ')}.`);
+      const source = auth.kind === 'api_key' ? { kind: 'api_key' as const, keyId: auth.keyId } : undefined;
+      throw new MissingCapabilityError(
+        `This API key does not allow: ${missing.join(', ')}. ` +
+          enableCapabilitiesInstructions(auth.permissions, missing, source),
+        missing,
+      );
     }
     const service = c.get('restService');
 
