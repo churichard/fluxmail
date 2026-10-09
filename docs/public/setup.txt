@@ -50,12 +50,16 @@ Use the user's existing choice without asking again. Explain the profiles:
   attachments.
 - read-write: read mail, manage drafts, organize messages, and move mail
   into or out of Trash.
-- full: all email capabilities, including sending and permanent deletion
-  where the provider supports them.
+- full: all email capabilities except permanent deletion, including
+  sending mail.
 
 Custom policies can grant individual capabilities. Read the permissions
-guide before constructing one. Set the chosen profile explicitly; omitting
-it grants full access. Do not add permissions solely to run verification.
+guide before constructing one. Set the chosen profile explicitly. With no
+--profile or --allow options, stdio connections and new API keys default to
+read-only. Permanent deletion requires an explicit mail.delete grant where
+the provider supports it. Add it to a profile with --profile <profile>
+--allow mail.delete only if the user chose permanent deletion. Do not add
+permissions solely to run verification.
 For stdio, use repeated --account options to limit mailbox access. For HTTP,
 create a key with repeated --account options for the selected mailboxes.
 The member's mailbox access also applies.
