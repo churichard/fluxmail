@@ -54,7 +54,7 @@ jobs:
           version=$(node -p "require('./packages/server/package.json').version")
           mkdir -p .context/mcpb/extracted
           unzip -qq ".context/mcpb/fluxmail-$version.mcpb" -d .context/mcpb/extracted
-          docker run --rm -v "$PWD:/workspace" -w /workspace node:22-alpine node scripts/verify-mcpb.mjs .context/mcpb/extracted "$version"
+          docker run --rm -v "$PWD:/workspace" -w /workspace public.ecr.aws/docker/library/node:22-alpine node scripts/verify-mcpb.mjs .context/mcpb/extracted "$version"
       - uses: actions/upload-artifact@v4
         if: steps.changes.outputs.cross-platform == 'true'
         with:
@@ -99,4 +99,4 @@ jobs:
         shell: bash
         run: |
           version=$(node -p "require('./packages/server/package.json').version")
-          docker run --rm -v "$PWD:/workspace" -w /workspace node:22-alpine node scripts/verify-mcpb.mjs .context/mcpb/extracted "$version"
+          docker run --rm -v "$PWD:/workspace" -w /workspace public.ecr.aws/docker/library/node:22-alpine node scripts/verify-mcpb.mjs .context/mcpb/extracted "$version"
