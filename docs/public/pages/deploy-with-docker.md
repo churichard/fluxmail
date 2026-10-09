@@ -112,12 +112,12 @@ A successful folder listing confirms provider access without changing mail.
 
 ## 5. Create a client key
 
-Choose the client's [permission profile](/docs/permissions) and mailbox scope. This example creates read-only access to one mailbox:
+We recommend Full access for normal MCP use. It allows reading, sending, scheduling, drafts, organization, and moving mail into or out of Trash. It excludes permanent deletion. Choose `read-write` or `read-only` for [restricted access](/docs/permissions). Creating a key without permission options still grants read-only access. This example grants Full access to one mailbox:
 
 ```bash
 docker compose exec fluxmail \
   fluxmail apikey create --name my-agent \
-  --profile read-only --account <account-id>
+  --profile full --account <account-id>
 ```
 
 Fluxmail shows the key once. Save it in the client's secret store or private configuration. Use a separate key for each client so it can be revoked independently.

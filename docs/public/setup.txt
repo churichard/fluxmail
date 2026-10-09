@@ -43,20 +43,25 @@ Fluxmail authentication to make it connect.
 
 ## Choose access
 
-Ask which mailboxes the agent should reach and what it should be able to do.
-Use the user's existing choice without asking again. Explain the profiles:
+Recommend full for normal MCP use and explain what it grants before saving
+configuration. Offer read-write and read-only for restricted access. Ask
+which profile and mailboxes the agent should use, unless the user already
+supplied that choice. Obtain the user's choice before saving configuration.
+When reconnecting a client, preserve its existing permissions and mailbox
+restrictions unless the user requests a change. Explain the profiles:
 
 - read-only: read and search mail, inspect folders and labels, and download
   attachments.
 - read-write: read mail, manage drafts, organize messages, and move mail
   into or out of Trash.
-- full: all email capabilities except permanent deletion, including
-  sending mail.
+- full: read and search mail, send and schedule messages, manage drafts,
+  organize mail, and move messages into or out of Trash. It excludes
+  permanent deletion.
 
 Custom policies can grant individual capabilities. Read the permissions
-guide before constructing one. Set the chosen profile explicitly. With no
---profile or --allow options, stdio connections and new API keys default to
-read-only. Permanent deletion requires an explicit mail.delete grant where
+guide before constructing one. Set the chosen profile explicitly. Bare
+stdio and API-key creation without permission options grant read-only
+access. Permanent deletion requires an explicit mail.delete grant where
 the provider supports it. Add it to a profile with --profile <profile>
 --allow mail.delete only if the user chose permanent deletion. Do not add
 permissions solely to run verification.
@@ -64,14 +69,16 @@ For stdio, use repeated --account options to limit mailbox access. For HTTP,
 create a key with repeated --account options for the selected mailboxes.
 The member's mailbox access also applies.
 
-## Before starting an existing instance
+## Before starting scheduled delivery
 
-Starting fluxmail stdio or fluxmail serve starts the instance-wide send
-scheduler. Docker's normal startup runs serve too. Overdue scheduled mail
-can send immediately, even if the new client has read-only access or is
+Stdio can create and inspect schedules within the client's permissions,
+but it does not deliver them. Delivery requires fluxmail serve or fluxmail
+scheduled run with the same data directory. Docker's normal startup runs
+serve. These workers deliver instance-wide schedules: overdue mail can
+send immediately, even if the new client has read-only access or is
 restricted to a different mailbox.
 
-Before starting or restarting an existing instance, inspect its pending
+Before starting or restarting a delivery worker, inspect its pending
 schedules without starting the server. For a local instance, use the saved
 member session and run this one-shot command for each accessible mailbox:
 
@@ -89,9 +96,9 @@ the server to log in. Let the user enter the password privately.
 
 If the review confirms there are no pending schedules, continue with setup.
 If schedules exist or you cannot establish full visibility, make sure
-resuming scheduled delivery is authorized before launching the instance.
-Use authorization the user has already provided. Otherwise leave startup
-pending and explain the possible sends. Do not cancel or change schedules
+resuming scheduled delivery is authorized before launching the delivery
+worker. Use authorization the user has already provided. Otherwise leave
+startup pending and explain the possible sends. Do not cancel or change schedules
 without the user's instruction. A fresh installation has no existing
 schedules to resume.
 
@@ -132,8 +139,15 @@ For stdio, launch fluxmail --instance <local-name> stdio with the selected
 profile and account options. The client must use the same operating-system
 user and data directory as setup or login. Use an absolute executable path
 when the client cannot find fluxmail. Set FLUXMAIL_DATA_DIR only when the
-installation uses a custom directory. Do not run fluxmail serve for stdio.
+installation uses a custom directory. Stdio needs no HTTP server. If the
+user wants scheduled delivery, keep fluxmail serve or fluxmail scheduled
+run running with that data directory after reviewing pending schedules.
 A remote instance profile cannot be used with stdio.
+
+The MCPB bundle uses full automatically when no permission profile is
+saved, including after an upgrade. A saved profile overrides this default.
+Save read-only explicitly to retain read-only bundle access. Use the user's
+selected profile when configuring a bundle.
 
 For HTTP, use the server's /mcp endpoint and Authorization: Bearer <key>.
 Use HTTPS for a remote server. Create a separate, named API key for this
@@ -178,8 +192,9 @@ mailbox selection rules, and these operating rules:
   get_delivery_operation to check the outcome. Do not assume operationId
   equals the idempotency key. Inspect an uncertain result before any new
   send; never retry it automatically with a fresh key.
-- Scheduled sends require Fluxmail to be running. A send missed while
-  the server is down can run when it starts again.
+- Scheduled delivery requires fluxmail serve or fluxmail scheduled run
+  with the same data directory. Stdio alone does not deliver schedules.
+  A send missed while the worker is down can run when it starts again.
 
 Keep secrets and message contents out of project instructions.
 
