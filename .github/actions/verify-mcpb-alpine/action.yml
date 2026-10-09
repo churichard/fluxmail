@@ -1,0 +1,26 @@
+name: Verify MCP bundle on Alpine
+description: Pull a Node image from a public mirror and verify the extracted bundle
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        image=''
+        for attempt in 1 2 3; do
+          for candidate in public.ecr.aws/docker/library/node:22-alpine mirror.gcr.io/library/node:22-alpine; do
+            if docker pull "$candidate"; then
+              image="$candidate"
+              break 2
+            fi
+          done
+          if [ "$attempt" -lt 3 ]; then
+            sleep "$((attempt * 5))"
+          fi
+        done
+        if [ -z "$image" ]; then
+          echo 'Could not pull the Node Alpine image from either public mirror.' >&2
+          exit 1
+        fi
+        version=$(node -p "require('./packages/server/package.json').version")
+        docker run --rm --pull=never -v "$PWD:/workspace" -w /workspace "$image" \
+          node scripts/verify-mcpb.mjs .context/mcpb/extracted "$version"

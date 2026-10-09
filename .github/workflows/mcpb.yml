@@ -33,7 +33,7 @@ jobs:
             cross_platform=true
           else
             changed=$(git diff --name-only HEAD^1 HEAD)
-            if grep -qE '^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|packages/[^/]+/package\.json|scripts/(build-mcpb|setup-mcpb-check|verify-mcpb)\.mjs|\.github/workflows/mcpb\.yml)$|^mcpb/' <<< "$changed"; then
+            if grep -qE '^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|packages/[^/]+/package\.json|scripts/(build-mcpb|setup-mcpb-check|verify-mcpb)\.mjs|\.github/workflows/mcpb\.yml)$|^mcpb/|^\.github/actions/verify-mcpb-alpine/' <<< "$changed"; then
               cross_platform=true
             else
               cross_platform=false
@@ -48,13 +48,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # The build also verifies the extracted bundle on this runner.
       - run: pnpm mcpb:build
-      - name: Verify on Alpine Linux
+      - name: Extract bundle for Alpine Linux
         shell: bash
         run: |
           version=$(node -p "require('./packages/server/package.json').version")
           mkdir -p .context/mcpb/extracted
           unzip -qq ".context/mcpb/fluxmail-$version.mcpb" -d .context/mcpb/extracted
-          docker run --rm -v "$PWD:/workspace" -w /workspace public.ecr.aws/docker/library/node:22-alpine node scripts/verify-mcpb.mjs .context/mcpb/extracted "$version"
+      - name: Verify on Alpine Linux
+        uses: ./.github/actions/verify-mcpb-alpine
       - uses: actions/upload-artifact@v4
         if: steps.changes.outputs.cross-platform == 'true'
         with:
@@ -96,7 +97,4 @@ jobs:
           node scripts/verify-mcpb.mjs .context/mcpb/extracted "$version"
       - name: Verify on Alpine Linux
         if: startsWith(matrix.os, 'ubuntu')
-        shell: bash
-        run: |
-          version=$(node -p "require('./packages/server/package.json').version")
-          docker run --rm -v "$PWD:/workspace" -w /workspace public.ecr.aws/docker/library/node:22-alpine node scripts/verify-mcpb.mjs .context/mcpb/extracted "$version"
+        uses: ./.github/actions/verify-mcpb-alpine
