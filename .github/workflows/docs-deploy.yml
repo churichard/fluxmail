@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - docs/public/**
+      - .github/workflows/docs-deploy.yml
   workflow_dispatch:
 
 permissions:
@@ -17,7 +18,7 @@ concurrency:
 
 jobs:
   dispatch:
-    name: Request documentation pull request
+    name: Request website release
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -51,25 +52,17 @@ jobs:
             exit 1
           fi
 
-      - name: Request Fluxmail deployment
+      - name: Request Fluxmail website release
         env:
-          DEPLOY_HOOK_URL: ${{ secrets.FLUXMAIL_DOCS_DEPLOY_HOOK }}
+          GH_TOKEN: ${{ secrets.FLUXMAIL_DOCS_DEPLOY_TOKEN }}
         run: |
-          if [[ -z "$DEPLOY_HOOK_URL" ]]; then
-            echo "FLUXMAIL_DOCS_DEPLOY_HOOK is not configured." >&2
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "FLUXMAIL_DOCS_DEPLOY_TOKEN is not configured. Add a token with Actions read/write access to fluxmailai/fluxmail-web." >&2
             exit 1
           fi
 
-          response=$(curl \
-            --fail-with-body \
-            --retry 3 \
-            --silent \
-            --show-error \
-            --request POST \
-            "$DEPLOY_HOOK_URL")
-          job_id=$(jq -r '.job.id // empty' <<<"$response")
-          if [[ -z "$job_id" ]]; then
-            echo "Vercel accepted the request but did not return a deployment job ID." >&2
-            exit 1
-          fi
-          echo "Queued Fluxmail documentation deployment: $job_id"
+          gh api \
+            --method POST \
+            repos/fluxmailai/fluxmail-web/actions/workflows/release.yml/dispatches \
+            --field ref=main
+          echo "Requested Fluxmail website release with the latest MCP documentation."
