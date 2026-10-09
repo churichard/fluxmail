@@ -2,6 +2,8 @@
 
 ## Local connection
 
+These commands grant Full access: reading, sending, scheduling, drafts, organization, and moving mail into or out of Trash. Full excludes permanent deletion. Use `read-write` or `read-only` for [restricted access](https://fluxmail.ai/docs/permissions).
+
 Open Cline's MCP Servers view, edit its MCP settings, and add this entry under `mcpServers` alongside any existing servers:
 
 ```json
@@ -9,7 +11,7 @@ Open Cline's MCP Servers view, edit its MCP settings, and add this entry under `
   "mcpServers": {
     "fluxmail": {
       "command": "/absolute/path/to/fluxmail",
-      "args": ["stdio", "--profile", "read-only"]
+      "args": ["stdio", "--profile", "full"]
     }
   }
 }
@@ -20,12 +22,14 @@ Replace the command with your Fluxmail executable's absolute path.
 For Cline CLI, run in an interactive terminal:
 
 ```bash
-cline mcp install fluxmail -- fluxmail stdio --profile read-only
+cline mcp install fluxmail -- fluxmail stdio --profile full
 ```
 
 Review and save the configuration in the add-server wizard.
 
 ## HTTP connection
+
+Create a named key with the [chosen permission profile and mailbox scope](https://fluxmail.ai/docs/connect-an-mcp-client#option-2-connect-over-streamable-http). We recommend `--profile full` for normal MCP use.
 
 Open Cline's MCP settings and add this entry under `mcpServers` alongside any existing servers:
 

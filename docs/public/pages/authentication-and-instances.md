@@ -1,7 +1,7 @@
 ---
 title: 'Authentication and instances'
 description: 'Log in to local and remote Fluxmail instances, enroll members, manage sessions, and create API keys.'
-updated: '2026-10-06'
+updated: '2026-10-09'
 ---
 
 Fluxmail uses member sessions for people and API keys for MCP clients, scripts, and other automation. A member session follows the member's current role and mailbox access. An API key is narrower: Fluxmail also checks its capabilities and optional mailbox allowlist on every request.
@@ -136,15 +136,17 @@ REST accepts either an API key or the `fms_...` session used by the CLI. A futur
 
 ## Local stdio
 
-`fluxmail stdio` uses the authenticated member session from the selected local profile. It does not accept a member override:
+`fluxmail stdio` uses the authenticated member session from the selected local profile. It does not accept a member override.
+
+We recommend Full access for normal MCP use. It allows reading, sending, scheduling, drafts, organization, and moving mail into or out of Trash. It excludes permanent deletion. Choose `read-write` or `read-only` for [restricted access](/docs/permissions). Bare stdio and API-key creation without permission options remain read-only. To select Full explicitly:
 
 ```bash
-fluxmail stdio --profile read-only
+fluxmail stdio --profile full
 ```
 
 Without `--instance`, stdio uses the active local profile, then a local profile named `local`, then the sole local profile under any other name. If several local profiles exist and none is active or named `local`, choose one with `fluxmail --instance <name> stdio`. An explicit `--instance` must select a local profile. Stdio does not change the active profile for other CLI commands.
 
-Stdio is local only. Use the HTTP MCP endpoint and a scoped API key for remote MCP clients.
+Stdio is local only. Use the HTTP MCP endpoint and a scoped API key for remote MCP clients. Stdio can create schedules but does not deliver them; keep `fluxmail serve` or `fluxmail scheduled run` running with the same data directory for scheduled delivery.
 
 ## Stored CLI files
 
