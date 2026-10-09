@@ -1,0 +1,40 @@
+name: Start GreenMail
+description: Run GreenMail for mail integration tests
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '21'
+    - name: Download and start GreenMail
+      shell: bash
+      run: |
+        jar="$RUNNER_TEMP/greenmail-standalone-2.1.9.jar"
+        log="$RUNNER_TEMP/greenmail.log"
+        curl --fail --location --silent --show-error --retry 3 --max-time 120 \
+          --output "$jar" \
+          https://repo.maven.apache.org/maven2/com/icegreen/greenmail-standalone/2.1.9/greenmail-standalone-2.1.9.jar
+        echo "7eeb24bfea9c63dcdd53107b48918e9f9ef3711d4f30e1a0c9e32bbc46e69e5c  $jar" | sha256sum --check
+        java -Djava.net.preferIPv4Stack=true \
+          -Dgreenmail.setup.test.all \
+          -Dgreenmail.hostname=127.0.0.1 \
+          -Dgreenmail.users=test1:pwd1@localhost,server:pwd2@localhost,cli:pwd3@localhost \
+          -jar "$jar" > "$log" 2>&1 &
+        pid=$!
+        for ((attempt = 0; attempt < 60; attempt++)); do
+          if ! kill -0 "$pid" 2>/dev/null; then
+            cat "$log"
+            exit 1
+          fi
+          if (echo > /dev/tcp/127.0.0.1/3025) 2>/dev/null \
+            && (echo > /dev/tcp/127.0.0.1/3465) 2>/dev/null \
+            && (echo > /dev/tcp/127.0.0.1/3993) 2>/dev/null; then
+            exit 0
+          fi
+          sleep 1
+        done
+        cat "$log"
+        echo 'GreenMail did not start within 60 seconds.' >&2
+        kill "$pid"
+        exit 1

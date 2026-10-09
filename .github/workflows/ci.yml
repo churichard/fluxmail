@@ -19,16 +19,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
-    services:
-      greenmail:
-        image: greenmail/standalone:2.1.9
-        env:
-          GREENMAIL_OPTS: -Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.users=test1:pwd1@localhost,server:pwd2@localhost,cli:pwd3@localhost
-        ports:
-          - 3025:3025
-          - 3465:3465
-          - 3993:3993
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -59,6 +49,9 @@ jobs:
 
       - name: Check public docs
         run: pnpm docs:check
+
+      - name: Start GreenMail
+        uses: ./.github/actions/greenmail
 
       - name: Test
         run: pnpm test
