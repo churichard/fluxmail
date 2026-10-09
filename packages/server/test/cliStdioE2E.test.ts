@@ -1,11 +1,12 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { getMcpConfigForManifest } from '@anthropic-ai/mcpb';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { setupInitialAdmin } from '../src/auth.js';
 import { saveLocalInstance, saveRemoteInstance, saveSessionToken, useInstance } from '../src/cliInstances.js';
@@ -13,6 +14,9 @@ import { createContext } from '../src/context.js';
 
 const cliPath = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
 const runFile = promisify(execFile);
+const bundleManifest = JSON.parse(
+  readFileSync(new URL('../../../mcpb/manifest.template.json', import.meta.url), 'utf8'),
+);
 
 describe('CLI stdio process integration', { timeout: 15_000 }, () => {
   afterEach(() => {
@@ -76,6 +80,89 @@ describe('CLI stdio process integration', { timeout: 15_000 }, () => {
       await transport.close();
     }
   });
+
+  it.each([
+    { savedProfile: undefined, resolvedProfile: 'full' },
+    { savedProfile: 'full', resolvedProfile: 'full' },
+    { savedProfile: 'read-write', resolvedProfile: 'read-write' },
+    { savedProfile: 'read-only', resolvedProfile: 'read-only' },
+  ])(
+    'resolves bundle profile $savedProfile to $resolvedProfile and enforces it',
+    async ({ savedProfile, resolvedProfile }) => {
+      const config = await getMcpConfigForManifest({
+        manifest: bundleManifest,
+        extensionPath: path.dirname(cliPath),
+        systemDirs: {},
+        userConfig: savedProfile ? { permission_profile: savedProfile } : {},
+        pathSeparator: path.sep,
+      });
+      expect(bundleManifest.user_config.permission_profile.required).toBe(false);
+      expect(config?.args?.slice(1)).toEqual(['stdio', '--profile', resolvedProfile]);
+
+      const env = environment();
+      const context = createContext();
+      try {
+        const setup = await setupInitialAdmin(context.db, {
+          name: 'Bundle Owner',
+          email: 'bundle-owner@example.invalid',
+          password: 'River42!',
+        });
+        saveLocalInstance('local');
+        saveSessionToken('local', setup.session.token);
+      } finally {
+        await context.registry.close();
+        (context.db as unknown as { $client: { close(): void } }).$client.close();
+      }
+
+      const transport = new StdioClientTransport({
+        command: process.execPath,
+        args: ['--import', 'tsx', cliPath, ...config!.args!.slice(1)],
+        env: Object.fromEntries(
+          Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+        ),
+        stderr: 'pipe',
+      });
+      const client = new Client({ name: 'bundle-permissions-test', version: '1.0.0' });
+      try {
+        await client.connect(transport);
+        const { tools } = await client.listTools();
+        const names = tools.map((tool) => tool.name);
+        for (const name of ['send_email', 'forward_email', 'preview_send', 'get_delivery_operation']) {
+          expect(names.includes(name)).toBe(resolvedProfile === 'full');
+        }
+        for (const name of [
+          'create_draft',
+          'get_draft',
+          'update_draft',
+          'delete_draft',
+          'cancel_scheduled_email',
+          'modify_emails',
+        ]) {
+          expect(names.includes(name)).toBe(resolvedProfile !== 'read-only');
+        }
+        if (resolvedProfile === 'full') {
+          expect(new Set(names)).toEqual(new Set(bundleManifest.tools.map((tool: { name: string }) => tool.name)));
+        }
+        if (resolvedProfile !== 'read-only') {
+          const modify = tools.find((tool) => tool.name === 'modify_emails')!;
+          const actions = (modify.inputSchema.properties!.action as { enum: string[] }).enum;
+          expect(actions).toEqual(expect.arrayContaining(['trash', 'untrash']));
+          expect(actions).not.toContain('delete');
+        }
+        const deletion = await client.callTool({
+          name: 'modify_emails',
+          arguments: { messageIds: ['nonexistent-fixture-message'], action: 'delete' },
+        });
+        expect(deletion.isError).toBe(true);
+        const accounts = await client.callTool({ name: 'list_accounts', arguments: {} });
+        expect(accounts.isError).not.toBe(true);
+        expect(accounts.structuredContent).toMatchObject({ data: [] });
+      } finally {
+        await client.close();
+        await transport.close();
+      }
+    },
+  );
 
   it('prints one structured invalid-request error without protocol output or a new store', async () => {
     const env = environment();

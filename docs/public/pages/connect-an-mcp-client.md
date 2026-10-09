@@ -15,22 +15,22 @@ Stdio can create and inspect schedules within the client's permissions, but it d
 | On the same computer as the client | stdio | Your saved local member session |
 | In Docker or on another machine | Streamable HTTP | A Fluxmail API key |
 
-Use one transport per connection. The examples below grant read-only access. Choose a different [permission profile](/docs/permissions) if you need to manage drafts, organize mail, or send messages. With no explicit profile, Fluxmail grants read-only access.
+Use one transport per connection. We recommend Full access for normal MCP use, and the examples below select it explicitly. Full allows reading, sending, scheduling, drafts, organization, and moving mail into or out of Trash. It excludes permanent deletion. Choose `read-write` or `read-only` for [restricted access](/docs/permissions). Bare stdio and API-key creation without permission options remain read-only.
 
 HTTP clients must support an Authorization header or a compatible local bridge. Check your client's entry before creating a key. Regular ChatGPT developer-mode connections cannot use Fluxmail's bearer API keys; the Codex connection is a separate client setup.
 
 ## Option 1: Connect over stdio
 
-Your client launches `fluxmail stdio --profile read-only` using the member session saved during setup. You do not need to start `fluxmail serve`. The client must run as the same operating-system user and use the same data directory as setup.
+Your client launches `fluxmail stdio --profile full` using the member session saved during setup. You do not need to start `fluxmail serve`. The client must run as the same operating-system user and use the same data directory as setup.
 
 Add `--account <account-id>` to the arguments to limit the client to one mailbox. Repeat it for several mailboxes. For multiple local instances or a custom installation path, see [Local instance settings](#local-instance-settings).
 
 ## Option 2: Connect over Streamable HTTP
 
-Create a named API key on the instance your client will use. This example grants read-only access to one mailbox:
+Create a named API key on the instance your client will use. This example grants Full access to one mailbox:
 
 ```bash
-fluxmail apikey create --name my-agent --profile read-only --account <account-id>
+fluxmail apikey create --name my-agent --profile full --account <account-id>
 ```
 
 For Docker, prefix that command with `docker compose exec fluxmail`. The key is shown once. Store it in the client's secret store or private configuration; never commit a real key or paste it into a chat.
@@ -52,7 +52,7 @@ Use the local or HTTP instructions within your client's section. In HTTP example
 #### Local connection
 
 ```bash
-claude mcp add fluxmail -- fluxmail stdio --profile read-only
+claude mcp add fluxmail -- fluxmail stdio --profile full
 ```
 
 #### HTTP connection
@@ -73,7 +73,7 @@ Add this server to `claude_desktop_config.json` under Settings > Developer > Edi
   "mcpServers": {
     "fluxmail": {
       "command": "fluxmail",
-      "args": ["stdio", "--profile", "read-only"]
+      "args": ["stdio", "--profile", "full"]
     }
   }
 }
@@ -119,7 +119,7 @@ Open Settings > Plugins > MCPs > Add server, then enter:
 - Name: `Fluxmail`
 - Type: `STDIO`
 - Command to launch: `fluxmail`
-- Arguments: `stdio --profile read-only`
+- Arguments: `stdio --profile full`
 
 Save the server and restart the app.
 
@@ -140,7 +140,7 @@ Save the server and restart the app.
 #### Local connection
 
 ```bash
-codex mcp add fluxmail -- fluxmail stdio --profile read-only
+codex mcp add fluxmail -- fluxmail stdio --profile full
 ```
 
 You can also add the server to `~/.codex/config.toml`:
@@ -148,7 +148,7 @@ You can also add the server to `~/.codex/config.toml`:
 ```toml
 [mcp_servers.fluxmail]
 command = "fluxmail"
-args = ["stdio", "--profile", "read-only"]
+args = ["stdio", "--profile", "full"]
 ```
 
 #### HTTP connection
@@ -172,7 +172,7 @@ Add the server to `~/.cursor/mcp.json`, or to `.cursor/mcp.json` in a project:
   "mcpServers": {
     "fluxmail": {
       "command": "fluxmail",
-      "args": ["stdio", "--profile", "read-only"]
+      "args": ["stdio", "--profile", "full"]
     }
   }
 }
@@ -197,6 +197,8 @@ Add the server to `~/.cursor/mcp.json`, or to `.cursor/mcp.json` in a project:
 
 #### Local connection
 
+These commands grant Full access: reading, sending, scheduling, drafts, organization, and moving mail into or out of Trash. Full excludes permanent deletion. Use `read-write` or `read-only` for [restricted access](https://fluxmail.ai/docs/permissions).
+
 Open Cline's MCP Servers view, edit its MCP settings, and add this entry under `mcpServers` alongside any existing servers:
 
 ```json
@@ -204,7 +206,7 @@ Open Cline's MCP Servers view, edit its MCP settings, and add this entry under `
   "mcpServers": {
     "fluxmail": {
       "command": "/absolute/path/to/fluxmail",
-      "args": ["stdio", "--profile", "read-only"]
+      "args": ["stdio", "--profile", "full"]
     }
   }
 }
@@ -215,12 +217,14 @@ Replace the command with your Fluxmail executable's absolute path.
 For Cline CLI, run in an interactive terminal:
 
 ```bash
-cline mcp install fluxmail -- fluxmail stdio --profile read-only
+cline mcp install fluxmail -- fluxmail stdio --profile full
 ```
 
 Review and save the configuration in the add-server wizard.
 
 #### HTTP connection
+
+Create a named key with the [chosen permission profile and mailbox scope](https://fluxmail.ai/docs/connect-an-mcp-client#option-2-connect-over-streamable-http). We recommend `--profile full` for normal MCP use.
 
 Open Cline's MCP settings and add this entry under `mcpServers` alongside any existing servers:
 
@@ -250,7 +254,7 @@ Add the server to `~/.hermes/config.yaml`, then run `/reload-mcp`. You can also 
 mcp_servers:
   fluxmail:
     command: 'fluxmail'
-    args: ['stdio', '--profile', 'read-only']
+    args: ['stdio', '--profile', 'full']
 ```
 
 #### HTTP connection
@@ -271,7 +275,7 @@ To use Fluxmail from ChatGPT.com without running a server, use [Fluxmail Cloud](
 
 ### Other clients
 
-For stdio, register `fluxmail` as the command and `stdio`, `--profile`, and `read-only` as its arguments. Add mailbox restrictions with repeated `--account` options.
+For stdio, register `fluxmail` as the command and `stdio`, `--profile`, and `full` as its arguments. Add mailbox restrictions with repeated `--account` options.
 
 For HTTP, use your server's `/mcp` URL and send `Authorization: Bearer fmk_...`. Clients that cannot supply an authorization header are not compatible with the HTTP endpoint without a suitable bridge.
 
@@ -290,6 +294,12 @@ The account list checks the connection and mailbox visibility. A successful fold
 For a custom policy without `mail.read`, check tool discovery only. Do not add permissions or send a message just to test the connection. If your client needs a restart, report verification as pending. A [REST check](/docs/build-with-rest#3-verify-provider-access) can verify an existing read-scoped HTTP key, but it does not prove that MCP works.
 
 When you want the agent to retrieve email, ask it to list the five latest inbox messages. See [MCP tools](/docs/tools) for available operations and [Troubleshooting](/docs/troubleshooting) for connection failures.
+
+## MCPB bundle permissions
+
+The MCPB bundle selects `full` automatically when no permission profile is saved. It grants the Full access described above and cannot permanently delete messages. Scheduled delivery still requires `fluxmail serve` or `fluxmail scheduled run` with the same data directory.
+
+A saved profile overrides the bundle default. If you upgrade an installation without a saved profile, it can receive Full access automatically. To retain read-only access, explicitly save `read-only` in the bundle's Permission profile setting before upgrading. Save `read-write` to allow drafts, organization, and Trash without sending or scheduling.
 
 ## Limit access
 

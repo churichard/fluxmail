@@ -16,7 +16,8 @@ assert.equal(manifest.version, expectedVersion);
 assert.deepEqual(manifest.compatibility.platforms, ['darwin', 'win32', 'linux']);
 assert.equal(manifest.server.mcp_config.args[0], '${__dirname}/' + manifest.server.entry_point);
 assert.deepEqual(manifest.server.mcp_config.args.slice(1), ['stdio', '--profile', '${user_config.permission_profile}']);
-assert.equal(manifest.user_config.permission_profile.default, 'read-only');
+assert.equal(manifest.user_config.permission_profile.default, 'full');
+assert.equal(manifest.user_config.permission_profile.required, false);
 
 const nativePackages = {
   'darwin-arm64': 'darwin-arm64',
@@ -69,7 +70,10 @@ try {
   });
   assert.equal(setup.status, 0, setup.stderr);
   process.stdout.write(setup.stdout);
-  const tools = await checkTools(entryPoint, dataDirectory, manifest.tools.length);
+  const tools = await checkConfiguration(dataDirectory, {});
+  for (const profile of ['full', 'read-write', 'read-only']) {
+    await checkConfiguration(dataDirectory, { permission_profile: profile });
+  }
   if (toolsOutput) await writeFile(toolsOutput, `${JSON.stringify(tools, null, 2)}\n`);
 } finally {
   await rm(dataDirectory, { recursive: true, force: true });
@@ -77,13 +81,19 @@ try {
 
 console.log('Extracted MCPB passed CLI, native dependency, and MCP tool checks.');
 
-function checkTools(entryPoint, dataDirectory, expectedTools) {
+async function checkConfiguration(dataDirectory, userConfig) {
+  const profile = userConfig.permission_profile ?? manifest.user_config.permission_profile.default;
+  const args = manifest.server.mcp_config.args.map((arg) =>
+    arg.replace('${__dirname}', extractedDirectory).replace('${user_config.permission_profile}', profile),
+  );
+  assert.equal(path.normalize(args[0]), entryPoint);
+  assert.deepEqual(args.slice(1), ['stdio', '--profile', profile]);
+  return checkTools(args, dataDirectory, profile);
+}
+
+function checkTools(args, dataDirectory, profile) {
   return new Promise((resolve, reject) => {
-    const allowAll = ['read', 'drafts', 'organize', 'trash', 'delete', 'send'].flatMap((name) => [
-      '--allow',
-      `mail.${name}`,
-    ]);
-    const child = spawn(process.execPath, [entryPoint, 'stdio', ...allowAll], {
+    const child = spawn(process.execPath, args, {
       env: { ...process.env, FLUXMAIL_DATA_DIR: dataDirectory, FLUXMAIL_TELEMETRY: '0' },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -121,11 +131,36 @@ function checkTools(entryPoint, dataDirectory, expectedTools) {
         if (message.id === 2) {
           if (message.error) return finish(new Error(`MCP tools/list failed: ${JSON.stringify(message.error)}`));
           try {
-            assert.equal(message.result.tools.length, expectedTools);
+            const sendTools = ['preview_send', 'send_email', 'get_delivery_operation', 'forward_email'];
+            const writeTools = [
+              'create_draft',
+              'get_draft',
+              'update_draft',
+              'delete_draft',
+              'cancel_scheduled_email',
+              'modify_emails',
+            ];
+            const excluded =
+              profile === 'full' ? [] : profile === 'read-write' ? sendTools : [...sendTools, ...writeTools];
+            const expectedTools = manifest.tools.filter((tool) => !excluded.includes(tool.name));
+            assert.equal(message.result.tools.length, expectedTools.length);
             assert.deepEqual(
               new Set(message.result.tools.map((tool) => tool.name)),
-              new Set(manifest.tools.map((tool) => tool.name)),
+              new Set(expectedTools.map((tool) => tool.name)),
             );
+            const modifyTool = message.result.tools.find((tool) => tool.name === 'modify_emails');
+            if (profile !== 'read-only') {
+              const actions = modifyTool.inputSchema.properties.action.enum;
+              assert.ok(actions.includes('trash'));
+              assert.ok(actions.includes('untrash'));
+              assert.ok(!actions.includes('delete'));
+            }
+            if (profile === 'full') {
+              for (const tool of message.result.tools) {
+                const declared = manifest.tools.find((item) => item.name === tool.name);
+                if (declared.inputSchema) assert.deepEqual(declared.inputSchema, tool.inputSchema);
+              }
+            }
             finish(undefined, message.result.tools);
           } catch (error) {
             finish(error);

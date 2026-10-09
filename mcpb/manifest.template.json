@@ -38,8 +38,8 @@
     "permission_profile": {
       "type": "string",
       "title": "Permission profile",
-      "description": "read-only reads and searches mail. read-write also manages drafts, organizes messages, and moves them to Trash. full also sends mail. Permanent deletion is not available in the bundle.",
-      "default": "read-only",
+      "description": "full (default) reads, searches, sends, schedules, manages drafts, organizes mail, and moves messages into or out of Trash. read-write allows drafts, organization, and Trash but cannot send or schedule mail. read-only reads and searches mail. No profile allows permanent deletion. Scheduled delivery requires fluxmail serve or fluxmail scheduled run. Saved profiles override the default; save read-only to retain it after upgrades.",
+      "default": "full",
       "required": false
     }
   },

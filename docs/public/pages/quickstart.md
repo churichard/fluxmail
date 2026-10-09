@@ -1,7 +1,7 @@
 ---
 title: "Quickstart"
 description: "Install Fluxmail, connect a mailbox, and verify your first agent or CLI connection."
-updated: '2026-10-06'
+updated: '2026-10-09'
 ---
 
 Set up Fluxmail on the computer where your agent runs. You'll need Node.js 20.20.x, or Node.js 22.22 or newer, and a mailbox you can authorize. For a remote or shared server, start with [Deploy with Docker](/docs/deploy-with-docker).
@@ -94,14 +94,14 @@ A folder listing verifies provider access without reading message bodies or chan
 
 ### 5. Connect your agent
 
-If you reused an existing installation, [review pending schedules](/docs/sending-and-retries#before-restarting-an-existing-instance) before launching your MCP client. Starting stdio can resume overdue sends even with read-only access.
+We recommend Full access for normal MCP use. It allows reading, sending, scheduling, drafts, organization, and moving mail into or out of Trash. It excludes permanent deletion. Choose `read-write` or `read-only` for [restricted access](/docs/permissions). Bare stdio and API-key creation without permission options remain read-only.
 
-These examples give the client read-only access. Choose a different [permission profile](/docs/permissions) if your workflow needs drafts, organization, or sending.
+Stdio can create schedules but does not deliver them. To deliver scheduled mail, keep `fluxmail serve` or `fluxmail scheduled run` running with the same data directory. If you reused an existing installation, [review pending schedules](/docs/sending-and-retries#before-restarting-an-existing-instance) before starting either worker; overdue sends may resume even with a read-only client.
 
 For Claude Code:
 
 ```bash
-claude mcp add fluxmail -- fluxmail stdio --profile read-only
+claude mcp add fluxmail -- fluxmail stdio --profile full
 ```
 
 For other clients, follow [Connect an MCP client](/docs/connect-an-mcp-client). Add `--account <account-id>` to the stdio arguments to limit the client to one mailbox. Your client starts Fluxmail itself; you do not need to run `fluxmail serve` for stdio.
