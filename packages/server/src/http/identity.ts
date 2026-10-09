@@ -13,6 +13,7 @@ import {
 import { canAccessAccount, canAdminister, canManageOwnedAccount, canSeeAccountMetadata } from '../authorization.js';
 import {
   ADMIN_CAPABILITIES,
+  DEFAULT_PERMISSION_PROFILE,
   MCP_CAPABILITIES,
   NAMED_PERMISSION_PROFILES,
   customPermissionPolicy,
@@ -462,7 +463,10 @@ export function registerIdentityRoutes(typedApp: OpenAPIHono<any>, deps: RestApi
       const input = c.req.valid('json');
       const permissions = input.capabilities
         ? customPermissionPolicy(input.capabilities)
-        : permissionPolicyForProfile(input.permissionProfile ?? 'full', input.supplementalCapabilities);
+        : permissionPolicyForProfile(
+            input.permissionProfile ?? DEFAULT_PERMISSION_PROFILE,
+            input.supplementalCapabilities,
+          );
       for (const accountId of input.accountIds ?? []) {
         if (!deps.registry) throw new EmailError('unsupported_capability', 'Account management is unavailable.');
         const account = deps.registry.getAccount(accountId);

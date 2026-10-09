@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { EmailError, type Message } from '@fluxmail/core';
 import type { FluxmailConfig } from '../src/config.js';
 import { createRestApi } from '../src/http/rest.js';
-import { customPermissionPolicy, permissionPolicyForProfile } from '../src/permissions.js';
+import { FULL_PERMISSION_POLICY, customPermissionPolicy, permissionPolicyForProfile } from '../src/permissions.js';
 import { createApiKey } from '../src/storage/apiKeys.js';
 import { openDb, restIdempotency } from '../src/storage/db.js';
 import { addMember } from '../src/storage/members.js';
@@ -40,7 +40,7 @@ const message: Message = {
 function fixture(telemetry?: Telemetry) {
   const db = openDb(':memory:');
   const member = addMember(db, { id: 'member_1', name: 'Owner', role: 'admin' });
-  const { key, info: keyInfo } = createApiKey(db, 'test', member.id);
+  const { key, info: keyInfo } = createApiKey(db, 'test', member.id, FULL_PERMISSION_POLICY);
   const config: FluxmailConfig = {
     dataDir: ':memory:',
     dbPath: ':memory:',
@@ -770,7 +770,12 @@ describe('REST email operations', () => {
 describe('REST permissions', () => {
   it('enforces permission profiles and reply-derived read access', async () => {
     const { app, db, member } = fixture();
-    const { key: readKey } = createApiKey(db, 'reader', member.id, permissionPolicyForProfile('read-only'));
+    const { key: readKey, info: readInfo } = createApiKey(
+      db,
+      'reader',
+      member.id,
+      permissionPolicyForProfile('read-only'),
+    );
     const readAuth = { authorization: `Bearer ${readKey}` };
     expect((await app.request('/api/v1/accounts', { headers: readAuth })).status).toBe(200);
     const denied = await app.request(
@@ -778,6 +783,13 @@ describe('REST permissions', () => {
       jsonRequest('POST', draftBody, { ...readAuth, 'idempotency-key': 'read-denied' }),
     );
     expect(denied.status).toBe(403);
+    expect((await denied.json()).error).toMatchObject({
+      code: 'permission_denied',
+      message:
+        'This API key does not allow: mail.send. To enable it, an administrator can run ' +
+        `"fluxmail apikey permissions ${readInfo.id} --profile full".`,
+      data: { missingCapabilities: ['mail.send'] },
+    });
 
     const { key: draftsKey } = createApiKey(db, 'drafts-only', member.id, customPermissionPolicy(['mail.drafts']));
     const replyDenied = await app.request(

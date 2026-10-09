@@ -31,7 +31,16 @@
     "entry_point": "launch.mjs",
     "mcp_config": {
       "command": "node",
-      "args": ["${__dirname}/launch.mjs", "stdio"]
+      "args": ["${__dirname}/launch.mjs", "stdio", "--profile", "${user_config.permission_profile}"]
+    }
+  },
+  "user_config": {
+    "permission_profile": {
+      "type": "string",
+      "title": "Permission profile",
+      "description": "read-only reads and searches mail. read-write also manages drafts, organizes messages, and moves them to Trash. full also sends mail. Permanent deletion is not available in the bundle.",
+      "default": "read-only",
+      "required": false
     }
   },
   "tools": [

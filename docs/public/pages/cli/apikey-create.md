@@ -24,5 +24,5 @@ fluxmail apikey create [options]
 | `--member <member>` | No | Admin only: issue the key to another member | None |
 | `--account <account>` | No | Limit the key to one mailbox; repeat as needed | None |
 | `--profile <profile>` | No | Tool profile: read-only, read-write, full | None |
-| `--allow <capability>` | No | Allow one capability in a custom policy; repeat as needed | None |
+| `--allow <capability>` | No | Allow one capability in a custom policy, or add it to --profile; repeat as needed | None |
 | `--admin <capability>` | No | Add one admin capability to a named profile; repeat as needed | None |

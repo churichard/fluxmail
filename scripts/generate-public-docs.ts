@@ -13,6 +13,8 @@ import {
   PERMISSION_PROFILE_DESCRIPTIONS,
   customPermissionPolicy,
   permissionPolicyForProfile,
+  ALL_MAIL_PERMISSION_POLICY,
+  type PermissionPolicy,
 } from '../packages/server/src/permissions.js';
 import { generateRestApiReference } from './openapi-docs.js';
 import {
@@ -31,8 +33,8 @@ import {
   replaceGeneratedSection,
 } from './public-docs.js';
 
-async function listTools(permissions?: ReturnType<typeof customPermissionPolicy>): Promise<ToolReference[]> {
-  const server = buildMcpServer({ enforceQuota: () => undefined } as never, permissions ? { permissions } : undefined);
+async function listTools(permissions: PermissionPolicy = ALL_MAIL_PERMISSION_POLICY): Promise<ToolReference[]> {
+  const server = buildMcpServer({ enforceQuota: () => undefined } as never, { permissions });
   const client = new Client({ name: 'fluxmail-docs', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);

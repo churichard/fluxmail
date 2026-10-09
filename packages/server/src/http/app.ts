@@ -396,6 +396,7 @@ export function createApp(deps: AppDeps): Hono<{ Bindings: HttpBindings }> {
     }
     const server = buildMcpServer(service.withPrincipal(auth), {
       permissions: auth.permissions,
+      ...(auth.kind === 'api_key' ? { permissionSource: { kind: 'api_key' as const, keyId: auth.keyId } } : {}),
       maxAttachmentBytes: config.maxAttachmentBytes,
       telemetry,
       transport: 'http',

@@ -18,7 +18,7 @@ import { createApiKey } from '../src/storage/apiKeys.js';
 import { accounts, openDb } from '../src/storage/db.js';
 import { addMember } from '../src/storage/members.js';
 import { saveLocalInstance, saveRemoteInstance, saveSessionToken } from '../src/cliInstances.js';
-import { customPermissionPolicy } from '../src/permissions.js';
+import { FULL_PERMISSION_POLICY, customPermissionPolicy } from '../src/permissions.js';
 
 const cliPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src/cli.ts');
 
@@ -165,7 +165,7 @@ describe('CLI mail process integration', { timeout: 15_000 }, () => {
   beforeAll(async () => {
     if (!server.listening) await new Promise<void>((resolve) => server.once('listening', resolve));
     const address = server.address() as AddressInfo;
-    const { key } = createApiKey(db, 'cli-e2e', member.id);
+    const { key } = createApiKey(db, 'cli-e2e', member.id, FULL_PERMISSION_POLICY);
     const { key: composeKey } = createApiKey(
       db,
       'cli-e2e-compose',

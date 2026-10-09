@@ -1,7 +1,7 @@
 ---
 title: 'Permissions'
 description: 'Give each MCP or REST connection only the Fluxmail email permissions it needs.'
-updated: '2026-09-23'
+updated: '2026-10-09'
 ---
 
 Fluxmail can limit the email actions available to each MCP or REST connection. Give a research client read-only access, or let an inbox organizer manage messages without granting send or permanent-delete access.
@@ -17,10 +17,16 @@ Mailbox scope is separate from permissions. The member and optional mailbox allo
 | --- | --- | --- |
 | `read-only` | Read and search mail, inspect folders, labels, and scheduled sends, and download attachments. | `mail.read` |
 | `read-write` | Read mail, manage drafts, organize messages, and move messages to or from Trash. | `mail.read`, `mail.drafts`, `mail.organize`, `mail.trash` |
-| `full` | Use every Fluxmail email capability, including sending mail and permanently deleting messages. | `mail.read`, `mail.drafts`, `mail.organize`, `mail.trash`, `mail.delete`, `mail.send` |
+| `full` | Use every Fluxmail email capability except permanent deletion, including sending mail. | `mail.read`, `mail.drafts`, `mail.organize`, `mail.trash`, `mail.send` |
 <!-- END GENERATED:permission-profiles -->
 
-Fluxmail uses `full` when you do not choose a profile. Set a narrower profile for clients that do not need every email action.
+Fluxmail uses `read-only` when you do not choose a profile. Choose a broader profile or a [custom policy](#build-a-custom-policy) for clients that draft, organize, or send mail.
+
+No profile allows permanent deletion. To let a client permanently delete messages, add `mail.delete` to its profile:
+
+```bash
+fluxmail stdio --profile full --allow mail.delete
+```
 
 ## Limit a local stdio connection
 
@@ -68,7 +74,7 @@ Change an existing key by its ID:
 fluxmail apikey permissions <key-id> --profile read-only
 ```
 
-Existing keys and keys created without permission options use `full`. HTTP MCP requests always require an API key. REST accepts either a member session or an API key, except for its public login, enrollment, reset redemption, discovery, and health routes.
+Keys created without permission options use `read-only`. Existing keys keep the profile they were created with. HTTP MCP requests always require an API key. REST accepts either a member session or an API key, except for its public login, enrollment, reset redemption, discovery, and health routes.
 
 ## Administrative capabilities
 
@@ -99,7 +105,7 @@ Treat `admin.api_keys` as sensitive authority. Administrator sessions remain the
 
 ## Build a custom policy
 
-Use repeated `--allow` options when the named profiles are too broad. List the available capabilities first:
+Use repeated `--allow` options when the named profiles are too broad. Combine them with `--profile` to add capabilities to a profile; the result is saved as a custom policy. List the available capabilities first:
 
 ```bash
 fluxmail apikey capabilities

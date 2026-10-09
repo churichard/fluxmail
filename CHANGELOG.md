@@ -4,6 +4,17 @@ Fluxmail records user-facing changes in this file. The format follows [Common Ch
 
 ## [Unreleased]
 
+### Changed
+
+- [MCP / CLI / REST] Default stdio connections and new API keys to the `read-only` profile, so sending needs an explicit grant; existing API keys keep their profiles, with the change to `full` below; [add a profile to stdio clients that send or organize mail](https://fluxmail.ai/docs/upgrade-fluxmail/)
+- [MCP / CLI / REST] Remove permanent deletion from the `full` profile, including existing keys that use it; add it with `--profile full --allow mail.delete`; [update clients that permanently delete mail](https://fluxmail.ai/docs/upgrade-fluxmail/)
+- [MCP / REST] Name the missing capabilities and the command that enables them in permission errors, and tell MCP agents which actions are disabled for the connection
+
+### Added
+
+- [CLI] Accept `--allow` with `--profile` to add capabilities to a profile
+- [MCP] Add a permission profile setting to the MCP bundle, defaulting to `read-only`
+
 ## [0.13.0] - 2026-10-08
 
 ### Changed

@@ -15,7 +15,7 @@ Stdio can create and inspect schedules within the client's permissions, but it d
 | On the same computer as the client | stdio | Your saved local member session |
 | In Docker or on another machine | Streamable HTTP | A Fluxmail API key |
 
-Use one transport per connection. The examples below grant read-only access. Choose a different [permission profile](/docs/permissions) if you need to manage drafts, organize mail, or send messages. With no explicit profile, Fluxmail grants full email access.
+Use one transport per connection. The examples below grant read-only access. Choose a different [permission profile](/docs/permissions) if you need to manage drafts, organize mail, or send messages. With no explicit profile, Fluxmail grants read-only access.
 
 HTTP clients must support an Authorization header or a compatible local bridge. Check your client's entry before creating a key. Regular ChatGPT developer-mode connections cannot use Fluxmail's bearer API keys; the Codex connection is a separate client setup.
 

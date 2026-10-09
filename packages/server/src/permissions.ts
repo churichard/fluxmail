@@ -36,7 +36,7 @@ export type PermissionProfile = NamedPermissionProfile | 'custom';
 export const PERMISSION_PROFILE_DESCRIPTIONS: Record<NamedPermissionProfile, string> = {
   'read-only': 'Read and search mail, inspect folders, labels, and scheduled sends, and download attachments.',
   'read-write': 'Read mail, manage drafts, organize messages, and move messages to or from Trash.',
-  full: 'Use every Fluxmail email capability, including sending mail and permanently deleting messages.',
+  full: 'Use every Fluxmail email capability except permanent deletion, including sending mail.',
 };
 
 export interface PermissionPolicy {
@@ -54,10 +54,16 @@ const PROFILE_SET = new Set<string>(NAMED_PERMISSION_PROFILES);
 const PROFILE_CAPABILITIES: Record<NamedPermissionProfile, readonly McpCapability[]> = {
   'read-only': ['mail.read'],
   'read-write': ['mail.read', 'mail.drafts', 'mail.organize', 'mail.trash'],
-  full: MCP_CAPABILITIES,
+  // Permanent deletion is never part of a named profile; it must be allowed explicitly.
+  full: MCP_CAPABILITIES.filter((capability) => capability !== 'mail.delete'),
 };
 
 export const FULL_PERMISSION_POLICY: PermissionPolicy = permissionPolicyForProfile('full');
+/** Every email capability, including permanent deletion. */
+export const ALL_MAIL_PERMISSION_POLICY: PermissionPolicy = customPermissionPolicy(MCP_CAPABILITIES);
+/** Profile for stdio connections and API keys created without permission options. */
+export const DEFAULT_PERMISSION_PROFILE: NamedPermissionProfile = 'read-only';
+export const DEFAULT_PERMISSION_POLICY: PermissionPolicy = permissionPolicyForProfile(DEFAULT_PERMISSION_PROFILE);
 
 export function isNamedPermissionProfile(value: string): value is NamedPermissionProfile {
   return PROFILE_SET.has(value);
@@ -165,4 +171,53 @@ export function serializeSupplementalCapabilities(policy: PermissionPolicy): str
 
 export function hasCapability(policy: PermissionPolicy, capability: Capability): boolean {
   return policy.capabilities.includes(capability);
+}
+
+/**
+ * CLI options using the smallest named profile that covers the current and requested mail capabilities,
+ * with permanent deletion granted separately. Custom policies keep a complete, explicit --allow list.
+ */
+export function permissionOptionsGranting(policy: PermissionPolicy, missing: readonly Capability[]): string {
+  const needed = new Set<Capability>([...policy.capabilities, ...missing]);
+  const profileCapabilities = MCP_CAPABILITIES.filter(
+    (capability) => capability !== 'mail.delete' && needed.has(capability),
+  );
+  const profile =
+    policy.profile === 'custom'
+      ? undefined
+      : NAMED_PERMISSION_PROFILES.find((name) =>
+          profileCapabilities.every((capability) => PROFILE_CAPABILITIES[name].includes(capability)),
+        );
+  if (!profile) {
+    return [...MCP_CAPABILITIES, ...ADMIN_CAPABILITIES]
+      .filter((capability) => needed.has(capability))
+      .map((capability) => `--allow ${capability}`)
+      .join(' ');
+  }
+  const extra = MCP_CAPABILITIES.filter(
+    (capability) => needed.has(capability) && !PROFILE_CAPABILITIES[profile].includes(capability),
+  );
+  const admin = ADMIN_CAPABILITIES.filter((capability) => needed.has(capability));
+  return [
+    `--profile ${profile}`,
+    ...extra.map((capability) => `--allow ${capability}`),
+    ...admin.map((capability) => `--admin ${capability}`),
+  ].join(' ');
+}
+
+/** Where a connection's permissions come from, which decides how to change them. */
+export type PermissionSource = { kind: 'stdio' } | { kind: 'api_key'; keyId: string };
+
+/** Instructions for adding the missing capabilities to a connection. */
+export function enableCapabilitiesInstructions(
+  policy: PermissionPolicy,
+  missing: readonly Capability[],
+  source: PermissionSource | undefined,
+): string {
+  if (!source) return 'To enable it, change the Fluxmail permissions for this connection.';
+  const options = permissionOptionsGranting(policy, missing);
+  return source.kind === 'stdio'
+    ? `To enable it, start "fluxmail stdio ${options}" in the MCP client configuration, ` +
+        'replacing any existing --profile or --allow options, then restart the client.'
+    : `To enable it, an administrator can run "fluxmail apikey permissions ${source.keyId} ${options}".`;
 }

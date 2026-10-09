@@ -1,7 +1,7 @@
 ---
 title: "Upgrade Fluxmail"
 description: "Back up an installation, check client compatibility, and verify an upgrade."
-updated: '2026-10-06'
+updated: '2026-10-09'
 ---
 
 Before upgrading, check the release notes and the version-specific [upgrade guides](/docs/upgrades/0.11.0). Apply every relevant migration guide between your current version and the target version. Clients may need updates before the server, especially when response formats change.
@@ -34,6 +34,10 @@ docker compose up -d fluxmail
 ```
 
 Keep the existing data volume mounted. For local stdio, restart each MCP client so it launches the updated executable. For a local HTTP installation, restart the server.
+
+Stdio connections started without `--profile` or `--allow` are now read-only. If a client drafts, organizes, or sends mail, add the [permission profile](/docs/permissions) it needs to its arguments before restarting it. New API keys default to `read-only`. Existing keys keep their profiles, but keys using `full` lose permanent deletion as described below. Custom policies keep their explicit capability grants.
+
+The `full` profile no longer includes permanent deletion. This applies to existing keys and stdio clients that use `full`. If a client needs to permanently delete messages, add `--allow mail.delete` to its `--profile full` options. For an API key, run `fluxmail apikey permissions <key-id> --profile full --allow mail.delete`.
 
 Scheduled delivery now belongs to `serve` or `scheduled run`. Stdio-only installations must start a persistent worker using the same data directory as their MCP clients. See [Keep scheduled delivery running](/docs/sending-and-retries#keep-scheduled-delivery-running). Remote HTTP and standard Docker installations already run the worker through `serve`.
 

@@ -22,15 +22,19 @@ import type { EmailService, SendInput } from '../service/emailService.js';
 import type { DeliveryOperation } from '../service/deliveryCoordinator.js';
 import { DEFAULT_MAX_ATTACHMENT_BYTES } from '../config.js';
 import {
-  FULL_PERMISSION_POLICY,
+  DEFAULT_PERMISSION_POLICY,
+  MCP_CAPABILITIES,
+  MCP_CAPABILITY_DESCRIPTIONS,
+  enableCapabilitiesInstructions,
   hasCapability,
   normalizePermissionPolicy,
   type McpCapability,
   type PermissionPolicy,
+  type PermissionSource,
 } from '../permissions.js';
 import { captureOperation, type Telemetry, type TelemetryProperties } from '../telemetry.js';
 import { logFailure, type Logger } from '../logging.js';
-import { ClientInputError, publicError } from '../service/publicErrors.js';
+import { ClientInputError, MissingCapabilityError, publicError } from '../service/publicErrors.js';
 import { outputSchemas } from './outputSchemas.js';
 
 const MAX_BODY_CHARS = 50_000;
@@ -267,6 +271,8 @@ export type McpTransport = 'http' | 'stdio' | 'unknown';
 
 export interface BuildMcpServerOptions {
   permissions?: PermissionPolicy;
+  /** How the connection's permissions can be changed. Defaults to the stdio options for stdio transport. */
+  permissionSource?: PermissionSource;
   maxAttachmentBytes?: number;
   telemetry?: Telemetry;
   transport?: McpTransport;
@@ -419,8 +425,30 @@ const MODIFY_CAPABILITIES: Record<ModifyActionName, McpCapability> = {
 };
 
 const PROTECTED_MOVE_DESTINATIONS = new Set(['archive', 'trash']);
+
+function disabledCapabilitiesInstructions(permissions: PermissionPolicy, source: PermissionSource | undefined): string {
+  const disabled = MCP_CAPABILITIES.filter((capability) => !hasCapability(permissions, capability));
+  if (!disabled.length) return '';
+  const actions = disabled.map(
+    (capability) =>
+      `- ${capability} (${MCP_CAPABILITY_DESCRIPTIONS[capability].replace(/\.$/, '')}). ` +
+      enableCapabilitiesInstructions(permissions, [capability], source),
+  );
+  return (
+    '\n\nThis connection has limited permissions. Tools for the disabled actions below are not available. ' +
+    'When the user asks for a disabled action, such as sending, replying to, or forwarding mail, tell them ' +
+    'it is disabled for this Fluxmail connection and how to enable it. Do not use another tool or email ' +
+    "connector instead. Before changing permissions, explain the access the change grants and get the user's " +
+    'explicit approval for that permission change. A request to perform an email action does not authorize ' +
+    'changing permissions.\n' +
+    actions.join('\n')
+  );
+}
+
 export function buildMcpServer(service: EmailService, options: BuildMcpServerOptions = {}): McpServer {
-  const permissions = normalizePermissionPolicy(options.permissions ?? FULL_PERMISSION_POLICY);
+  const permissions = normalizePermissionPolicy(options.permissions ?? DEFAULT_PERMISSION_POLICY);
+  const permissionSource =
+    options.permissionSource ?? (options.transport === 'stdio' ? { kind: 'stdio' as const } : undefined);
   const maxAttachmentBytes = options.maxAttachmentBytes ?? DEFAULT_MAX_ATTACHMENT_BYTES;
   const can = (capability: McpCapability): boolean => hasCapability(permissions, capability);
   const canAll = (capabilities: readonly McpCapability[]): boolean => capabilities.every(can);
@@ -428,7 +456,11 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
   const requireCapabilities = (capabilities: readonly McpCapability[]): void => {
     const missing = capabilities.filter((capability) => !can(capability));
     if (missing.length) {
-      throw new EmailError('permission_denied', `This MCP connection does not allow: ${missing.join(', ')}.`);
+      throw new MissingCapabilityError(
+        `This MCP connection does not allow: ${missing.join(', ')}. ` +
+          enableCapabilitiesInstructions(permissions, missing, permissionSource),
+        missing,
+      );
     }
   };
   // Every tool except get_status (the diagnostic way out) enforces the plan quota.
@@ -480,7 +512,8 @@ export function buildMcpServer(service: EmailService, options: BuildMcpServerOpt
         'account ids are internal references: keep them for chaining calls (replying, forwarding, archiving), ' +
         'but do not show them to the user unless asked. Report outcomes in plain language with details people ' +
         "care about, e.g. 'Sent \"Quarterly report\" to ann@example.com' or 'Archived the thread', rather " +
-        'than echoing raw payloads, ids, or field names.',
+        'than echoing raw payloads, ids, or field names.' +
+        disabledCapabilitiesInstructions(permissions, permissionSource),
     },
   );
   const listedTools: Tool[] = [];
