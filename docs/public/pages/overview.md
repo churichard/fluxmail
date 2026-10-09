@@ -1,8 +1,10 @@
 ---
 title: "Overview"
 description: "Connect your existing mailboxes to agents and apps with a Fluxmail server you control."
-updated: '2026-10-06'
+updated: '2026-10-09'
 ---
+
+> **Prefer a hosted setup?** Fluxmail Cloud gives your agents and apps access to email without running your own server. [Get started with Cloud](https://fluxmail.ai/docs/cloud/quickstart).
 
 Fluxmail connects Gmail, Microsoft 365, Outlook.com, and IMAP/SMTP mailboxes to your agents and apps. Run it on your computer or server, then use MCP, REST, or the CLI to work with email.
 
