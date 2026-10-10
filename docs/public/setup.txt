@@ -61,7 +61,10 @@ restrictions unless the user requests a change. Explain the profiles:
 Custom policies can grant individual capabilities. Read the permissions
 guide before constructing one. Set the chosen profile explicitly. Bare
 stdio and API-key creation without permission options grant read-only
-access. Do not add permissions solely to run verification.
+access. Permanent deletion requires an explicit mail.delete grant where
+the provider supports it. Add it to a profile with --profile <profile>
+--allow mail.delete only if the user chose permanent deletion. Do not add
+permissions solely to run verification.
 For stdio, use repeated --account options to limit mailbox access. For HTTP,
 create a key with repeated --account options for the selected mailboxes.
 The member's mailbox access also applies.
